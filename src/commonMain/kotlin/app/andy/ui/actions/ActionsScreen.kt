@@ -123,7 +123,6 @@ import app.andy.ui.components.WorkspaceRail
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentHeaderAction
-import app.andy.ui.agents.AgentStarterPrompt
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatSessionSidebarRow
@@ -183,24 +182,6 @@ private enum class ProjectCanvas(val label: String) {
 }
 
 private const val RecentSessionsPerProject = 5
-
-private fun projectChatStarterPrompts(project: ActionProject): List<AgentStarterPrompt> = listOf(
-    AgentStarterPrompt(
-        label = "Plan a change",
-        description = "Turn an idea into a scoped implementation plan",
-        prompt = "Help me plan the next change for ${project.name}. Start by inspecting the relevant code and call out the files and risks.",
-    ),
-    AgentStarterPrompt(
-        label = "Inspect the codebase",
-        description = "Find the important paths, conventions, and current constraints",
-        prompt = "Inspect ${project.name} and summarize the most important architecture and conventions I should know before making a change.",
-    ),
-    AgentStarterPrompt(
-        label = "Run a verification",
-        description = "Choose the smallest useful check for the next step",
-        prompt = "Review ${project.name}, identify the most relevant verification for the current state, and run it if it is safe to do so.",
-    ),
-)
 
 @Composable
 private fun ProjectCockpit(
@@ -434,7 +415,12 @@ private fun ProjectCockpit(
 
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                if (workspaceState.projectListPaneVisible) {
+                AnimatedVisibility(
+                    visible = workspaceState.projectListPaneVisible,
+                    enter = expandHorizontally(animationSpec = tween(220)) + fadeIn(animationSpec = tween(220)),
+                    exit = shrinkHorizontally(animationSpec = tween(220)) + fadeOut(animationSpec = tween(160)),
+                ) {
+                    Row(Modifier.fillMaxHeight()) {
                     WorkspaceRail(
                         Modifier
                             .width(projectPaneWidth.dp)
@@ -550,6 +536,7 @@ private fun ProjectCockpit(
                             }
                         },
                     )
+                    }
                 }
                 val current = project
                 if (current == null) {
@@ -651,7 +638,6 @@ private fun ProjectCockpit(
                                             modifier = Modifier.fillMaxSize(),
                                             workspaceState = workspaceState,
                                             dictationActive = active && chatActive && selected == null,
-                                            starterPrompts = projectChatStarterPrompts(current),
                                         )
                                     }
                                     if (selected != null) {
@@ -1620,6 +1606,7 @@ private fun ProjectChatToolbar(
             chatActions?.invoke()
         }
         TabBarRow(
+            scrollTabs = true,
             trailing = tabTrailing,
         ) {
             ProjectCanvas.entries.forEach { item ->

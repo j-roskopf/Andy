@@ -197,6 +197,23 @@ class RoutingMirrorEngineTest {
         assertEquals(2556, frame.height)
         assertEquals(1, ios.connectCount)
     }
+
+    @Test
+    fun presentationHoldReachesBothBackendsAndReportsTheActiveOne() = runBlocking {
+        val android = TrackingMirrorEngine("android")
+        val ios = TrackingMirrorEngine("ios")
+        val routing = RoutingMirrorEngine(android, ios)
+        routing.connect("android-serial", MirrorVideoConfig())
+
+        routing.acquirePresentation()
+        assertEquals(1, android.presentationHolders)
+        assertEquals(1, ios.presentationHolders, "an Android ↔ iOS switch must not lose the hold")
+        assertTrue(routing.presenting.first())
+
+        routing.releasePresentation()
+        assertEquals(0, android.presentationHolders)
+        assertEquals(false, routing.presenting.first { !it })
+    }
 }
 
 private class TrackingMirrorEngine(
@@ -210,6 +227,19 @@ private class TrackingMirrorEngine(
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
     override val status = MutableStateFlow("ready")
+    override val presenting = MutableStateFlow(true)
+    var presentationHolders = 0
+        private set
+
+    override fun acquirePresentation() {
+        presentationHolders++
+        presenting.value = true
+    }
+
+    override fun releasePresentation() {
+        presentationHolders = (presentationHolders - 1).coerceAtLeast(0)
+        if (presentationHolders == 0) presenting.value = false
+    }
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
         connectCount++

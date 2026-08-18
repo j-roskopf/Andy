@@ -763,6 +763,56 @@ class DesktopBugServiceTest {
 
         service.stopCapture()
     }
+
+    @Test
+    fun rollingCaptureFollowsMirrorVisibility() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-visibility-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        withTimeout(15_000) {
+            service.status.first { it.active }
+        }
+
+        // A warm session with no Live surface on screen must not keep logcat and the pollers alive.
+        mirror.presenting.value = false
+        withTimeout(15_000) {
+            service.status.first { !it.active }
+        }
+
+        mirror.presenting.value = true
+        withTimeout(15_000) {
+            service.status.first { it.active }
+        }
+
+        service.stopCapture()
+    }
+
+    @Test
+    fun explicitCaptureIgnoresMirrorVisibility() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-visibility-explicit-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+
+        mirror.presenting.value = false
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        delay(300)
+        assertFalse(service.status.value.active, "a hidden mirror must not start the rolling window")
+
+        // MCP and investigations start capture for a caller that is waiting on the artifacts, so
+        // it outlives whatever Live happens to be showing.
+        service.startCapture("emulator-5554", null)
+        assertTrue(service.status.value.active)
+        mirror.presenting.value = true
+        delay(200)
+        mirror.presenting.value = false
+        delay(300)
+
+        assertTrue(service.status.value.active, "an explicit capture must survive a hidden mirror")
+
+        service.stopCapture()
+    }
 }
 
 private fun androidMirrorSession(
@@ -779,6 +829,7 @@ internal class FakeMirrorEngine : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(-16777216)))
     override val status = MutableStateFlow("ready")
+    override val presenting = MutableStateFlow(true)
     // Replay covers emits that race startCapture's IO collector subscription on slow CI.
     val encodedUnits = MutableSharedFlow<EncodedVideoAccessUnit>(
         replay = 32,

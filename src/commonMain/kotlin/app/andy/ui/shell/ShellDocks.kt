@@ -9,27 +9,26 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,10 +51,10 @@ import app.andy.model.AndroidDevice
 import app.andy.model.RunningAction
 import app.andy.model.TerminalThemePreset
 import app.andy.model.palette
+import app.andy.resignEmbeddedBrowserKey
 import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.LogcatService
-import app.andy.ui.actions.ProjectTerminalSurface
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.PanelCard
@@ -86,22 +85,53 @@ private val DockContentCornerInset = AndySpace.Space2
 private enum class PaneToggleEdge { Left, Right, Bottom }
 
 /** Kind of surface shown inside a dock tab. */
-internal enum class DockTabKind { Live, Terminal, Logs }
+internal enum class DockTabKind { Live, Terminal, Logs, Browser }
 
-/** One tab inside a right/bottom dock pane. */
+/**
+ * One tab inside a right/bottom dock pane. A Terminal-kind tab is itself a whole split
+ * workspace: [terminalTree] holds its panes, [focusedTerminalLeafId] which one last had
+ * focus. Unlike Live/Logs, multiple Terminal tabs can coexist at top level — each is an
+ * independent workspace the user can split on its own.
+ */
 internal data class DockTab(
     val id: String,
     val kind: DockTabKind,
     val runId: String? = null,
     val title: String? = null,
+    val terminalTree: TerminalPaneNode? = null,
+    val focusedTerminalLeafId: String? = null,
 ) {
     companion object {
         fun live(title: String? = null): DockTab =
             DockTab(id = "live", kind = DockTabKind.Live, title = title)
         fun logs(): DockTab = DockTab(id = "logs", kind = DockTabKind.Logs)
+        /** A leaf-level session tab — lives inside a [TerminalPaneNode.Leaf]'s own tab strip. */
         fun terminal(runId: String, title: String? = null): DockTab =
             DockTab(id = "terminal:$runId", kind = DockTabKind.Terminal, runId = runId, title = title)
+        /** A top-level terminal workspace tab, seeded with a single-leaf [tree]. */
+        fun terminalWorkspace(id: String, tree: TerminalPaneNode, focusedLeafId: String, title: String? = null): DockTab =
+            DockTab(id = id, kind = DockTabKind.Terminal, title = title, terminalTree = tree, focusedTerminalLeafId = focusedLeafId)
+        /** A Browser dock tab. WKWebView is process-wide, so the shell keeps at most one. */
+        fun browser(id: String, title: String? = null): DockTab =
+            DockTab(id = id, kind = DockTabKind.Browser, title = title)
     }
+}
+
+/** Navigation state for one Browser dock tab, keyed by [DockTab.id] on [ShellState.browserPanes]. */
+internal data class BrowserPaneState(
+    val url: String = "",
+    val loading: Boolean = false,
+    val canGoBack: Boolean = false,
+    val canGoForward: Boolean = false,
+    val title: String? = null,
+)
+
+/** Navigation intents sent from the address bar down into the platform browser surface. */
+internal sealed class BrowserNavCommand {
+    data object Back : BrowserNavCommand()
+    data object Forward : BrowserNavCommand()
+    data object Refresh : BrowserNavCommand()
+    data class GoTo(val url: String) : BrowserNavCommand()
 }
 
 /** Independent right or bottom dock with a tab strip. */
@@ -114,9 +144,11 @@ internal data class DockPane(
         get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.lastOrNull()
 
     fun withTab(tab: DockTab): DockPane {
+        // Live/Logs/Browser are singletons per pane (WKWebView is process-wide). Terminal
+        // workspaces are independent and merge only on an exact id match.
         val existing = when (tab.kind) {
-            DockTabKind.Live, DockTabKind.Logs -> tabs.firstOrNull { it.kind == tab.kind }
-            DockTabKind.Terminal -> tabs.firstOrNull { it.runId == tab.runId }
+            DockTabKind.Live, DockTabKind.Logs, DockTabKind.Browser -> tabs.firstOrNull { it.kind == tab.kind }
+            DockTabKind.Terminal -> tabs.firstOrNull { it.id == tab.id }
         }
         return if (existing != null) {
             copy(visible = true, activeTabId = existing.id)
@@ -148,17 +180,32 @@ internal data class DockPane(
 
     fun hide(): DockPane = copy(visible = false)
 
+    /** Finds the top-level Terminal tab (if any) whose tree owns [runId]. */
+    fun tabOwningRun(runId: String): DockTab? =
+        tabs.firstOrNull { it.kind == DockTabKind.Terminal && it.terminalTree?.leafOwningRun(runId) != null }
+
+    /** Drops every dead run from every Terminal tab's tree, dropping tabs left with no runs at all. */
     fun withoutTerminalRuns(aliveRunIds: Set<String>): DockPane {
-        val remaining = tabs.filter { tab ->
-            tab.kind != DockTabKind.Terminal || tab.runId in aliveRunIds
+        var changed = false
+        val nextTabs = tabs.mapNotNull { tab ->
+            if (tab.kind != DockTabKind.Terminal) return@mapNotNull tab
+            val tree = tab.terminalTree ?: return@mapNotNull tab
+            when (val next = tree.pruneRuns(aliveRunIds)) {
+                tree -> tab
+                null -> { changed = true; null }
+                else -> {
+                    changed = true
+                    tab.copy(
+                        terminalTree = next,
+                        focusedTerminalLeafId = tab.focusedTerminalLeafId?.takeIf { next.findLeaf(it) != null } ?: next.firstLeafId(),
+                    )
+                }
+            }
         }
-        if (remaining.size == tabs.size) return this
-        if (remaining.isEmpty()) return DockPane()
-        val nextActive = when {
-            remaining.any { it.id == activeTabId } -> activeTabId
-            else -> remaining.last().id
-        }
-        return copy(tabs = remaining, activeTabId = nextActive)
+        if (!changed) return this
+        if (nextTabs.isEmpty()) return DockPane()
+        val nextActive = if (nextTabs.any { it.id == activeTabId }) activeTabId else nextTabs.last().id
+        return copy(tabs = nextTabs, activeTabId = nextActive)
     }
 
     fun withoutKind(kind: DockTabKind): DockPane {
@@ -174,7 +221,8 @@ internal data class DockPane(
 }
 
 /**
- * Global shell docks. Placement icons toggle visibility; a landing menu picks Live / Terminal.
+ * Global shell docks. Placement icons toggle a pane that already has tabs;
+ * a landing menu picks Live / Terminal / Browser only when that pane is empty.
  */
 internal data class ShellDocks(
     val right: DockPane = DockPane(),
@@ -186,12 +234,42 @@ internal data class ShellDocks(
         DockPlacement.Bottom -> bottom
     }
 
+    /**
+     * Right/bottom chrome button: hide if open, show if it already has tabs,
+     * otherwise toggle the Live / Terminal / Browser landing chooser.
+     */
+    fun onPlacementIconClick(placement: DockPlacement): ShellDocks {
+        val pane = pane(placement)
+        return when {
+            pane.visible -> update(placement) { it.hide() }
+            pane.tabs.isNotEmpty() -> update(placement) { it.copy(visible = true) }
+            landingFor == placement -> copy(landingFor = null)
+            else -> copy(landingFor = placement)
+        }
+    }
+
     fun update(placement: DockPlacement, transform: (DockPane) -> DockPane): ShellDocks {
         val next = transform(pane(placement))
         return when (placement) {
             DockPlacement.Right -> copy(right = next, landingFor = null)
             DockPlacement.Bottom -> copy(bottom = next, landingFor = null)
         }
+    }
+
+    /**
+     * WKWebView is a single process-wide overlay — keep at most one Browser tab across
+     * both panes, moving an existing tab if the user opens Browser on the other dock.
+     */
+    fun withBrowserExclusive(placement: DockPlacement, tab: DockTab): ShellDocks {
+        val existing = pane(placement).tabs.firstOrNull { it.kind == DockTabKind.Browser }
+            ?: pane(if (placement == DockPlacement.Right) DockPlacement.Bottom else DockPlacement.Right)
+                .tabs.firstOrNull { it.kind == DockTabKind.Browser }
+        val keep = existing ?: tab
+        val clearedOther = when (placement) {
+            DockPlacement.Right -> copy(bottom = bottom.withoutKind(DockTabKind.Browser))
+            DockPlacement.Bottom -> copy(right = right.withoutKind(DockTabKind.Browser))
+        }
+        return clearedOther.update(placement) { it.withTab(keep) }
     }
 
     /** Live is a single mirror session — keep at most one Live tab across both panes. */
@@ -204,25 +282,110 @@ internal data class ShellDocks(
         return clearedOther.update(placement) { it.withTab(DockTab.live(title = existingTitle)) }
     }
 
-    fun withTerminalExclusive(placement: DockPlacement, runId: String): ShellDocks {
-        val existingTitle = right.tabs.firstOrNull { it.runId == runId }?.title
-            ?: bottom.tabs.firstOrNull { it.runId == runId }?.title
-        val tab = DockTab.terminal(runId, title = existingTitle)
-        val withoutElsewhere = when (placement) {
-            DockPlacement.Right -> copy(bottom = bottom.closeTab(tab.id).let { if (it.tabs.isEmpty()) DockPane(visible = false) else it })
-            DockPlacement.Bottom -> copy(right = right.closeTab(tab.id).let { if (it.tabs.isEmpty()) DockPane(visible = false) else it })
+    /**
+     * Reveals [runId]'s terminal tab in [placement] — selecting it in place if it already
+     * exists there, moving it over (as a fresh single-leaf tab) if it lived in the other
+     * placement, or creating a brand-new top-level tab if it isn't open anywhere. This is
+     * for *finding* a specific run's terminal, not for "open a fresh shell" (that's
+     * [DockPane.withTab] with a freshly built [DockTab.terminalWorkspace] directly — see
+     * `ShellState.openNewTerminalTab`, which never searches and always creates new).
+     */
+    fun withTerminalExclusive(
+        placement: DockPlacement,
+        runId: String,
+        newTabId: String,
+        newLeafId: String,
+        title: String? = null,
+    ): ShellDocks {
+        val other = if (placement == DockPlacement.Right) DockPlacement.Bottom else DockPlacement.Right
+        val foundInOther = pane(other).tabOwningRun(runId)
+        val strippedOtherPane = if (foundInOther == null) {
+            pane(other)
+        } else {
+            pane(other).let { p ->
+                val next = foundInOther.terminalTree!!.withoutRun(runId)
+                val nextTabs = if (next == null) {
+                    p.tabs.filterNot { it.id == foundInOther.id }
+                } else {
+                    p.tabs.map {
+                        if (it.id == foundInOther.id) {
+                            it.copy(
+                                terminalTree = next,
+                                focusedTerminalLeafId = it.focusedTerminalLeafId?.takeIf { id -> next.findLeaf(id) != null } ?: next.firstLeafId(),
+                            )
+                        } else {
+                            it
+                        }
+                    }
+                }
+                if (nextTabs.isEmpty()) {
+                    DockPane()
+                } else {
+                    p.copy(tabs = nextTabs, activeTabId = if (nextTabs.any { it.id == p.activeTabId }) p.activeTabId else nextTabs.last().id)
+                }
+            }
         }
-        // closeTab on empty-other keeps visibility quirks; normalize empty panes
-        val normalized = withoutElsewhere.copy(
-            right = withoutElsewhere.right.let { if (it.tabs.isEmpty()) DockPane() else it },
-            bottom = withoutElsewhere.bottom.let { if (it.tabs.isEmpty()) DockPane() else it },
-        )
-        return normalized.update(placement) { it.withTab(tab) }
+        val withOtherStripped = when (other) {
+            DockPlacement.Right -> copy(right = strippedOtherPane)
+            DockPlacement.Bottom -> copy(bottom = strippedOtherPane)
+        }
+        val target = withOtherStripped.pane(placement)
+        val foundInTarget = target.tabOwningRun(runId)
+        val updatedTarget = if (foundInTarget != null) {
+            val tree = foundInTarget.terminalTree!!
+            val leaf = tree.leafOwningRun(runId)!!
+            val innerTabId = leaf.tabs.first { it.runId == runId }.id
+            target.copy(
+                visible = true,
+                activeTabId = foundInTarget.id,
+                tabs = target.tabs.map {
+                    if (it.id == foundInTarget.id) it.copy(focusedTerminalLeafId = leaf.id, terminalTree = tree.selectTab(leaf.id, innerTabId))
+                    else it
+                },
+            )
+        } else {
+            // Not found anywhere — preserve a title carried over from the other placement
+            // (if this run just moved from there) unless the caller passed an explicit one.
+            val carriedTitle = title
+                ?: foundInOther?.terminalTree?.leafOwningRun(runId)?.tabs?.firstOrNull { it.runId == runId }?.title
+            val tab = DockTab.terminal(runId, title = carriedTitle)
+            val tree = TerminalPaneNode.Leaf(newLeafId, listOf(tab), tab.id)
+            target.withTab(DockTab.terminalWorkspace(newTabId, tree, newLeafId, carriedTitle))
+        }
+        return when (placement) {
+            DockPlacement.Right -> withOtherStripped.copy(right = updatedTarget, landingFor = null)
+            DockPlacement.Bottom -> withOtherStripped.copy(bottom = updatedTarget, landingFor = null)
+        }
     }
 
     private fun tabTitle(kind: DockTabKind): String? =
         right.tabs.firstOrNull { it.kind == kind }?.title
             ?: bottom.tabs.firstOrNull { it.kind == kind }?.title
+
+    /**
+     * Browser tab to reuse for a new URL, if one is already open in either dock.
+     * Prefers the tab the user is currently looking at, then any existing Browser tab
+     * (right before bottom, newest last).
+     */
+    fun existingBrowserTab(): Pair<DockPlacement, String>? {
+        if (right.visible) {
+            right.activeTab?.takeIf { it.kind == DockTabKind.Browser }?.let {
+                return DockPlacement.Right to it.id
+            }
+        }
+        if (bottom.visible) {
+            bottom.activeTab?.takeIf { it.kind == DockTabKind.Browser }?.let {
+                return DockPlacement.Bottom to it.id
+            }
+        }
+        right.tabs.lastOrNull { it.kind == DockTabKind.Browser }?.let {
+            return DockPlacement.Right to it.id
+        }
+        bottom.tabs.lastOrNull { it.kind == DockTabKind.Browser }?.let {
+            return DockPlacement.Bottom to it.id
+        }
+        return null
+    }
 }
 
 @Composable
@@ -309,19 +472,13 @@ private fun PaneToggle(
     }
 }
 
+/** In-layout Live / Terminal / Browser chooser — no Popup, so docks reflow under it. */
 @Composable
-internal fun DockLandingMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
+internal fun DockLandingPanel(
     onSelect: (DockTabKind) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        modifier = Modifier
-            .width(220.dp)
-            .background(AndyColors.Neutral900, RoundedCornerShape(AndyRadius.Control)),
-    ) {
+    Column(modifier.fillMaxWidth()) {
         DockLandingItem(
             kind = DockTabKind.Live,
             label = "Live",
@@ -332,6 +489,11 @@ internal fun DockLandingMenu(
             label = "Terminal",
             onClick = { onSelect(DockTabKind.Terminal) },
         )
+        DockLandingItem(
+            kind = DockTabKind.Browser,
+            label = "Browser",
+            onClick = { onSelect(DockTabKind.Browser) },
+        )
     }
 }
 
@@ -341,17 +503,12 @@ private fun DockLandingItem(
     label: String,
     onClick: () -> Unit,
 ) {
-    DropdownMenuItem(
-        text = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                DockKindIcon(kind = kind, modifier = Modifier.size(16.dp))
-                Text(label, color = TextPrimary, fontFamily = DisplayFont, fontSize = 13.sp)
-            }
-        },
+    ChromeFlyoutRow(
+        label = label,
         onClick = onClick,
+        leading = {
+            DockKindIcon(kind = kind, modifier = Modifier.size(16.dp))
+        },
     )
 }
 
@@ -409,9 +566,47 @@ private fun DockKindIcon(kind: DockTabKind, modifier: Modifier = Modifier) {
                     )
                 }
             }
+            DockTabKind.Browser -> {
+                drawCircle(
+                    color = color,
+                    radius = size.minDimension * 0.4f,
+                    center = Offset(size.width * 0.5f, size.height * 0.5f),
+                    style = stroke,
+                )
+                drawLine(
+                    color,
+                    Offset(size.width * 0.1f, size.height * 0.5f),
+                    Offset(size.width * 0.9f, size.height * 0.5f),
+                    strokeWidth = stroke.width,
+                )
+                drawOval(
+                    color = color,
+                    topLeft = Offset(size.width * 0.32f, size.height * 0.1f),
+                    size = Size(size.width * 0.36f, size.height * 0.8f),
+                    style = stroke,
+                )
+            }
         }
     }
 }
+
+/**
+ * Callbacks for a terminal workspace tab's split tree. Every callback is scoped by
+ * [topLevelTabId] first — the id of the top-level Terminal [DockTab] the tree belongs to —
+ * since multiple independent terminal workspaces can be open at once.
+ */
+internal data class TerminalPaneCallbacks(
+    val onSelectTab: (topLevelTabId: String, leafId: String, tabId: String) -> Unit,
+    val onCloseTab: (topLevelTabId: String, tabId: String) -> Unit,
+    val onRenameTab: (topLevelTabId: String, tabId: String, title: String) -> Unit,
+    val onAddTab: (topLevelTabId: String, leafId: String) -> Unit,
+    val onSplit: (topLevelTabId: String, leafId: String, axis: SplitAxis) -> Unit,
+    val onCloseLeaf: (topLevelTabId: String, leafId: String) -> Unit,
+    val onFocusLeaf: (topLevelTabId: String, leafId: String) -> Unit,
+    val onWeightsChanged: (topLevelTabId: String, splitId: String, weights: List<Float>) -> Unit,
+    /** Opens a new top-level dock tab of [kind] — the Live half of a leaf's add menu. */
+    val onAddPaneKind: (kind: DockTabKind) -> Unit,
+)
 
 @Composable
 internal fun ShellDockDrawer(
@@ -433,24 +628,15 @@ internal fun ShellDockDrawer(
     onRenameTab: (String, String) -> Unit,
     onOpenKind: (DockTabKind, newTerminal: Boolean) -> Unit,
     onClose: () -> Unit,
+    terminalPaneCallbacks: TerminalPaneCallbacks,
+    browserPaneOf: (String) -> BrowserPaneState = { BrowserPaneState() },
+    onBrowserNav: (tabId: String, BrowserNavCommand) -> Unit = { _, _ -> },
+    onBrowserNavStateChanged: (tabId: String, title: String?, url: String, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) -> Unit = { _, _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
     terminalThemeId: String = TerminalThemePreset.Default.id,
 ) {
     val active = pane.activeTab
     var addMenuExpanded by remember { mutableStateOf(false) }
-    val addMenuExpandedState = rememberUpdatedState(addMenuExpanded)
-    fun dismissAddMenu() {
-        if (!addMenuExpanded) return
-        addMenuExpanded = false
-        HeavyweightOverlayRegistry.pop()
-    }
-    DisposableEffect(Unit) {
-        onDispose {
-            if (addMenuExpandedState.value) {
-                HeavyweightOverlayRegistry.pop()
-            }
-        }
-    }
     val reveal = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         reveal.snapTo(0f)
@@ -472,6 +658,22 @@ internal fun ShellDockDrawer(
         liveHeader -> AndyColors.ContentBg
         else -> AndyColors.SurfaceRaised
     }
+    // One terminal workspace on its own needs no dock tab strip: the tree's own leaf strip
+    // already names the session and carries its controls, so a second row above it is pure
+    // chrome. The strip comes back the moment a second top-level tab exists — and in that
+    // case the leaf strip stays hidden until the user actually splits (or opens a second
+    // session in the leaf), so the dock row is the only header.
+    val soloTerminalWorkspace = pane.tabs.size == 1 &&
+        active != null &&
+        active.kind == DockTabKind.Terminal &&
+        active.terminalTree != null
+    val hoistSplit = active
+        ?.takeIf { it.kind == DockTabKind.Terminal }
+        ?.let { tab ->
+            val leaf = tab.terminalTree as? TerminalPaneNode.Leaf ?: return@let null
+            leaf.takeUnless { terminalLeafChromeVisible(it, dockStripCollapsed = soloTerminalWorkspace) }
+                ?.let { tab to it }
+        }
     // Pad the tab strip only; the content below manages its own insets so Live/Terminal can
     // bleed to the card's side edges (PanelCard's default 20dp padding was leaving a visible
     // shelf under Live).
@@ -486,7 +688,7 @@ internal fun ShellDockDrawer(
         contentPadding = PaddingValues(0.dp),
         verticalArrangement = Arrangement.Top,
     ) {
-        TabBarRow(
+        if (!soloTerminalWorkspace) TabBarRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(start = AndySpace.Space5, top = AndySpace.Space4, end = AndySpace.Space5),
@@ -499,27 +701,22 @@ internal fun ShellDockDrawer(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box {
-                        DockChromeButton(
-                            glyph = "+",
-                            label = "Add pane tab",
-                            onBleedSurface = terminalHeader || liveHeader,
-                            onClick = {
-                                if (!addMenuExpanded) {
-                                    HeavyweightOverlayRegistry.push()
-                                }
-                                addMenuExpanded = true
-                            },
+                    hoistSplit?.let { (tab, leaf) ->
+                        SplitAxisIcon(
+                            axis = SplitAxis.Row,
+                            onClick = { terminalPaneCallbacks.onSplit(tab.id, leaf.id, SplitAxis.Row) },
                         )
-                        DockLandingMenu(
-                            expanded = addMenuExpanded,
-                            onDismiss = ::dismissAddMenu,
-                            onSelect = { kind ->
-                                dismissAddMenu()
-                                onOpenKind(kind, true)
-                            },
+                        SplitAxisIcon(
+                            axis = SplitAxis.Column,
+                            onClick = { terminalPaneCallbacks.onSplit(tab.id, leaf.id, SplitAxis.Column) },
                         )
                     }
+                    DockChromeButton(
+                        glyph = "+",
+                        label = "Add pane tab",
+                        onBleedSurface = terminalHeader || liveHeader,
+                        onClick = { addMenuExpanded = !addMenuExpanded },
+                    )
                     DockChromeButton(
                         glyph = "×",
                         label = if (placement == DockPlacement.Right) "Close right pane" else "Close bottom pane",
@@ -531,27 +728,34 @@ internal fun ShellDockDrawer(
         ) {
             val terminalTabs = pane.tabs.filter { it.kind == DockTabKind.Terminal }
             pane.tabs.forEach { tab ->
-                val runningAction = tab.runId?.let { id -> running.firstOrNull { it.runId == id } }
+                val runningAction = if (tab.kind == DockTabKind.Terminal) tab.representativeRunningAction(running) else null
                 val accent = when (tab.kind) {
                     DockTabKind.Live -> Cyan
                     DockTabKind.Logs -> Green
                     DockTabKind.Terminal -> dockActionStatusColor(runningAction?.status)
+                    DockTabKind.Browser -> Cyan
                 }
                 val selected = tab.id == active?.id
                 TabBarItem(
                     label = tab.title ?: when (tab.kind) {
                         DockTabKind.Live -> "Live"
                         DockTabKind.Logs -> "Logs"
-                        DockTabKind.Terminal -> dockTerminalTabLabel(tab, terminalTabs, runningAction)
+                        DockTabKind.Terminal -> dockTerminalWorkspaceLabel(tab, terminalTabs)
+                        DockTabKind.Browser ->
+                            browserPaneOf(tab.id).title?.takeIf { it.isNotBlank() } ?: "Browser"
                     },
                     selected = selected,
-                    onClick = { onSelectTab(tab.id) },
+                    onClick = {
+                        resignEmbeddedBrowserKey()
+                        onSelectTab(tab.id)
+                    },
                     onRename = { title -> onRenameTab(tab.id, title) },
                     modifier = Modifier.pointerInput(tab.id) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent()
                                 if (event.type == PointerEventType.Press && event.buttons.isTertiaryPressed) {
+                                    resignEmbeddedBrowserKey()
                                     onCloseTab(tab.id)
                                 }
                             }
@@ -564,6 +768,7 @@ internal fun ShellDockDrawer(
                                 DockTabKind.Live -> "▣"
                                 DockTabKind.Logs -> "≡"
                                 DockTabKind.Terminal -> actionIconMarker(runningAction?.icon.orEmpty())
+                                DockTabKind.Browser -> "◯"
                             },
                             color = if (selected) accent else accent.copy(alpha = 0.6f),
                             fontFamily = MonoFont,
@@ -581,16 +786,28 @@ internal fun ShellDockDrawer(
                             lineHeight = 14.sp,
                             modifier = Modifier
                                 .semantics { contentDescription = "Close tab"; role = Role.Button }
-                                .clickable(onClick = { onCloseTab(tab.id) }),
+                                .clickable(onClick = {
+                                    resignEmbeddedBrowserKey()
+                                    onCloseTab(tab.id)
+                                }),
                         )
                     },
                 )
             }
         }
+        ChromeFlyout(visible = addMenuExpanded) {
+            DockLandingPanel(
+                onSelect = { kind ->
+                    addMenuExpanded = false
+                    onOpenKind(kind, true)
+                },
+            )
+        }
         // Live and Terminal panels fill their own background/theme, so bleed them to the
         // card edges rather than boxing them in — that's what makes them feel like a real
         // terminal/device surface instead of a widget floating inside a card.
-        val edgeToEdge = active?.kind == DockTabKind.Live || active?.kind == DockTabKind.Terminal
+        val edgeToEdge = active?.kind == DockTabKind.Live || active?.kind == DockTabKind.Terminal ||
+            active?.kind == DockTabKind.Browser
         Box(
             Modifier
                 .weight(1f)
@@ -605,17 +822,27 @@ internal fun ShellDockDrawer(
                     start = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     end = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     top = if (edgeToEdge) 0.dp else AndySpace.Space4,
-                    // Keeps the last row clear of the card's rounded bottom corners.
-                    bottom = DockContentCornerInset,
+                    // Browser clips itself to the card's rounded bottom; other kinds keep a
+                    // hairline inset so Compose content doesn't sit on the corner arc.
+                    bottom = if (active?.kind == DockTabKind.Browser) 0.dp else DockContentCornerInset,
                 ),
         ) {
             when (active?.kind) {
                 DockTabKind.Terminal -> {
-                    val runId = active.runId
-                    if (runId == null) {
+                    if (active.terminalTree == null) {
                         EmptyState("Run an action to open its terminal")
                     } else {
-                        ProjectTerminalSurface(services, runId, Modifier.fillMaxSize())
+                        TerminalPaneTreeView(
+                            services = services,
+                            tab = active,
+                            running = running,
+                            terminalBackground = terminalBackground,
+                            callbacks = terminalPaneCallbacks,
+                            modifier = Modifier.fillMaxSize(),
+                            // With the dock strip collapsed away, a leaf's "+" is the only add
+                            // button left, so it takes over the strip's Live/Terminal menu.
+                            addKindMenu = soloTerminalWorkspace,
+                        )
                     }
                 }
                 DockTabKind.Live -> {
@@ -651,8 +878,59 @@ internal fun ShellDockDrawer(
                         state = logcatState,
                     )
                 }
+                // Browser is retained below so switching to Live/Terminal doesn't
+                // dispose WKWebView and reload the page on the way back.
+                DockTabKind.Browser -> Unit
                 null -> EmptyState("Choose Live or Terminal")
             }
+            RetainedBrowserDockContent(
+                services = services,
+                pane = pane,
+                active = active,
+                browserPaneOf = browserPaneOf,
+                onBrowserNav = onBrowserNav,
+                onBrowserNavStateChanged = onBrowserNavStateChanged,
+            )
+        }
+    }
+}
+
+/**
+ * Keeps the last Browser tab in composition while the user is on Live/Terminal/Logs
+ * so the WKWebView overlay is hidden rather than destroyed. A blank new Browser tab
+ * still uncomposes [BrowserSurface] (empty-state branch); the platform host must
+ * therefore also survive dispose without reloading the same URL.
+ */
+@Composable
+private fun RetainedBrowserDockContent(
+    services: AndyServices,
+    pane: DockPane,
+    active: DockTab?,
+    browserPaneOf: (String) -> BrowserPaneState,
+    onBrowserNav: (tabId: String, BrowserNavCommand) -> Unit,
+    onBrowserNavStateChanged: (tabId: String, title: String?, url: String, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) -> Unit,
+) {
+    var lastBrowserTabId by remember { mutableStateOf<String?>(null) }
+    val activeBrowserId = active?.takeIf { it.kind == DockTabKind.Browser }?.id
+    val retainedBrowserTabId = (activeBrowserId ?: lastBrowserTabId)
+        ?.takeIf { id -> pane.tabs.any { it.id == id && it.kind == DockTabKind.Browser } }
+    SideEffect { lastBrowserTabId = retainedBrowserTabId }
+    val browserTab = pane.tabs.firstOrNull { it.id == retainedBrowserTabId } ?: return
+    val browserActive = active?.id == browserTab.id
+    val parentSuppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
+    Box(if (browserActive) Modifier.fillMaxSize() else Modifier.size(0.dp).clipToBounds()) {
+        CompositionLocalProvider(
+            LocalSuppressHeavyweightSurfaces provides (!browserActive || parentSuppressHeavyweight),
+        ) {
+            BrowserPaneView(
+                services = services,
+                state = browserPaneOf(browserTab.id),
+                onNav = { command -> onBrowserNav(browserTab.id, command) },
+                onNavStateChanged = { title, url, canBack, canForward, loading ->
+                    onBrowserNavStateChanged(browserTab.id, title, url, canBack, canForward, loading)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -663,6 +941,30 @@ private fun DockChromeButton(
     label: String,
     onClick: () -> Unit,
     onBleedSurface: Boolean = false,
+) {
+    DockIconChromeButton(
+        label = label,
+        onClick = onClick,
+        onBleedSurface = onBleedSurface,
+        icon = {
+            Text(
+                glyph,
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+    )
+}
+
+/** Shared 28dp chrome for dock header icon buttons — [DockChromeButton] wraps this for glyph-only icons. */
+@Composable
+internal fun DockIconChromeButton(
+    label: String,
+    onClick: () -> Unit,
+    onBleedSurface: Boolean = false,
+    icon: @Composable () -> Unit,
 ) {
     // On a header that has taken on the terminal theme or the shell canvas, the neutral chrome
     // fill either reads as a patch of a different theme or vanishes into the background, so lift
@@ -683,17 +985,11 @@ private fun DockChromeButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            glyph,
-            color = TextSecondary,
-            fontFamily = MonoFont,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-        )
+        icon()
     }
 }
 
-private fun dockTerminalTabLabel(
+internal fun dockTerminalTabLabel(
     tab: DockTab,
     terminalTabs: List<DockTab>,
     runningAction: RunningAction?,
@@ -704,11 +1000,26 @@ private fun dockTerminalTabLabel(
     return if (index < 0) base else "$base ${index + 1}"
 }
 
-private fun dockActionStatusColor(status: ActionRunStatus?): Color = when (status) {
+internal fun dockActionStatusColor(status: ActionRunStatus?): Color = when (status) {
     ActionRunStatus.Starting -> Yellow
     ActionRunStatus.Running -> Green
     ActionRunStatus.Exited -> Cyan
     ActionRunStatus.Failed -> Red
     ActionRunStatus.Stopped -> Rust
     null -> Rust
+}
+
+/** Outer-strip label for a top-level terminal workspace tab — "Terminal", "Terminal 2", ... */
+internal fun dockTerminalWorkspaceLabel(tab: DockTab, terminalTabs: List<DockTab>): String {
+    if (terminalTabs.size <= 1) return "Terminal"
+    val index = terminalTabs.indexOfFirst { it.id == tab.id }
+    return if (index <= 0) "Terminal" else "Terminal ${index + 1}"
+}
+
+/** The run backing whichever leaf/tab last had focus — used for the outer tab's status dot. */
+internal fun DockTab.representativeRunningAction(running: List<RunningAction>): RunningAction? {
+    val tree = terminalTree ?: return null
+    val leaf = focusedTerminalLeafId?.let { tree.findLeaf(it) } ?: tree.flattenLeaves().firstOrNull()
+    val runId = leaf?.activeTab?.runId ?: return null
+    return running.firstOrNull { it.runId == runId }
 }

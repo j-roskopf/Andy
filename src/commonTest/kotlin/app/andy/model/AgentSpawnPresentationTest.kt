@@ -257,4 +257,30 @@ class AgentSpawnPresentationTest {
             AgentSpawnPresentation.resolveTaskId(spawn, tasks, excludeTaskId = "task-parent0001"),
         )
     }
+
+    @Test
+    fun ignoresMentionOfAgentBuriedInLargeToolOutput() {
+        // A grep/read result can be many KB; "agent" merely appearing somewhere in it (e.g. a
+        // hit on AgentTranscript.kt) must not make an ordinary tool call look like a spawn.
+        val hugeOutput = "line of unrelated output\n".repeat(500) + "found: AgentTranscript.kt"
+        assertFalse(AgentSpawnPresentation.isAgentSpawn("Grep", summary = "", detail = hugeOutput))
+    }
+
+    @Test
+    fun detectsSpawnMetadataWithinLeadingScanWindow() {
+        // "cursor-agent" style callers report every call as a generic tool name (not one of the
+        // recognized spawn tool names), so classification must fall through to the field scan.
+        val detail = """description=Archimedes, prompt=Review the auth flow, subagent_type=explore"""
+        assertTrue(AgentSpawnPresentation.isAgentSpawn("shell", summary = "", detail = detail))
+    }
+
+    @Test
+    fun doesNotDetectSpawnMetadataPastLeadingScanWindow() {
+        // Documents the tradeoff: classification only scans a bounded prefix of summary/detail,
+        // so real spawn metadata arriving after a huge preamble is missed. Genuine spawn calls
+        // put their metadata up front; this only matters for pathological cases.
+        val padding = "x".repeat(3000)
+        val detail = "$padding subagent_type=explore"
+        assertFalse(AgentSpawnPresentation.isAgentSpawn("shell", summary = "", detail = detail))
+    }
 }

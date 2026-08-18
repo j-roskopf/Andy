@@ -459,7 +459,7 @@ class IosSimMirrorDeviceSmokeTest {
             error("Live host for $serial did not become non-black")
         }
 
-        suspend fun openDeviceMenuAndAwaitSurfaceRemoval() {
+        suspend fun suppressLiveAndAwaitSurfaceRemoval() {
             SwingUtilities.invokeAndWait { menuExpanded.value = true }
             val deadline = System.nanoTime() + 5_000_000_000L
             while (System.nanoTime() < deadline) {
@@ -469,14 +469,14 @@ class IosSimMirrorDeviceSmokeTest {
                 if (!hasLiveHost) return
                 delay(20)
             }
-            error("Opening the device menu did not remove the heavyweight Live host")
+            error("Suppressing heavyweight surfaces did not remove the Live host")
         }
 
         try {
             awaitNonBlackHost(ios.udid, 20_000)
 
             repeat(3) { cycle ->
-                openDeviceMenuAndAwaitSurfaceRemoval()
+                suppressLiveAndAwaitSurfaceRemoval()
                 SwingUtilities.invokeAndWait {
                     selectedIos.value = null
                     selectedSerial.value = android.serial
@@ -484,7 +484,7 @@ class IosSimMirrorDeviceSmokeTest {
                 }
                 awaitNonBlackHost(android.serial, 35_000)
 
-                openDeviceMenuAndAwaitSurfaceRemoval()
+                suppressLiveAndAwaitSurfaceRemoval()
                 SwingUtilities.invokeAndWait {
                     selectedIos.value = ios
                     selectedSerial.value = ios.udid

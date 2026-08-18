@@ -27,3 +27,4 @@ iosApp/Vendor/GoogleCastSDK/
 .vercel
 .env*
 .andy/
+hs_err_pid*.log

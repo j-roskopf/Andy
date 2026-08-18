@@ -7,6 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import app.andy.AndyDestination
+import app.andy.closeEmbeddedBrowser
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
@@ -81,11 +82,13 @@ internal class ShellState(
         private set
     var terminalRunId by mutableStateOf<String?>(null)
         private set
-    var chromeMenuExpanded by mutableStateOf(false)
-        private set
     var docks by mutableStateOf(ShellDocks())
         private set
     var lastTerminalPlacement by mutableStateOf(DockPlacement.Right)
+        private set
+    /** Nav state per Browser [DockTab.id] — kept out of [DockTab] itself, mirroring how
+     * Terminal state lives in [DockTab.terminalTree] but browser tabs aren't a split tree. */
+    var browserPanes by mutableStateOf<Map<String, BrowserPaneState>>(emptyMap())
         private set
 
     /** In-app deep links for contextual agent actions (§5), separate from OS-level requests. */
@@ -99,6 +102,8 @@ internal class ShellState(
     private var startupTargetId: String? = null
     private var startupSelectionResolved = false
     private var handledTerminalRunId: String? = null
+    private var paneIdSeq = 0
+    private fun nextPaneId(prefix: String) = "$prefix-${paneIdSeq++}"
 
     val logcatState = LogcatState()
     val liveLogcatState = LogcatState()
@@ -279,18 +284,13 @@ internal class ShellState(
         activeRunId = value
     }
 
-    fun updateChromeMenuExpanded(value: Boolean) {
-        chromeMenuExpanded = value
-    }
-
-    /** Placement icon: close if open, otherwise show the landing menu. */
+    /**
+     * Placement icon: hide the pane if open; if it already has tabs, show it again;
+     * if the landing chooser is already up for this placement, dismiss it;
+     * otherwise show the landing chooser (empty pane).
+     */
     fun onPlacementIconClick(placement: DockPlacement) {
-        val pane = docks.pane(placement)
-        docks = if (pane.visible) {
-            docks.update(placement) { it.hide() }.copy(landingFor = null)
-        } else {
-            docks.copy(landingFor = placement)
-        }
+        docks = docks.onPlacementIconClick(placement)
     }
 
     fun dismissDockLanding() {
@@ -302,7 +302,67 @@ internal class ShellState(
             DockTabKind.Live -> docks = docks.withLiveExclusive(placement)
             DockTabKind.Logs -> docks = docks.update(placement) { it.withTab(DockTab.logs()) }
             DockTabKind.Terminal -> if (newTerminal) openNewTerminalTab(placement) else openOrFocusTerminal(placement)
+            DockTabKind.Browser -> {
+                val existing = docks.existingBrowserTab()?.let { (from, tabId) ->
+                    docks.pane(from).tabs.firstOrNull { it.id == tabId }
+                }
+                val tab = existing ?: DockTab.browser(nextPaneId("browser")).also { created ->
+                    browserPanes = browserPanes + (created.id to BrowserPaneState())
+                }
+                val discarded = (docks.right.tabs + docks.bottom.tabs)
+                    .filter { it.kind == DockTabKind.Browser && it.id != tab.id }
+                    .map { it.id }
+                discarded.forEach { closeBrowserPane(it) }
+                docks = docks.withBrowserExclusive(placement, tab)
+            }
         }
+    }
+
+    /**
+     * Opens [url] in an existing Browser dock tab if one is already open (right or bottom),
+     * otherwise creates a new Browser tab on the right.
+     */
+    fun openUrlInBrowserTab(url: String) {
+        val target = url.trim()
+        if (target.isEmpty()) return
+        val existing = docks.existingBrowserTab()
+        if (existing != null) {
+            val (placement, tabId) = existing
+            docks = docks.update(placement) { it.selectTab(tabId) }
+            updateBrowserUrl(tabId, target)
+            return
+        }
+        val tab = DockTab.browser(nextPaneId("browser"))
+        browserPanes = browserPanes + (tab.id to BrowserPaneState(url = target))
+        docks = docks.update(DockPlacement.Right) { it.withTab(tab) }
+    }
+
+    /** Address-bar submit or "Local" server click — records the URL and forwards a Go-To. */
+    fun updateBrowserUrl(tabId: String, url: String) {
+        browserPanes = browserPanes + (tabId to (browserPanes[tabId] ?: BrowserPaneState()).copy(url = url))
+    }
+
+    /** Persists the URL half of a nav command; Back/Forward/Refresh are surface-local and
+     * don't need ShellState involvement beyond routing (see [BrowserPaneView]). */
+    fun browserNav(tabId: String, command: BrowserNavCommand) {
+        if (command is BrowserNavCommand.GoTo) updateBrowserUrl(tabId, command.url)
+    }
+
+    /** The platform [BrowserSurface] reports nav-state changes back up here after navigating. */
+    fun updateBrowserNavState(tabId: String, url: String, title: String?, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) {
+        val current = browserPanes[tabId] ?: return
+        browserPanes = browserPanes + (tabId to current.copy(
+            url = url,
+            title = title,
+            canGoBack = canGoBack,
+            canGoForward = canGoForward,
+            loading = loading,
+        ))
+    }
+
+    private fun closeBrowserPane(tabId: String) {
+        browserPanes = browserPanes - tabId
+        if (browserPanes.isEmpty()) closeEmbeddedBrowser()
     }
 
     fun openOrFocusTerminal(placement: DockPlacement = lastTerminalPlacement) {
@@ -319,7 +379,12 @@ internal class ShellState(
         focusTerminalRun(runId, placement)
     }
 
-    /** Always spawns a fresh interactive shell tab, even when other terminals are open. */
+    /**
+     * The dock-level "+" — always spawns a brand-new top-level terminal workspace tab (its
+     * own independent, single-pane split tree), never reusing or nesting into whatever's
+     * currently open. Contrast [openNewTerminalTabInLeaf], which adds a session tab to one
+     * specific existing pane instead.
+     */
     fun openNewTerminalTab(placement: DockPlacement = lastTerminalPlacement) {
         val project = actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
             ?: actionsConfig.projects.firstOrNull()
@@ -328,16 +393,29 @@ internal class ShellState(
             return
         }
         val runId = services.actionRuns.openShell(project)
-        focusTerminalRun(runId, placement)
+        val tabId = nextPaneId("terminal-tab")
+        val leafId = nextPaneId("leaf")
+        lastTerminalPlacement = placement
+        activeRunId = runId
+        terminalRunId = runId
+        handledTerminalRunId = runId
+        val tree = TerminalPaneNode.Leaf(leafId, listOf(DockTab.terminal(runId)), "terminal:$runId")
+        docks = docks.update(placement) { it.withTab(DockTab.terminalWorkspace(tabId, tree, leafId)) }
     }
 
+    /** Reveals [runId]'s terminal tab wherever it lives, or opens a fresh top-level tab for it. */
     fun focusTerminalRun(runId: String, placement: DockPlacement = lastTerminalPlacement) {
         if (runId.isBlank()) return
         lastTerminalPlacement = placement
         activeRunId = runId
         terminalRunId = runId
         handledTerminalRunId = runId
-        docks = docks.withTerminalExclusive(placement, runId)
+        docks = docks.withTerminalExclusive(
+            placement = placement,
+            runId = runId,
+            newTabId = nextPaneId("terminal-tab"),
+            newLeafId = nextPaneId("leaf"),
+        )
     }
 
     fun notifyTerminalRun(runId: String) {
@@ -345,11 +423,105 @@ internal class ShellState(
         focusTerminalRun(runId, lastTerminalPlacement)
     }
 
+    /** Resolves [activeRunId] from whichever leaf/tab last had focus in [placement]'s [tabId] workspace. */
+    private fun syncActiveRunFromFocusedLeaf(placement: DockPlacement, tabId: String) {
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
+        val leaf = tab.focusedTerminalLeafId?.let { tab.terminalTree?.findLeaf(it) }
+        leaf?.activeTab?.runId?.let { activeRunId = it }
+    }
+
+    /** Mutates the [tabId] workspace's tree in place, dropping the whole tab if [transform] empties it. */
+    private fun updateTerminalTree(placement: DockPlacement, tabId: String, transform: (TerminalPaneNode) -> TerminalPaneNode?) {
+        docks = docks.update(placement) { pane ->
+            val tab = pane.tabs.firstOrNull { it.id == tabId } ?: return@update pane
+            val tree = tab.terminalTree ?: return@update pane
+            when (val next = transform(tree)) {
+                null -> pane.closeTab(tabId)
+                else -> pane.copy(
+                    tabs = pane.tabs.map {
+                        if (it.id == tabId) {
+                            it.copy(terminalTree = next, focusedTerminalLeafId = it.focusedTerminalLeafId?.takeIf { id -> next.findLeaf(id) != null } ?: next.firstLeafId())
+                        } else {
+                            it
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    /** Backs a leaf's own "+" button — spawns a fresh session and lands it in that exact leaf. */
+    fun openNewTerminalTabInLeaf(placement: DockPlacement, tabId: String, leafId: String) {
+        focusTerminalLeaf(placement, tabId, leafId)
+        val project = actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull() ?: return
+        val runId = services.actionRuns.openShell(project)
+        updateTerminalTree(placement, tabId) { it.addTab(leafId, DockTab.terminal(runId)) }
+        lastTerminalPlacement = placement
+        activeRunId = runId
+        terminalRunId = runId
+        handledTerminalRunId = runId
+    }
+
+    /** Click-to-focus target inside a terminal split tree. */
+    fun focusTerminalLeaf(placement: DockPlacement, tabId: String, leafId: String) {
+        docks = docks.update(placement) { pane ->
+            pane.copy(tabs = pane.tabs.map { if (it.id == tabId) it.copy(focusedTerminalLeafId = leafId) else it })
+        }
+        syncActiveRunFromFocusedLeaf(placement, tabId)
+    }
+
+    fun selectLeafTab(placement: DockPlacement, tabId: String, leafId: String, innerTabId: String) {
+        updateTerminalTree(placement, tabId) { it.selectTab(leafId, innerTabId) }
+        focusTerminalLeaf(placement, tabId, leafId)
+    }
+
+    fun renameLeafTab(placement: DockPlacement, tabId: String, innerTabId: String, title: String) {
+        updateTerminalTree(placement, tabId) { it.renameTab(innerTabId, title) }
+    }
+
+    /** Closes one terminal tab within a leaf without killing its PTY (servers keep running). */
+    fun closeLeafTab(placement: DockPlacement, tabId: String, innerTabId: String) {
+        val runId = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
+            ?.terminalTree?.flattenTabs()?.firstOrNull { it.id == innerTabId }?.runId
+        if (runId != null && activeRunId == runId) activeRunId = null
+        updateTerminalTree(placement, tabId) { it.closeTab(innerTabId) }
+        syncActiveRunFromFocusedLeaf(placement, tabId)
+    }
+
+    /** Closes a whole pane (every tab in it) without killing its PTYs. */
+    fun closeLeaf(placement: DockPlacement, tabId: String, leafId: String) {
+        val runIds = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
+            ?.terminalTree?.findLeaf(leafId)?.tabs?.mapNotNull { it.runId }.orEmpty()
+        if (activeRunId in runIds) activeRunId = null
+        updateTerminalTree(placement, tabId) { it.closeLeaf(leafId) }
+        syncActiveRunFromFocusedLeaf(placement, tabId)
+    }
+
+    /** The two split icons — always spawns a fresh interactive shell for the new pane. */
+    fun splitLeaf(placement: DockPlacement, tabId: String, leafId: String, axis: SplitAxis) {
+        val project = actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull() ?: return
+        val runId = services.actionRuns.openShell(project)
+        val newLeafId = nextPaneId("leaf")
+        val newLeaf = TerminalPaneNode.Leaf(newLeafId, listOf(DockTab.terminal(runId)), "terminal:$runId")
+        updateTerminalTree(placement, tabId) { it.split(leafId, nextPaneId("split"), axis, newLeaf) }
+        focusTerminalLeaf(placement, tabId, newLeafId)
+        lastTerminalPlacement = placement
+        activeRunId = runId
+        terminalRunId = runId
+        handledTerminalRunId = runId
+    }
+
+    fun updateSplitWeights(placement: DockPlacement, tabId: String, splitId: String, weights: List<Float>) {
+        updateTerminalTree(placement, tabId) { it.updateWeights(splitId, weights) }
+    }
+
     fun selectDockTab(placement: DockPlacement, tabId: String) {
         docks = docks.update(placement) { it.selectTab(tabId) }
         val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
-        if (tab?.kind == DockTabKind.Terminal && tab.runId != null) {
-            activeRunId = tab.runId
+        if (tab?.kind == DockTabKind.Terminal) {
+            syncActiveRunFromFocusedLeaf(placement, tabId)
         }
     }
 
@@ -359,14 +531,12 @@ internal class ShellState(
 
     fun closeDockTab(placement: DockPlacement, tabId: String) {
         val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId }
-        if (tab?.kind == DockTabKind.Terminal && tab.runId != null) {
-            services.actionRuns.stop(tab.runId)
-            if (activeRunId == tab.runId) {
-                val remaining = docks.pane(placement).tabs
-                    .filter { it.id != tabId && it.kind == DockTabKind.Terminal }
-                    .mapNotNull { it.runId }
-                activeRunId = remaining.lastOrNull()
-            }
+        if (tab?.kind == DockTabKind.Terminal) {
+            val runIds = tab.terminalTree?.flattenTabs()?.mapNotNull { it.runId }.orEmpty()
+            if (activeRunId in runIds) activeRunId = null
+        }
+        if (tab?.kind == DockTabKind.Browser) {
+            closeBrowserPane(tabId)
         }
         docks = docks.update(placement) { it.closeTab(tabId) }
     }
@@ -382,7 +552,12 @@ internal class ShellState(
         handledTerminalRunId = runId
         activeRunId = runId
         rememberLastProject(run.projectId)
-        docks = docks.withTerminalExclusive(lastTerminalPlacement, runId)
+        docks = docks.withTerminalExclusive(
+            placement = lastTerminalPlacement,
+            runId = runId,
+            newTabId = nextPaneId("terminal-tab"),
+            newLeafId = nextPaneId("leaf"),
+        )
     }
 
     fun pruneDockTerminalTabs(runningActions: List<RunningAction>) {

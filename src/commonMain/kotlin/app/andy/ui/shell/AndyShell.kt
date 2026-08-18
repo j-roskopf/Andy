@@ -242,15 +242,10 @@ internal fun AndyShell(
         surfaceModeId = state.workspaceState.surfaceModeId,
     ) {
     CompositionLocalProvider(
-        // Keep SwingPanel mounted during window resize; MirrorPresentationGuard blocks geometry
-        // synchronously. Tearing heavyweight peers down mid-resize deadlocks on presenter remount.
-        // Modal dialogs share the same rule as chrome menus: interop surfaces paint over them.
-        LocalSuppressHeavyweightSurfaces provides (
-            HeavyweightOverlayRegistry.anyActive ||
-            state.docks.landingFor != null ||
-            state.chromeMenuExpanded ||
-            ModalDialogRegistry.anyOpen
-        ),
+        // Modal dialogs need interop surfaces out of the way: Compose AlertDialog paints in the
+        // Skia layer below SwingPanel / Metal / WKWebView. Chrome menus use in-layout flyouts
+        // that reflow content, so they no longer drive this flag.
+        LocalSuppressHeavyweightSurfaces provides ModalDialogRegistry.anyOpen,
         LocalOpenAgentTask provides state::openAgentTask,
         LocalOpenInvestigation provides state::openInvestigation,
     ) {
@@ -329,6 +324,22 @@ internal fun AndyShell(
                     onActionSelectionChange = state::rememberActionSelection,
                     onRunAction = { project, action -> state.runAction(project, action) },
                     proxyRunning = proxyRunning,
+                    showLocalServers = capabilities.hostAutomation &&
+                        state.destination == AndyDestination.Actions,
+                    localServersContent = { expanded, onExpandedChange ->
+                        LocalServersMenu(
+                            services = services,
+                            expanded = expanded,
+                            onExpandedChange = onExpandedChange,
+                        )
+                    },
+                    localServersFlyout = { onDismiss ->
+                        LocalServersFlyout(
+                            services = services,
+                            onOpenInBrowser = state::openUrlInBrowserTab,
+                            onDismiss = onDismiss,
+                        )
+                    },
                     rightPaneOpen = state.docks.right.visible,
                     bottomPaneOpen = state.docks.bottom.visible,
                     projectPaneOpen = state.workspaceState.projectListPaneVisible,
@@ -341,7 +352,6 @@ internal fun AndyShell(
                     },
                     onDismissDockLanding = state::dismissDockLanding,
                     onOpenDockKind = state::openDockKind,
-                    onMenuExpandedChange = state::updateChromeMenuExpanded,
                     onProxyClick = state::openProxySettings,
                     actions = {
                         if (state.destination == AndyDestination.Network) {
@@ -617,7 +627,7 @@ internal fun AndyShell(
                 }
                 if (state.docks.right.visible) {
                     PaneDivider(
-                        onDrag = { dragX -> rightDockPaneWidth = (rightDockPaneWidth - dragX).coerceIn(280f, 900f) },
+                        onDrag = { dragX -> rightDockPaneWidth = (rightDockPaneWidth - dragX).coerceAtLeast(240f) },
                         onDragEnd = { state.updateWorkspace { it.copy(rightDockPaneWidth = rightDockPaneWidth) } },
                     )
                     ShellDockDrawer(
@@ -639,6 +649,22 @@ internal fun AndyShell(
                         onRenameTab = { tabId, title -> state.renameDockTab(DockPlacement.Right, tabId, title) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Right, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Right) },
+                        terminalPaneCallbacks = TerminalPaneCallbacks(
+                            onSelectTab = { tabId, leafId, innerTabId -> state.selectLeafTab(DockPlacement.Right, tabId, leafId, innerTabId) },
+                            onCloseTab = { tabId, innerTabId -> state.closeLeafTab(DockPlacement.Right, tabId, innerTabId) },
+                            onRenameTab = { tabId, innerTabId, title -> state.renameLeafTab(DockPlacement.Right, tabId, innerTabId, title) },
+                            onAddTab = { tabId, leafId -> state.openNewTerminalTabInLeaf(DockPlacement.Right, tabId, leafId) },
+                            onSplit = { tabId, leafId, axis -> state.splitLeaf(DockPlacement.Right, tabId, leafId, axis) },
+                            onCloseLeaf = { tabId, leafId -> state.closeLeaf(DockPlacement.Right, tabId, leafId) },
+                            onFocusLeaf = { tabId, leafId -> state.focusTerminalLeaf(DockPlacement.Right, tabId, leafId) },
+                            onWeightsChanged = { tabId, splitId, weights -> state.updateSplitWeights(DockPlacement.Right, tabId, splitId, weights) },
+                            onAddPaneKind = { kind -> state.openDockKind(DockPlacement.Right, kind, newTerminal = true) },
+                        ),
+                        browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
+                        onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
+                        onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
+                            state.updateBrowserNavState(tabId, url, title, canBack, canForward, loading)
+                        },
                         modifier = Modifier.width(rightDockPaneWidth.dp).fillMaxHeight(),
                         terminalThemeId = state.workspaceState.terminalThemeId,
                     )
@@ -646,7 +672,7 @@ internal fun AndyShell(
                 }
                 if (state.docks.bottom.visible) {
                     HorizontalPaneDivider(
-                        onDrag = { dragY -> bottomDockPaneHeight = (bottomDockPaneHeight - dragY).coerceIn(150f, 700f) },
+                        onDrag = { dragY -> bottomDockPaneHeight = (bottomDockPaneHeight - dragY).coerceAtLeast(120f) },
                         onDragEnd = { state.updateWorkspace { it.copy(bottomDockPaneHeight = bottomDockPaneHeight) } },
                     )
                     ShellDockDrawer(
@@ -668,6 +694,22 @@ internal fun AndyShell(
                         onRenameTab = { tabId, title -> state.renameDockTab(DockPlacement.Bottom, tabId, title) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Bottom) },
+                        terminalPaneCallbacks = TerminalPaneCallbacks(
+                            onSelectTab = { tabId, leafId, innerTabId -> state.selectLeafTab(DockPlacement.Bottom, tabId, leafId, innerTabId) },
+                            onCloseTab = { tabId, innerTabId -> state.closeLeafTab(DockPlacement.Bottom, tabId, innerTabId) },
+                            onRenameTab = { tabId, innerTabId, title -> state.renameLeafTab(DockPlacement.Bottom, tabId, innerTabId, title) },
+                            onAddTab = { tabId, leafId -> state.openNewTerminalTabInLeaf(DockPlacement.Bottom, tabId, leafId) },
+                            onSplit = { tabId, leafId, axis -> state.splitLeaf(DockPlacement.Bottom, tabId, leafId, axis) },
+                            onCloseLeaf = { tabId, leafId -> state.closeLeaf(DockPlacement.Bottom, tabId, leafId) },
+                            onFocusLeaf = { tabId, leafId -> state.focusTerminalLeaf(DockPlacement.Bottom, tabId, leafId) },
+                            onWeightsChanged = { tabId, splitId, weights -> state.updateSplitWeights(DockPlacement.Bottom, tabId, splitId, weights) },
+                            onAddPaneKind = { kind -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal = true) },
+                        ),
+                        browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
+                        onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
+                        onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
+                            state.updateBrowserNavState(tabId, url, title, canBack, canForward, loading)
+                        },
                         modifier = Modifier.fillMaxWidth().height(bottomDockPaneHeight.dp),
                         terminalThemeId = state.workspaceState.terminalThemeId,
                     )

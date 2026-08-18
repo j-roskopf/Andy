@@ -9,6 +9,9 @@ import kotlinx.serialization.json.contentOrNull
 object AgentSpawnPresentation {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    /** How much of a tool call's summary/detail [isAgentSpawn] scans for spawn metadata. */
+    private const val ClassificationScanLimit = 2000
+
     private val spawnToolNames = setOf(
         "task",
         "agent",
@@ -48,11 +51,27 @@ object AgentSpawnPresentation {
      */
     fun isAgentSpawn(toolName: String?, summary: String = "", detail: String = ""): Boolean {
         if (isAgentSpawnTool(toolName)) return true
+        // Every match below needs the literal substring "agent" somewhere in the payload
+        // (subagent_type, subagentType, or a bare "agent" key next to "prompt"). This runs on
+        // every tool call in a transcript — reads, edits, shell commands — and the overwhelming
+        // majority never mention "agent" at all, so a plain substring scan rejects them before
+        // paying for JSON parsing or the key=value regex scan. That JSON/regex path was the
+        // dominant per-row CPU cost while scrolling a transcript with many ordinary tool calls.
+        if (!summary.contains("agent", ignoreCase = true) && !detail.contains("agent", ignoreCase = true)) {
+            return false
+        }
+        // A real spawn call's metadata is compact and up front (title/prompt/subagent_type);
+        // command output or a read file body that follows can be many KB (e.g. this very
+        // transcript, which is about Agent*.kt files, so "agent" appears in nearly every grep
+        // dump). Capping what the JSON/regex scan below sees keeps a huge tool result from
+        // costing the same as a short one just because the word "agent" turns up somewhere in it.
+        val detailHead = detail.take(ClassificationScanLimit)
+        val summaryHead = summary.take(ClassificationScanLimit)
         val fields = linkedMapOf<String, String>()
-        extractJsonFields(detail, fields)
-        extractJsonFields(summary, fields)
-        extractKeyValueFields(detail, fields)
-        extractKeyValueFields(summary, fields)
+        extractJsonFields(detailHead, fields)
+        extractJsonFields(summaryHead, fields)
+        extractKeyValueFields(detailHead, fields)
+        extractKeyValueFields(summaryHead, fields)
         if (fields.containsKey("subagent_type") || fields.containsKey("subagentType")) return true
         // Andy chat.start: prompt + agent, optionally title.
         return fields.containsKey("prompt") && fields.containsKey("agent")
@@ -206,20 +225,27 @@ object AgentSpawnPresentation {
         }
     }
 
-    private fun extractKeyValueFields(text: String, into: MutableMap<String, String>) {
-        // AcpToolCallPresentation summarizes as "description=..., prompt=..., subagent_type=explore".
-        // Prompt values often contain commas, so only split on ", <knownKey>=".
-        val keys = listOf(
-            "subagent_type", "subagentType", "agent_type", "description", "prompt",
-            "instructions", "message", "title", "agent", "name", "agentName", "agent_name", "type",
-            "taskId", "task_id", "id",
-        )
-        val alternation = keys.joinToString("|") { Regex.escape(it) }
-        val pattern = Regex(
+    // AcpToolCallPresentation summarizes as "description=..., prompt=..., subagent_type=explore".
+    // Prompt values often contain commas, so only split on ", <knownKey>=". isAgentSpawn (which
+    // runs this against every tool call's summary and detail) is called several times per event
+    // per transcript-row composition, so this must be a compiled-once val: rebuilding a 16-key
+    // case-insensitive alternation via Regex(...) on every call showed up as sustained
+    // Pattern.match / Character.toUpperCase CPU while scrolling an ACP chat.
+    private val keyValueFieldKeys = listOf(
+        "subagent_type", "subagentType", "agent_type", "description", "prompt",
+        "instructions", "message", "title", "agent", "name", "agentName", "agent_name", "type",
+        "taskId", "task_id", "id",
+    )
+    private val keyValueFieldPattern = run {
+        val alternation = keyValueFieldKeys.joinToString("|") { Regex.escape(it) }
+        Regex(
             """\b($alternation)\s*=\s*([\s\S]*?)(?=,\s*(?:$alternation)\s*=|$)""",
             setOf(RegexOption.IGNORE_CASE),
         )
-        pattern.findAll(text).forEach { match ->
+    }
+
+    private fun extractKeyValueFields(text: String, into: MutableMap<String, String>) {
+        keyValueFieldPattern.findAll(text).forEach { match ->
             val key = match.groupValues[1]
             val value = match.groupValues[2].trim().trim('"')
             if (value.isNotBlank() && !into.containsKey(key)) into[key] = value

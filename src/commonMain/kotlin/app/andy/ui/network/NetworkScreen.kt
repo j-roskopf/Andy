@@ -2,12 +2,6 @@ package app.andy.ui.network
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,7 +43,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1009,20 +1002,9 @@ internal fun NetworkScreen(
 
 @Composable
 internal fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition()
-    val pulseScale by if (isGreen) {
-        infiniteTransition.animateFloat(
-            initialValue = 1f,
-            targetValue = 1.6f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(1200, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            )
-        )
-    } else {
-        remember { mutableStateOf(1f) }
-    }
-
+    // Static status pip — no infiniteTransition / phase loop. Continuous animations pin the
+    // Compose Desktop frame clock and force full-window Skiko redraws while idle (e.g. proxy
+    // toolbar indicator up).
     val color = if (isGreen) Green else Red
 
     Box(
@@ -1033,12 +1015,7 @@ internal fun GlowingDot(isGreen: Boolean, modifier: Modifier = Modifier) {
             Box(
                 Modifier
                     .size(10.dp)
-                    .graphicsLayer {
-                        scaleX = pulseScale
-                        scaleY = pulseScale
-                        alpha = (2f - pulseScale).coerceIn(0f, 1f)
-                    }
-                    .background(color.copy(alpha = 0.4f), CircleShape)
+                    .background(color.copy(alpha = 0.35f), CircleShape)
             )
         }
         Box(

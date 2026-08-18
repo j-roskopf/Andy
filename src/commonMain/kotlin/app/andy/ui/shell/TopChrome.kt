@@ -3,6 +3,7 @@ package app.andy.ui.shell
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,12 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +44,6 @@ import app.andy.model.ProjectAction
 import app.andy.ui.actions.actionIconMarker
 import app.andy.ui.components.Button
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.bottomBorder
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
 import app.andy.andy.generated.resources.Res
@@ -54,16 +51,13 @@ import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
-import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
-import app.andy.ui.theme.TextSecondary
 import app.andy.ui.network.GlowingDot
 import org.jetbrains.compose.resources.painterResource
 
@@ -90,6 +84,12 @@ internal fun TopChrome(
     onRunAction: (ActionProject, ProjectAction) -> Unit,
     proxyRunning: Boolean,
     onProxyClick: () -> Unit = {},
+    showLocalServers: Boolean = false,
+    localServersContent: @Composable (
+        expanded: Boolean,
+        onExpandedChange: (Boolean) -> Unit,
+    ) -> Unit = { _, _ -> },
+    localServersFlyout: @Composable (onDismiss: () -> Unit) -> Unit = {},
     rightPaneOpen: Boolean = false,
     bottomPaneOpen: Boolean = false,
     projectPaneOpen: Boolean = true,
@@ -98,138 +98,220 @@ internal fun TopChrome(
     onProjectPaneClick: () -> Unit = {},
     onDismissDockLanding: () -> Unit = {},
     onOpenDockKind: (DockPlacement, DockTabKind) -> Unit = { _, _ -> },
-    onMenuExpandedChange: (Boolean) -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
-    var projectMenuExpanded by remember { mutableStateOf(false) }
-    var actionMenuExpanded by remember { mutableStateOf(false) }
-    var deviceMenuExpanded by remember { mutableStateOf(false) }
-    val anyMenuExpanded =
-        projectMenuExpanded || actionMenuExpanded || deviceMenuExpanded || dockLandingFor != null
-    SideEffect {
-        onMenuExpandedChange(anyMenuExpanded)
+    var flyout by remember { mutableStateOf<ChromeFlyoutKind?>(null) }
+
+    // Dock landing is owned by ShellState (placement icons); keep local flyouts exclusive with it.
+    val effectiveFlyout = if (dockLandingFor != null) ChromeFlyoutKind.DockLanding else flyout
+    // Hold the last open kind so exit animation still has content to measure (when null the
+    // branch would otherwise collapse to empty and jump shut).
+    var renderedFlyout by remember { mutableStateOf<ChromeFlyoutKind?>(null) }
+    if (effectiveFlyout != null) renderedFlyout = effectiveFlyout
+
+    fun openFlyout(kind: ChromeFlyoutKind) {
+        if (dockLandingFor != null) onDismissDockLanding()
+        flyout = if (flyout == kind) null else kind
     }
 
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(AndyLayout.ToolbarHeight)
-            .background(AndyColors.ContentBg)
-            .padding(horizontal = AndySpace.Space5),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(end = AndySpace.Space4)) {
-            Text(
-                destination.label,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 14.sp,
-                lineHeight = 18.sp,
-            )
-            Text(
-                selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
-                    ?: selectedDevice?.let {
-                        "${deviceLabels[it.serial] ?: it.displayName} · API ${it.apiLevel ?: "—"} · ${it.abi ?: "—"}"
-                    }
-                    ?: "No device selected",
-                color = AndyColors.TextTertiary,
-                fontFamily = DisplayFont,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        actions()
-        Box {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (destination == AndyDestination.Actions) {
-                    ProjectPaneToggle(
-                        selected = projectPaneOpen,
-                        onClick = onProjectPaneClick,
-                    )
-                }
-                PanePlacementToggle(
-                    placement = DockPlacement.Bottom,
-                    selected = bottomPaneOpen,
-                    onClick = { onPlacementIconClick(DockPlacement.Bottom) },
-                )
-                PanePlacementToggle(
-                    placement = DockPlacement.Right,
-                    selected = rightPaneOpen,
-                    onClick = { onPlacementIconClick(DockPlacement.Right) },
-                )
-            }
-            DockLandingMenu(
-                expanded = dockLandingFor != null,
-                onDismiss = onDismissDockLanding,
-                onSelect = { kind ->
-                    val placement = dockLandingFor ?: return@DockLandingMenu
-                    onOpenDockKind(placement, kind)
-                },
-            )
-        }
-        Spacer(Modifier.width(AndySpace.Space3))
-        if (destination != AndyDestination.Network && proxyRunning) {
-            ProxyToolbarIndicator(onClick = onProxyClick)
-            Spacer(Modifier.width(AndySpace.Space3))
-        }
-        if (hasActionRunnerControls) {
-            ActionRunnerSelector(
-                config = actionConfig,
-                selectedProjectId = selectedActionProjectId,
-                selectedActionId = selectedActionId,
-                onSelectionChange = onActionSelectionChange,
-                onRunAction = onRunAction,
-                projectExpanded = projectMenuExpanded,
-                onProjectExpandedChange = { projectMenuExpanded = it },
-                actionExpanded = actionMenuExpanded,
-                onActionExpandedChange = { actionMenuExpanded = it },
-            )
-            Spacer(Modifier.width(AndySpace.Space3))
-        }
-        if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
-            OutlinedButton(
-                onClick = { onStopEmulator(selectedDevice) },
-                enabled = stoppingEmulatorSerial != selectedDevice.serial,
-                shape = AndyShape.Interactive,
-                contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+    fun closeFlyout() {
+        flyout = null
+        if (dockLandingFor != null) onDismissDockLanding()
+    }
+
+    Column(Modifier.fillMaxWidth().background(AndyColors.ContentBg)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(AndyLayout.ToolbarHeight)
+                .padding(horizontal = AndySpace.Space5),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                Modifier
+                    .widthIn(min = 72.dp, max = 180.dp)
+                    .padding(end = AndySpace.Space4)
+                    .clickable(onClick = ::closeFlyout),
             ) {
                 Text(
-                    if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop Emulator",
+                    destination.label,
+                    color = TextPrimary,
                     fontFamily = DisplayFont,
-                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
+                        ?: selectedDevice?.let {
+                            "${deviceLabels[it.serial] ?: it.displayName} · API ${it.apiLevel ?: "—"} · ${it.abi ?: "—"}"
+                        }
+                        ?: "No device selected",
+                    color = AndyColors.TextTertiary,
+                    fontFamily = DisplayFont,
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Spacer(Modifier.width(AndySpace.Space3))
+            // Keep controls flush-right when they fit; scroll instead of compressing on narrow widths.
+            Box(
+                Modifier.weight(1f),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    actions()
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (destination == AndyDestination.Actions) {
+                            ProjectPaneToggle(
+                                selected = projectPaneOpen,
+                                onClick = onProjectPaneClick,
+                            )
+                        }
+                        PanePlacementToggle(
+                            placement = DockPlacement.Bottom,
+                            selected = bottomPaneOpen,
+                            onClick = {
+                                flyout = null
+                                onPlacementIconClick(DockPlacement.Bottom)
+                            },
+                        )
+                        PanePlacementToggle(
+                            placement = DockPlacement.Right,
+                            selected = rightPaneOpen,
+                            onClick = {
+                                flyout = null
+                                onPlacementIconClick(DockPlacement.Right)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.width(AndySpace.Space3))
+                    if (showLocalServers) {
+                        localServersContent(
+                            effectiveFlyout == ChromeFlyoutKind.LocalServers,
+                        ) { expanded ->
+                            if (expanded) openFlyout(ChromeFlyoutKind.LocalServers)
+                            else if (flyout == ChromeFlyoutKind.LocalServers) flyout = null
+                        }
+                        Spacer(Modifier.width(AndySpace.Space3))
+                    }
+                    if (destination != AndyDestination.Network && proxyRunning) {
+                        ProxyToolbarIndicator(onClick = onProxyClick)
+                        Spacer(Modifier.width(AndySpace.Space3))
+                    }
+                    if (hasActionRunnerControls) {
+                        ActionRunnerSelector(
+                            config = actionConfig,
+                            selectedProjectId = selectedActionProjectId,
+                            selectedActionId = selectedActionId,
+                            onSelectionChange = onActionSelectionChange,
+                            onRunAction = onRunAction,
+                            onProjectClick = { openFlyout(ChromeFlyoutKind.Project) },
+                            onActionClick = { openFlyout(ChromeFlyoutKind.Action) },
+                        )
+                        Spacer(Modifier.width(AndySpace.Space3))
+                    }
+                    if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
+                        OutlinedButton(
+                            onClick = { onStopEmulator(selectedDevice) },
+                            enabled = stoppingEmulatorSerial != selectedDevice.serial,
+                            shape = AndyShape.Interactive,
+                            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+                        ) {
+                            Text(
+                                if (stoppingEmulatorSerial == selectedDevice.serial) "Stopping" else "Stop Emulator",
+                                fontFamily = DisplayFont,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Spacer(Modifier.width(AndySpace.Space3))
+                    }
+                    Button(
+                        onClick = onRefresh,
+                        colors = secondaryButtonColors(),
+                        shape = AndyShape.Interactive,
+                        contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+                    ) {
+                        Text("Refresh", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                    Spacer(Modifier.width(AndySpace.Space3))
+                    DevicePickerButton(
+                        selectedDevice = selectedDevice,
+                        selectedIosTarget = selectedIosTarget,
+                        deviceLabels = deviceLabels,
+                        onClick = { openFlyout(ChromeFlyoutKind.Device) },
+                    )
+                }
+            }
         }
-        Button(
-            onClick = onRefresh,
-            colors = secondaryButtonColors(),
-            shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+
+        ChromeFlyout(
+            visible = effectiveFlyout != null,
+            contentAlignment = if (renderedFlyout == ChromeFlyoutKind.DockLanding) {
+                Alignment.End
+            } else {
+                Alignment.Start
+            },
         ) {
-            Text("Refresh", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            when (renderedFlyout) {
+                ChromeFlyoutKind.Project -> ProjectFlyoutContent(
+                    config = actionConfig,
+                    onSelect = { item ->
+                        onActionSelectionChange(item.id, item.actions.firstOrNull()?.id)
+                        closeFlyout()
+                    },
+                )
+                ChromeFlyoutKind.Action -> {
+                    val project = actionConfig.projects.firstOrNull { it.id == selectedActionProjectId }
+                        ?: actionConfig.projects.firstOrNull()
+                    ActionFlyoutContent(
+                        actions = project?.actions.orEmpty(),
+                        onSelect = { item ->
+                            val projectId = project?.id
+                            if (projectId != null) onActionSelectionChange(projectId, item.id)
+                            closeFlyout()
+                        },
+                    )
+                }
+                ChromeFlyoutKind.Device -> DeviceFlyoutContent(
+                    devices = devices,
+                    iosTargets = iosTargets,
+                    deviceLabels = deviceLabels,
+                    showPopOut = showDevicePopOut,
+                    onSelect = {
+                        onSelectDevice(it)
+                        closeFlyout()
+                    },
+                    onSelectIos = {
+                        onSelectIosTarget(it)
+                        closeFlyout()
+                    },
+                    onPopOut = { id, name ->
+                        closeFlyout()
+                        onPopOutDevice(id, name)
+                    },
+                )
+                ChromeFlyoutKind.LocalServers -> localServersFlyout(::closeFlyout)
+                ChromeFlyoutKind.DockLanding -> DockLandingPanel(
+                    onSelect = { kind ->
+                        val placement = dockLandingFor ?: return@DockLandingPanel
+                        onOpenDockKind(placement, kind)
+                        closeFlyout()
+                    },
+                )
+                null -> Unit
+            }
         }
-        Spacer(Modifier.width(AndySpace.Space3))
-        DevicePicker(
-            devices = devices,
-            selectedDevice = selectedDevice,
-            iosTargets = iosTargets,
-            selectedIosTarget = selectedIosTarget,
-            deviceLabels = deviceLabels,
-            expanded = deviceMenuExpanded,
-            onExpandedChange = { deviceMenuExpanded = it },
-            onSelect = onSelectDevice,
-            onSelectIos = onSelectIosTarget,
-            showPopOut = showDevicePopOut,
-            onPopOut = onPopOutDevice,
-        )
     }
 }
 
@@ -262,10 +344,8 @@ private fun ActionRunnerSelector(
     selectedActionId: String?,
     onSelectionChange: (projectId: String, actionId: String?) -> Unit,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
-    projectExpanded: Boolean,
-    onProjectExpandedChange: (Boolean) -> Unit,
-    actionExpanded: Boolean,
-    onActionExpandedChange: (Boolean) -> Unit,
+    onProjectClick: () -> Unit,
+    onActionClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val project = remember(config.projects, selectedProjectId) {
@@ -279,67 +359,43 @@ private fun ActionRunnerSelector(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        Box {
-            Button(
-                onClick = { onProjectExpandedChange(true) },
-                colors = secondaryButtonColors(),
-                shape = AndyShape.Interactive,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
-                modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
-            ) {
-                Text("Prj", color = Rust, fontFamily = DisplayFont, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.width(AndySpace.Space2))
-                Text(project?.name ?: "Project", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            DropdownMenu(
-                expanded = projectExpanded,
-                onDismissRequest = { onProjectExpandedChange(false) },
-                containerColor = AndyColors.SurfaceRaised,
-                shape = RoundedCornerShape(AndyRadius.Menu),
-            ) {
-                config.projects.forEach { item ->
-                    DropdownMenuItem(
-                        text = { Text(item.name, color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        onClick = {
-                            val nextActionId = item.actions.firstOrNull()?.id
-                            onSelectionChange(item.id, nextActionId)
-                            onProjectExpandedChange(false)
-                        },
-                    )
-                }
-            }
+        Button(
+            onClick = onProjectClick,
+            colors = secondaryButtonColors(),
+            shape = AndyShape.Interactive,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
+            modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
+        ) {
+            Text("Prj", color = Rust, fontFamily = DisplayFont, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(AndySpace.Space2))
+            Text(
+                project?.name ?: "Project",
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
-        Box {
-            Button(
-                onClick = { onActionExpandedChange(true) },
-                enabled = project?.actions?.isNotEmpty() == true,
-                colors = secondaryButtonColors(),
-                shape = AndyShape.Interactive,
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
-                modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
-            ) {
-                Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
-                Spacer(Modifier.width(AndySpace.Space2))
-                Text(action?.name ?: "No actions", color = TextPrimary, fontFamily = DisplayFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            DropdownMenu(
-                expanded = actionExpanded,
-                onDismissRequest = { onActionExpandedChange(false) },
-                containerColor = AndyColors.SurfaceRaised,
-                shape = RoundedCornerShape(AndyRadius.Menu),
-            ) {
-                project?.actions.orEmpty().forEach { item ->
-                    DropdownMenuItem(
-                        text = { Text("${actionIconMarker(item.icon)}  ${item.name}", color = TextPrimary, fontFamily = DisplayFont, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        onClick = {
-                            val projectId = project?.id
-                            if (projectId != null) onSelectionChange(projectId, item.id)
-                            onActionExpandedChange(false)
-                        },
-                    )
-                }
-            }
+        Button(
+            onClick = onActionClick,
+            enabled = project?.actions?.isNotEmpty() == true,
+            colors = secondaryButtonColors(),
+            shape = AndyShape.Interactive,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
+            modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
+        ) {
+            Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+            Spacer(Modifier.width(AndySpace.Space2))
+            Text(
+                action?.name ?: "No actions",
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
 
         Button(
@@ -362,17 +418,78 @@ private fun ActionRunnerSelector(
 }
 
 @Composable
-private fun DevicePicker(
-    devices: List<AndroidDevice>,
+private fun ProjectFlyoutContent(
+    config: ActionsConfig,
+    onSelect: (ActionProject) -> Unit,
+) {
+    if (config.projects.isEmpty()) {
+        ChromeFlyoutEmpty("No projects")
+        return
+    }
+    config.projects.forEach { item ->
+        ChromeFlyoutRow(
+            label = item.name,
+            onClick = { onSelect(item) },
+        )
+    }
+}
+
+@Composable
+private fun ActionFlyoutContent(
+    actions: List<ProjectAction>,
+    onSelect: (ProjectAction) -> Unit,
+) {
+    if (actions.isEmpty()) {
+        ChromeFlyoutEmpty("No actions")
+        return
+    }
+    actions.forEach { item ->
+        ChromeFlyoutRow(
+            label = item.name,
+            onClick = { onSelect(item) },
+            leading = {
+                Text(actionIconMarker(item.icon), color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+            },
+        )
+    }
+}
+
+@Composable
+private fun DevicePickerButton(
     selectedDevice: AndroidDevice?,
-    iosTargets: List<IosTarget>,
     selectedIosTarget: IosTarget?,
     deviceLabels: Map<String, String> = emptyMap(),
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -> Unit,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        colors = secondaryButtonColors(),
+        shape = AndyShape.Interactive,
+        contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+    ) {
+        Text("•", color = Green, fontSize = 16.sp)
+        Spacer(Modifier.width(AndySpace.Space2))
+        Text(
+            selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
+                ?: selectedDevice?.let { deviceLabels[it.serial] ?: it.displayName }
+                ?: "No device",
+            color = TextPrimary,
+            fontFamily = DisplayFont,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun DeviceFlyoutContent(
+    devices: List<AndroidDevice>,
+    iosTargets: List<IosTarget>,
+    deviceLabels: Map<String, String> = emptyMap(),
+    showPopOut: Boolean = false,
     onSelect: (String) -> Unit,
     onSelectIos: (String) -> Unit,
-    showPopOut: Boolean = false,
     onPopOut: (String, String) -> Unit = { _, _ -> },
 ) {
     val activeDevices = remember(devices) {
@@ -381,128 +498,72 @@ private fun DevicePicker(
     val activeIosTargets = remember(iosTargets) {
         iosTargets.filter { it.isLiveReady }
     }
-    Box {
-        Button(
-            onClick = { onExpandedChange(true) },
-            colors = secondaryButtonColors(),
-            shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
-        ) {
-            Text("•", color = Green, fontSize = 16.sp)
-            Spacer(Modifier.width(AndySpace.Space2))
-            Text(
-                selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
-                    ?: selectedDevice?.let { deviceLabels[it.serial] ?: it.displayName }
-                    ?: "No device",
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+    if (activeDevices.isEmpty() && activeIosTargets.isEmpty()) {
+        ChromeFlyoutEmpty("No devices online")
+        return
+    }
+    if (activeDevices.isNotEmpty()) {
+        ChromeFlyoutSectionLabel("Android")
+        activeDevices.forEach { device ->
+            val title = deviceLabels[device.serial] ?: device.displayName
+            ChromeFlyoutRow(
+                label = title,
+                supporting = deviceLabels[device.serial]?.let { device.displayName },
+                onClick = { onSelect(device.serial) },
+                trailing = if (showPopOut) {
+                    {
+                        DevicePopOutButton {
+                            onPopOut(device.serial, device.displayName)
+                        }
+                    }
+                } else {
+                    null
+                },
             )
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { onExpandedChange(false) },
-            containerColor = AndyColors.SurfaceRaised,
-            shape = RoundedCornerShape(AndyRadius.Menu),
-        ) {
-            if (activeDevices.isNotEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("Android", color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp) },
-                    onClick = {},
-                    enabled = false,
-                )
-                activeDevices.forEach { device ->
-                    DropdownMenuItem(
-                        text = {
-                            DeviceMenuRow(
-                                title = deviceLabels[device.serial] ?: device.displayName,
-                                subtitle = deviceLabels[device.serial]?.let { device.displayName },
-                                showPopOut = showPopOut,
-                                onPopOut = {
-                                    onExpandedChange(false)
-                                    onPopOut(device.serial, device.displayName)
-                                },
-                            )
-                        },
-                        onClick = {
-                            onSelect(device.serial)
-                            onExpandedChange(false)
-                        },
-                    )
-                }
+    }
+    if (activeIosTargets.isNotEmpty()) {
+        ChromeFlyoutSectionLabel("iOS")
+        activeIosTargets.forEach { target ->
+            val subtitle = when (target.kind) {
+                IosTargetKind.Physical -> "USB"
+                IosTargetKind.Simulator -> "Booted"
             }
-            if (activeIosTargets.isNotEmpty()) {
-                DropdownMenuItem(
-                    text = { Text("iOS", color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp) },
-                    onClick = {},
-                    enabled = false,
-                )
-                activeIosTargets.forEach { target ->
-                    val subtitle = when (target.kind) {
-                        IosTargetKind.Physical -> "USB"
-                        IosTargetKind.Simulator -> "Booted"
+            ChromeFlyoutRow(
+                label = deviceLabels[target.udid] ?: target.displayName,
+                supporting = subtitle,
+                onClick = { onSelectIos(target.udid) },
+                trailing = if (showPopOut) {
+                    {
+                        DevicePopOutButton {
+                            onPopOut(target.udid, target.displayName)
+                        }
                     }
-                    DropdownMenuItem(
-                        text = {
-                            DeviceMenuRow(
-                                title = deviceLabels[target.udid] ?: target.displayName,
-                                subtitle = subtitle,
-                                showPopOut = showPopOut,
-                                onPopOut = {
-                                    onExpandedChange(false)
-                                    onPopOut(target.udid, target.displayName)
-                                },
-                            )
-                        },
-                        onClick = {
-                            onSelectIos(target.udid)
-                            onExpandedChange(false)
-                        },
-                    )
-                }
-            }
+                } else {
+                    null
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun DeviceMenuRow(
-    title: String,
-    subtitle: String?,
-    showPopOut: Boolean,
-    onPopOut: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+private fun DevicePopOutButton(onPopOut: () -> Unit) {
+    Box(
+        Modifier
+            .size(AndyLayout.ToolbarButtonSize)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onPopOut,
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, color = TextPrimary, fontFamily = DisplayFont)
-            if (subtitle != null) {
-                Text(subtitle, color = TextSecondary, fontFamily = DisplayFont, fontSize = 11.sp)
-            }
-        }
-        if (showPopOut) {
-            Box(
-                Modifier
-                    .size(AndyLayout.ToolbarButtonSize)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onPopOut,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    painter = painterResource(Res.drawable.hardware_pop_out),
-                    contentDescription = "Pop out mirror",
-                    modifier = Modifier.size(AndyLayout.IconMd),
-                    colorFilter = ColorFilter.tint(Cyan),
-                )
-            }
-        }
+        Image(
+            painter = painterResource(Res.drawable.hardware_pop_out),
+            contentDescription = "Pop out mirror",
+            modifier = Modifier.size(AndyLayout.IconMd),
+            colorFilter = ColorFilter.tint(Cyan),
+        )
     }
 }

@@ -181,11 +181,9 @@ internal fun UnreadDot(modifier: Modifier = Modifier) {
 /**
  * Sidebar / session-row activity marker.
  *
- * Was static (`animate = false`) because a Compose recomposition here forces
- * a full-window Skiko redraw no matter how coarse the tick is, which read as
- * terminal flicker while a chat was working. Re-enabled at the orb's coarse
- * ~12fps wall-clock cadence; revert to `animate = false` if that flicker
- * turns out to be noticeable in practice.
+ * Animated via the shared [app.andy.ui.components.ThinkingOrbClock] rather than a
+ * per-row phase timer — see ThinkingOrb for why a per-instance timer forced
+ * full-window Skiko redraws whenever multiple sessions were working at once.
  */
 @Composable
 internal fun ProjectActivityIndicator(size: Dp = 16.dp) {

@@ -11,8 +11,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -140,12 +138,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
-internal data class AgentStarterPrompt(
-    val label: String,
-    val description: String,
-    val prompt: String,
-)
-
 @Composable
 internal fun AgentTaskComposerPane(
     services: AndyServices,
@@ -157,7 +149,6 @@ internal fun AgentTaskComposerPane(
     workspaceState: WorkspaceState = WorkspaceState(),
     /** False while this pane is retained but not visible (e.g. under [RetainedDestination]). */
     dictationActive: Boolean = true,
-    starterPrompts: List<AgentStarterPrompt> = emptyList(),
     initialPrompt: String? = null,
     wrapComposerControls: Boolean = false,
 ) {
@@ -199,49 +190,17 @@ internal fun AgentTaskComposerPane(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (projectContext != null && starterPrompts.isNotEmpty()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
-                    ) {
-                        AgentMark(form.state.agent)
-                        Text(
-                            "Start with a direction",
-                            color = TextPrimary,
-                            fontFamily = DisplayFont,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 19.sp,
-                        )
-                    }
-                    Spacer(Modifier.height(AndySpace.Space4))
-                    Column(
-                        Modifier.widthIn(max = 540.dp),
-                        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                    ) {
-                        starterPrompts.forEach { starter ->
-                            AgentStarterPromptRow(
-                                starter = starter,
-                                onSelect = {
-                                    form.state.promptValue = TextFieldValue(
-                                        starter.prompt,
-                                        TextRange(starter.prompt.length),
-                                    )
-                                },
-                            )
-                        }
-                    }
-                } else {
-                    AgentMark(form.state.agent)
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        projectContext?.let { "What should we build in ${it.name}?" } ?: "What can I help you with?",
-                        color = TextPrimary,
-                        fontFamily = DisplayFont,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 18.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                AgentMark(form.state.agent)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    projectContext?.let { "What do you want to work on in ${it.name}?" }
+                        ?: "What can I help you with?",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
         AgentCliIssueNotices(
@@ -261,52 +220,6 @@ internal fun AgentTaskComposerPane(
                 onSubmit(form.buildDraft())
                 form.clearPrompt()
             },
-        )
-    }
-}
-
-@Composable
-private fun AgentStarterPromptRow(
-    starter: AgentStarterPrompt,
-    onSelect: () -> Unit,
-) {
-    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(AndyRadius.Control))
-            .background(if (hovered) AndyColors.SurfaceHover else AndyColors.SurfaceRaised.copy(alpha = 0.42f))
-            .hoverable(interactionSource)
-            .clickable(onClick = onSelect)
-            .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
-    ) {
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                starter.label,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-            )
-            Text(
-                starter.description,
-                color = TextSecondary,
-                fontFamily = DisplayFont,
-                fontSize = 11.sp,
-                maxLines = 1,
-            )
-        }
-        Text(
-            "→",
-            color = Cyan.copy(alpha = if (hovered) 1f else 0.72f),
-            fontFamily = MonoFont,
-            fontSize = 14.sp,
         )
     }
 }

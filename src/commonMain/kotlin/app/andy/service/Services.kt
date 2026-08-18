@@ -65,6 +65,9 @@ interface AvdService {
     suspend fun renameSnapshot(avdName: String, oldName: String, newName: String): CommandResult
 }
 
+/** Fallback for engines that do not track surface visibility; they always present. */
+private val AlwaysPresenting: StateFlow<Boolean> = MutableStateFlow(true)
+
 interface MirrorEngine {
     /**
      * The presentation session. This is deliberately low-frequency state: native and web
@@ -72,6 +75,23 @@ interface MirrorEngine {
      * and telemetry.
      */
     val session: StateFlow<MirrorSession?>
+
+    /**
+     * True while at least one Live surface is on screen. Sessions stay warm when this is false,
+     * so callers that only matter to a viewer — bug capture's rolling window, CPU frame
+     * conversion, presentation telemetry — can idle instead of burning CPU on pixels and logs
+     * nobody can see.
+     */
+    val presenting: StateFlow<Boolean> get() = AlwaysPresenting
+
+    /**
+     * Marks a Live surface as on screen; must be balanced with [releasePresentation]. Several
+     * surfaces can present the same session at once (Live plus a pop-out), so the engine counts
+     * holders rather than tracking a single boolean.
+     */
+    fun acquirePresentation() = Unit
+
+    fun releasePresentation() = Unit
 
     /**
      * Legacy CPU frames. These remain available for screenshots, bug capture and deterministic
@@ -405,6 +425,8 @@ interface ActionRunService {
     fun run(project: ActionProject, action: ProjectAction): String
     fun stop(runId: String)
     fun clear(runId: String)
+    /** Best-effort root pid for a project terminal PTY (for local-server attribution). */
+    fun sessionRootPid(runId: String): Long? = null
 }
 
 /** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
@@ -471,6 +493,11 @@ interface AgentRunService {
     fun isTerminalLive(taskId: String): Boolean = false
     /** True while the task's selected transport lane owns a live session. */
     fun isLaneLive(taskId: String): Boolean = isTerminalLive(taskId)
+    /**
+     * Best-effort root pid for the chat's interactive session (DirectPty or tmux pane).
+     * Used to attribute localhost listeners to the chat that spawned them.
+     */
+    fun sessionRootPid(taskId: String): Long? = null
     /**
      * Chats this app run still hosts an interactive session for. Sessions that only
      * survive in tmux from an earlier run are deliberately absent: reopening Andy puts
@@ -936,6 +963,7 @@ data class AndyServices(
     val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
     val orchestrationPreferences: OrchestrationPreferencesService = UnavailableOrchestrationPreferencesService,
+    val localServers: LocalServerService = UnavailableLocalServerService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

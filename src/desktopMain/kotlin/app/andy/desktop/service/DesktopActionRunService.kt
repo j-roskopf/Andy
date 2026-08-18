@@ -183,6 +183,9 @@ class DesktopActionRunService(
         }
     }
 
+    override fun sessionRootPid(runId: String): Long? =
+        handles[runId]?.session?.pid ?: handles[runId]?.rustTerminal?.pid
+
     override fun clear(runId: String) {
         val handle = synchronized(lifecycleLock) {
             val handle = handles.remove(runId)

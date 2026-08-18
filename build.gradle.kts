@@ -169,6 +169,10 @@ kotlin {
                 implementation("io.grpc:grpc-netty-shaded:1.69.0")
                 implementation("io.grpc:grpc-stub:1.69.0")
 
+                // Browser pane uses a packaged WKWebView JNI overlay on macOS (see
+                // native/andy-browser). In-process JCEF/JOGL crashes AppKit main-thread
+                // asserts when composed with Compose Desktop.
+
                 // Add the base JavaCV library
                 implementation("org.bytedeco:javacv:1.5.11")
 
@@ -378,6 +382,8 @@ tasks.named<Copy>("desktopProcessResources") {
         "buildAndyNotificationsJniMacX64",
         "buildAndyVoiceJniMacArm64",
         "buildAndyVoiceJniMacX64",
+        "buildAndyBrowserJniMacArm64",
+        "buildAndyBrowserJniMacX64",
         buildAndyTerminalEngineNative,
         verifyScrcpyServer,
     )
@@ -388,6 +394,10 @@ tasks.named<Copy>("desktopProcessResources") {
     from(layout.buildDirectory.dir("native/andy-notifications")) {
         include("**/andy-notifications-jni.dylib")
         into("andy-notifications")
+    }
+    from(layout.buildDirectory.dir("native/andy-browser")) {
+        include("**/andy-browser-jni.dylib")
+        into("andy-browser")
     }
     from(layout.buildDirectory.dir("native/andy-voice")) {
         include("**/andy-voice-jni.dylib")
@@ -518,6 +528,35 @@ val buildAndyNotificationsJniMacArm64 by tasks.registering(Exec::class) {
     )
 }
 
+val buildAndyBrowserJniMacArm64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS arm64 WKWebView browser overlay bridge."
+    val source = layout.projectDirectory.file("native/andy-browser/jni/andy_browser_jni.m")
+    val output = layout.buildDirectory.file("native/andy-browser/macos-arm64/andy-browser-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "arm64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "WebKit",
+        "-framework", "QuartzCore",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
 val buildAndyVoiceJniMacArm64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS arm64 AVFoundation microphone TCC bridge."
@@ -570,6 +609,35 @@ val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
         source.asFile.absolutePath,
         "-framework", "AppKit",
         "-framework", "ApplicationServices",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+val buildAndyBrowserJniMacX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS x64 WKWebView browser overlay bridge."
+    val source = layout.projectDirectory.file("native/andy-browser/jni/andy_browser_jni.m")
+    val output = layout.buildDirectory.file("native/andy-browser/macos-x86_64/andy-browser-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("x86_64", "amd64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "x86_64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "WebKit",
+        "-framework", "QuartzCore",
         "-o", output.get().asFile.absolutePath,
     )
 }
@@ -631,6 +699,7 @@ val andyDesktopTestParallelForks =
 tasks.withType<Test>().configureEach {
     maxParallelForks = 1
     systemProperty("java.awt.headless", "false")
+    jvmArgs("--add-exports=jdk.unsupported.desktop/jdk.swing.interop=ALL-UNNAMED")
     // Forward -Dandy.bench* / -Dandy.terminal.* into the test JVM for pipeline benchmarks.
     listOf(
         "andy.bench",
@@ -703,12 +772,17 @@ compose.desktop {
         // On macOS, the JDK's posix_spawn helper can fail with a JDK version
         // mismatch. Use the direct fork path so Andy can still launch agent CLIs.
         jvmArgs += "-Djdk.lang.Process.launchMechanism=FORK"
+        jvmArgs += "--add-opens=java.base/java.lang=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.awt=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.java2d=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/java.awt.peer=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.lwawt=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
         jvmArgs += "--add-opens=java.desktop/sun.awt.X11=ALL-UNNAMED"
+        // MacAwtWindow.nsWindowNumber peers into sun.lwawt for WKWebView/Metal overlays.
+        jvmArgs += "--add-exports=java.base/java.lang=ALL-UNNAMED"
+        jvmArgs += "--add-exports=java.desktop/sun.awt=ALL-UNNAMED"
+        jvmArgs += "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED"
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

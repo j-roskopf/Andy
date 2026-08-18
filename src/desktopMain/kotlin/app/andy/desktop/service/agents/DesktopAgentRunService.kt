@@ -361,6 +361,11 @@ class DesktopAgentRunService(
     /** True while the embedded PTY or underlying tmux session is still running for [taskId]. */
     override fun isTerminalLive(taskId: String): Boolean = terminals.isAlive(taskId)
 
+    override fun sessionRootPid(taskId: String): Long? {
+        terminals.get(taskId)?.session?.pid?.let { return it }
+        return runCatching { TmuxAndy.panePid(taskId) }.getOrNull()
+    }
+
     override fun isLaneLive(taskId: String): Boolean = currentTask(taskId)?.let { task ->
         if (task.lane == AgentLaneKind.Acp) acpManager.isAlive(taskId) else terminals.isAlive(taskId)
     } ?: false
@@ -2478,11 +2483,16 @@ class DesktopAgentRunService(
     }
 
     private suspend fun runAcpFollowUp(taskId: String, prompt: String, imagePaths: List<String>): Boolean {
-        acpSuppressProviderReplay.add(taskId)
-        acpProviderReplayScratch.remove(taskId)
+        // Only a session Andy has to reopen can echo prior turns. Filtering a live stream buys
+        // nothing and risks discarding real text that happens to open like an earlier turn.
+        val reopeningSession = !acpManager.isAlive(taskId)
+        if (reopeningSession) {
+            acpSuppressProviderReplay.add(taskId)
+            acpProviderReplayScratch.remove(taskId)
+        }
         try {
             val task = currentTask(taskId) ?: return false
-            if (!acpManager.isAlive(taskId)) {
+            if (reopeningSession) {
                 val projectEnv = task.projectId?.let { projectId ->
                     runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
                 }.orEmpty()

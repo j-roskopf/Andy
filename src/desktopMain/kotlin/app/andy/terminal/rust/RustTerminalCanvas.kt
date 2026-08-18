@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,9 @@ import kotlin.math.min
  * Compose/Skia painter for a [RustTerminalRenderable] (live PTY or history replay).
  * Andy owns redraw cadence; this composable paints published frames and owns
  * keyboard / mouse / selection / local scrollback.
+ *
+ * [frameTick] is collected only in [RustTerminalPaintSurface] so PTY/scroll paints
+ * (up to ~60fps) do not recompose pointer/focus modifiers on every tick.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -69,8 +73,10 @@ fun RustTerminalCanvas(
      * letterboxes the rest. Null keeps the historical fill-the-pane behavior (plain shells).
      */
     maxCols: Int? = null,
+    /** Test hook: incremented when the input/chrome layer recomposes (not the paint surface). */
+    onInputLayerRecomposed: (() -> Unit)? = null,
 ) {
-    val tick by backend.frameTick.collectAsState()
+    SideEffect { onInputLayerRecomposed?.invoke() }
     val frame = remember { RustTerminalFrame() }
     val focusRequester = remember { FocusRequester() }
     val panelBg = Color(appearance.panelBackgroundArgb())
@@ -118,10 +124,6 @@ fun RustTerminalCanvas(
 
     LaunchedEffect(appearance) {
         backend.updateAppearance(appearance)
-    }
-
-    LaunchedEffect(tick) {
-        backend.copyPaintFrame(frame)
     }
 
     LaunchedEffect(viewportPx, cellWidth, cellHeight, maxCols) {
@@ -274,38 +276,80 @@ fun RustTerminalCanvas(
                 }
             },
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            if (tick >= 0L) {
-                backend.copyPaintFrame(frame)
-            }
-            paintFrame(
-                frame = frame,
-                cellWidth = cellWidth,
-                cellHeight = cellHeight,
-                font = font,
-                boldFont = boldFont,
-                fallbackFonts = fallbackFonts,
-                fontSizePx = fontSizePx,
-                textPaint = textPaint,
-                fallbackBg = panelBg,
-                cursorColor = cursorColor,
-                selection = selection,
-                selectionBg = selectionBg,
-                selectionFg = selectionFg,
+        RustTerminalPaintSurface(
+            backend = backend,
+            frame = frame,
+            cellWidth = cellWidth,
+            cellHeight = cellHeight,
+            font = font,
+            boldFont = boldFont,
+            fallbackFonts = fallbackFonts,
+            fontSizePx = fontSizePx,
+            textPaint = textPaint,
+            panelBg = panelBg,
+            cursorColor = cursorColor,
+            selection = selection,
+            selectionBg = selectionBg,
+            selectionFg = selectionFg,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+/**
+ * Owns [RustTerminalRenderable.frameTick] observation so paint invalidation stays off the
+ * input/chrome layer. Mutates [frame] in place from the published paint buffer.
+ */
+@Composable
+internal fun RustTerminalPaintSurface(
+    backend: RustTerminalRenderable,
+    frame: RustTerminalFrame,
+    cellWidth: Float,
+    cellHeight: Float,
+    font: Font,
+    boldFont: Font,
+    fallbackFonts: MutableMap<Int, Font?>,
+    fontSizePx: Float,
+    textPaint: Paint,
+    panelBg: Color,
+    cursorColor: Color,
+    selection: CellRange?,
+    selectionBg: Color,
+    selectionFg: Color,
+    modifier: Modifier = Modifier,
+) {
+    val tick by backend.frameTick.collectAsState()
+    Canvas(modifier) {
+        if (tick >= 0L) {
+            backend.copyPaintFrame(frame)
+        }
+        paintFrame(
+            frame = frame,
+            cellWidth = cellWidth,
+            cellHeight = cellHeight,
+            font = font,
+            boldFont = boldFont,
+            fallbackFonts = fallbackFonts,
+            fontSizePx = fontSizePx,
+            textPaint = textPaint,
+            fallbackBg = panelBg,
+            cursorColor = cursorColor,
+            selection = selection,
+            selectionBg = selectionBg,
+            selectionFg = selectionFg,
+        )
+        // Tiny scrollback affordance when not at the live edge.
+        if (frame.displayOffset > 0 && frame.historySize > 0) {
+            val barH = size.height * (frame.rows.toFloat() / (frame.rows + frame.historySize).toFloat())
+                .coerceIn(0.08f, 1f)
+            val travel = (size.height - barH).coerceAtLeast(0f)
+            val top = travel * (1f - frame.displayOffset.toFloat() / frame.historySize.toFloat())
+                .coerceIn(0f, 1f)
+            drawRect(
+                color = Color.White.copy(alpha = 0.18f),
+                topLeft = Offset(size.width - 3f, top),
+                size = Size(2.5f, barH),
             )
-            // Tiny scrollback affordance when not at the live edge.
-            if (frame.displayOffset > 0 && frame.historySize > 0) {
-                val barH = size.height * (frame.rows.toFloat() / (frame.rows + frame.historySize).toFloat())
-                    .coerceIn(0.08f, 1f)
-                val travel = (size.height - barH).coerceAtLeast(0f)
-                val top = travel * (1f - frame.displayOffset.toFloat() / frame.historySize.toFloat())
-                    .coerceIn(0f, 1f)
-                drawRect(
-                    color = Color.White.copy(alpha = 0.18f),
-                    topLeft = Offset(size.width - 3f, top),
-                    size = Size(2.5f, barH),
-                )
-            }
         }
     }
 }

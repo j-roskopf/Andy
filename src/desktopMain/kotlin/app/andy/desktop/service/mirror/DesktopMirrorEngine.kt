@@ -33,6 +33,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +58,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.random.Random
@@ -76,6 +78,8 @@ private const val SCRCPY_SOCKET_CONNECT_ATTEMPTS = 100
 private const val SCRCPY_SOCKET_CONNECT_RETRY_MILLIS = 100L
 /** Keep scrcpy warm across AndyShell destination switches (Live ↔ Design ↔ Accessibility). */
 private const val MIRROR_RELEASE_GRACE_MILLIS = 500L
+/** ~4 fps of CPU frames while no surface presents, matching bug capture's sparse ARGB sampler. */
+private const val PAUSED_CPU_FRAME_INTERVAL_NANOS = 250_000_000L
 
 internal data class EmulatorDisplaySize(val width: Int, val height: Int)
 internal data class EmulatorTouchPoint(val x: Int, val y: Int)
@@ -272,6 +276,47 @@ class DesktopMirrorEngine(
     private val controlLock = Any()
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pendingRelease: Job? = null
+
+    private val presentationHolders = AtomicInteger(0)
+    private val presentingState = MutableStateFlow(true)
+    override val presenting: StateFlow<Boolean> = presentingState
+    @Volatile private var pendingPause: Job? = null
+
+    /**
+     * Starts optimistic: a surface that never claims presentation (tests, unported hosts) must
+     * keep painting, so only a real last-holder release can pause the pipeline.
+     */
+    override fun acquirePresentation() {
+        pendingPause?.cancel()
+        pendingPause = null
+        if (presentationHolders.getAndIncrement() > 0) return
+        presentingState.value = true
+        // scrcpy and the decoder stayed warm, so the current screen is one repaint away.
+        val pipeline = activeGpuPipeline()
+        if (pipeline != null) {
+            pipeline.refreshAllGeometry()
+            pipeline.repaintAll()
+        } else if (NativeMirrorJni.isMetalInlineOverlayOpen()) {
+            NativeMirrorJni.setInlineOverlayVisible(true)
+            NativeMirrorJni.repaintLatestFrame()
+        }
+    }
+
+    override fun releasePresentation() {
+        if (presentationHolders.getAndUpdate { (it - 1).coerceAtLeast(0) } != 1) return
+        pendingPause?.cancel()
+        // Live → Design hands presentation between surfaces, and the old one can dispose before
+        // the new one composes. Pausing on that gap would blank Metal and reset bug capture's
+        // rolling window on every navigation, so wait out the handoff first.
+        pendingPause = engineScope.launch {
+            delay(MIRROR_RELEASE_GRACE_MILLIS)
+            if (presentationHolders.get() > 0) return@launch
+            presentingState.value = false
+            // Keep VideoToolbox fed — dropping access units would stall until the next key frame —
+            // but stop putting pixels on a screen no surface owns any more.
+            if (NativeMirrorJni.isMetalInlineOverlayOpen()) NativeMirrorJni.setInlineOverlayVisible(false)
+        }
+    }
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
         val handingOff = pendingRelease?.isActive == true
@@ -1238,6 +1283,19 @@ class DesktopMirrorEngine(
 
     private var currentSwsContext: SwsContext? = null
     private var currentDecodedFrameBuffer: DecodedFrameBuffer? = null
+    private var lastPausedCpuFrameNanos: Long = 0L
+
+    /**
+     * A paused stream still owes bug capture a trickle of ARGB. Legacy CPU sessions have no native
+     * decoder to sample from, so the sparse safety net would otherwise go stale during a recording
+     * that outlives its Live surface.
+     */
+    private fun pausedCpuFrameDue(): Boolean {
+        val now = System.nanoTime()
+        if (now - lastPausedCpuFrameNanos < PAUSED_CPU_FRAME_INTERVAL_NANOS) return false
+        lastPausedCpuFrameNanos = now
+        return true
+    }
 
     private fun receiveDecodedFrames(
         codecContext: AVCodecContext,
@@ -1251,6 +1309,13 @@ class DesktopMirrorEngine(
         while (true) {
             val receiveResult = avcodec.avcodec_receive_frame(codecContext, frame)
             if (receiveResult < 0) break
+            if (!presentingState.value && !pausedCpuFrameDue()) {
+                // Draining keeps the decoder's reference frames valid for an instant resume; the
+                // scale plus BGRA→ARGB copy below is the expensive part and no surface would read
+                // it.
+                avutil.av_frame_unref(frame)
+                continue
+            }
             val width = frame.width()
             val height = frame.height()
             if (context == null || width != frames.value.width || height != frames.value.height) {

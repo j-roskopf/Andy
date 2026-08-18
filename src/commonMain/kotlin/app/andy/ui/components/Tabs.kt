@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyShape
@@ -56,7 +57,7 @@ import app.andy.ui.theme.TextSecondary
 
 /**
  * Underline-style tab bar for page-level navigation. Prefer this over [FilterPill]
- * when switching between distinct content panes.
+ * when switching between distinct content panes. Tabs scroll horizontally on overflow.
  *
  * [trailing] is placed on the trailing edge of the tab row (e.g. filter pills).
  */
@@ -68,7 +69,7 @@ internal fun TabBar(
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    TabBarRow(modifier = modifier, trailing = trailing) {
+    TabBarRow(modifier = modifier, scrollTabs = true, trailing = trailing) {
         tabs.forEachIndexed { index, label ->
             TabBarItem(
                 label = label,
@@ -83,7 +84,7 @@ internal fun TabBar(
  * [TabBar] chrome with caller-supplied items, for tab strips that need more than a
  * label per tab (icons, close affordances). Emit [TabBarItem]s from [tabs].
  *
- * Set [scrollTabs] when the tab set is unbounded and may overflow the row.
+ * Set [scrollTabs] when tabs may overflow the row (also used by [TabBar]).
  */
 @Composable
 internal fun TabBarRow(
@@ -245,6 +246,9 @@ internal fun TabBarItem(
                     fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                 )
             }
             trailing?.invoke(hovered)

@@ -50,6 +50,15 @@ internal fun filterAcpProviderHistoryReplay(
     else -> AcpReplayFilterResult.Accept()
 }
 
+/**
+ * A turn that merely opens with the same handful of characters as some earlier turn is not
+ * evidence of a replay — "I" begins a great many answers. A tool call between chunks also
+ * strands an opening chunk as its own tiny turn, so those fragments are already in the
+ * transcript to be matched against. Requiring a recognizable prior turn keeps the filter from
+ * silently eating the start of genuinely new text.
+ */
+private const val MIN_REPLAY_EVIDENCE_CHARS = 8
+
 private fun streamReplayFilterResult(
     priorTexts: List<String>,
     text: String,
@@ -62,13 +71,12 @@ private fun streamReplayFilterResult(
     }
     scratch.append(text)
     val scratchText = scratch.toString()
-    val replaying = priorTexts.any { prior ->
-        prior.startsWith(scratchText) && scratchText.length <= prior.length
-    }
+    val candidates = priorTexts.filter { it.length >= MIN_REPLAY_EVIDENCE_CHARS }
+    val replaying = candidates.any { prior -> prior.startsWith(scratchText) }
     if (replaying) return AcpReplayFilterResult.Ignore
 
-    val replayedPrefix = priorTexts
-        .filter { prior -> prior.isNotEmpty() && scratchText.startsWith(prior) }
+    val replayedPrefix = candidates
+        .filter { prior -> scratchText.startsWith(prior) }
         .maxByOrNull { it.length }
     val emit = replayedPrefix?.let(scratchText::removePrefix) ?: scratchText
     scratch.clear()

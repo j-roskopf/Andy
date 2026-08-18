@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -305,6 +307,9 @@ internal fun DraggableScrollbar(
  * An Andy-styled lazy-list scrollbar with an exact thumb position for every measured
  * list item. The 14dp hit target makes the narrow visual thumb easy to grab or to click
  * anywhere on the track.
+ *
+ * Scroll/layout state is read in the draw / gesture path only — never as composition
+ * inputs — so wheel scrolling does not recompose this chrome (or its LazyColumn siblings).
  */
 @Composable
 internal fun DraggableScrollbar(
@@ -313,35 +318,43 @@ internal fun DraggableScrollbar(
     reverseLayout: Boolean = false,
     onScroll: () -> Unit = {},
 ) {
-    val layoutInfo = listState.layoutInfo
     val measuredItemSizes = remember(listState) { mutableStateMapOf<Int, Int>() }
-    val visibleItemSizes = layoutInfo.visibleItemsInfo.associate { it.index to it.size }
-    LaunchedEffect(layoutInfo.totalItemsCount, visibleItemSizes) {
-        measuredItemSizes.keys
-            .filter { it >= layoutInfo.totalItemsCount }
-            .forEach(measuredItemSizes::remove)
-        visibleItemSizes.forEach { (index, size) ->
-            if (size > 0) measuredItemSizes[index] = size
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.layoutInfo.totalItemsCount to
+                listState.layoutInfo.visibleItemsInfo.map { it.index to it.size }
         }
+            .distinctUntilChanged()
+            .collect { (total, sizes) ->
+                measuredItemSizes.keys
+                    .filter { it >= total }
+                    .forEach(measuredItemSizes::remove)
+                sizes.forEach { (index, size) ->
+                    if (size > 0) measuredItemSizes[index] = size
+                }
+            }
     }
 
-    val knownItemSizes = HashMap<Int, Int>(measuredItemSizes).apply { putAll(visibleItemSizes) }
-    val viewportSize = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
-    val metrics = lazyScrollbarMetrics(
-        totalItems = layoutInfo.totalItemsCount,
-        firstVisibleItemIndex = listState.firstVisibleItemIndex,
-        firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-        measuredItemSizes = knownItemSizes,
-        viewportSize = viewportSize,
-        itemSpacing = layoutInfo.mainAxisItemSpacing,
-        reverseLayout = reverseLayout,
-    )
-    if (!metrics.canScroll) return
+    fun metricsFor(trackHeightPx: Int): LazyScrollbarMetrics {
+        val layoutInfo = listState.layoutInfo
+        val visibleItemSizes = layoutInfo.visibleItemsInfo.associate { it.index to it.size }
+        val knownItemSizes = HashMap<Int, Int>(measuredItemSizes.size + visibleItemSizes.size).apply {
+            putAll(measuredItemSizes)
+            putAll(visibleItemSizes)
+        }
+        val viewportSize = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
+        return lazyScrollbarMetrics(
+            totalItems = layoutInfo.totalItemsCount,
+            firstVisibleItemIndex = listState.firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+            measuredItemSizes = knownItemSizes,
+            viewportSize = viewportSize,
+            itemSpacing = layoutInfo.mainAxisItemSpacing,
+            reverseLayout = reverseLayout,
+        )
+    }
 
-    val currentMetrics by rememberUpdatedState(metrics)
-    val currentItemSizes by rememberUpdatedState(knownItemSizes)
-    val currentViewportSize by rememberUpdatedState(viewportSize)
-    val currentItemSpacing by rememberUpdatedState(layoutInfo.mainAxisItemSpacing)
+    val onScrollState = rememberUpdatedState(onScroll)
     val scope = rememberCoroutineScope()
     val minThumbHeight = with(LocalDensity.current) { 28.dp.toPx() }
     var dragging by remember { mutableStateOf(false) }
@@ -349,19 +362,27 @@ internal fun DraggableScrollbar(
     var dragAnchorInThumb by remember { mutableStateOf(0f) }
 
     fun scrollToThumb(thumbTop: Float, trackHeight: Float) {
-        val current = currentMetrics
+        val current = metricsFor(trackHeight.roundToInt())
+        if (!current.canScroll) return
         val thumb = scrollbarThumb(trackHeight, minThumbHeight, current)
         val travel = trackHeight - thumb.height
         val fraction = if (travel <= 0f) 0f else (thumbTop / travel).coerceIn(0f, 1f)
+        val layoutInfo = listState.layoutInfo
+        val visibleItemSizes = layoutInfo.visibleItemsInfo.associate { it.index to it.size }
+        val knownItemSizes = HashMap<Int, Int>(measuredItemSizes.size + visibleItemSizes.size).apply {
+            putAll(measuredItemSizes)
+            putAll(visibleItemSizes)
+        }
+        val viewportSize = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
         val target = lazyScrollbarTarget(
             scrollOffset = (fraction * current.maxScrollOffset).roundToInt(),
-            totalItems = listState.layoutInfo.totalItemsCount,
-            measuredItemSizes = currentItemSizes,
-            viewportSize = currentViewportSize,
-            itemSpacing = currentItemSpacing,
+            totalItems = layoutInfo.totalItemsCount,
+            measuredItemSizes = knownItemSizes,
+            viewportSize = viewportSize,
+            itemSpacing = layoutInfo.mainAxisItemSpacing,
             reverseLayout = reverseLayout,
         )
-        onScroll()
+        onScrollState.value()
         scope.launch { listState.scrollToItem(target.itemIndex, target.itemScrollOffset) }
     }
 
@@ -373,16 +394,20 @@ internal fun DraggableScrollbar(
             .pointerHoverIcon(PointerIcon.Hand)
             .pointerInput(listState, reverseLayout) {
                 detectTapGestures { offset ->
-                    val thumb = scrollbarThumb(size.height.toFloat(), minThumbHeight, currentMetrics)
-                    currentScrollToThumb((offset.y - thumb.height / 2f), size.height.toFloat())
+                    val metrics = metricsFor(size.height)
+                    if (!metrics.canScroll) return@detectTapGestures
+                    val thumb = scrollbarThumb(size.height.toFloat(), minThumbHeight, metrics)
+                    currentScrollToThumb(offset.y - thumb.height / 2f, size.height.toFloat())
                 }
             }
             .pointerInput(listState, reverseLayout) {
                 detectDragGestures(
                     onDragStart = { offset ->
+                        val metrics = metricsFor(size.height)
+                        if (!metrics.canScroll) return@detectDragGestures
                         dragging = true
                         dragPointerY = offset.y
-                        val thumb = scrollbarThumb(size.height.toFloat(), minThumbHeight, currentMetrics)
+                        val thumb = scrollbarThumb(size.height.toFloat(), minThumbHeight, metrics)
                         dragAnchorInThumb = if (offset.y in thumb.top..(thumb.top + thumb.height)) {
                             offset.y - thumb.top
                         } else {
@@ -399,6 +424,8 @@ internal fun DraggableScrollbar(
                 }
             },
     ) {
+        val metrics = metricsFor(size.height.roundToInt())
+        if (!metrics.canScroll) return@Canvas
         val thumb = scrollbarThumb(size.height, minThumbHeight, metrics)
         val trackWidth = 3.dp.toPx().coerceAtMost(size.width)
         val thumbWidth = 6.dp.toPx().coerceAtMost(size.width)
