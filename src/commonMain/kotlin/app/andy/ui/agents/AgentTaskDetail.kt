@@ -599,6 +599,7 @@ internal fun AgentTaskDetail(
                     AgentTranscript(
                         events = transcriptEvents,
                         isActive = task.isActive,
+                        showThinkingIndicator = isSessionWorking(task),
                         awaitingPlanConfirmation = awaitingPlanConfirmation,
                         agentLabel = task.agent.cliName,
                         originalPrompt = task.prompt.ifBlank { task.title },

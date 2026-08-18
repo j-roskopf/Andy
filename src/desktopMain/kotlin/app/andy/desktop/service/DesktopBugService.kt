@@ -44,6 +44,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -98,6 +99,8 @@ class DesktopBugService(
     private var captureDevice: AndroidDevice? = null
     private var captureStartedAtMillis: Long = 0L
     private var recordingActive = false
+    /** True when mirror visibility started this capture, so losing visibility may also end it. */
+    private var autoCapture = false
     private var frameJob: Job? = null
     private var encodedJob: Job? = null
     private var logJob: Job? = null
@@ -114,11 +117,14 @@ class DesktopBugService(
     private val exportsDir: File get() = File(homeDir, ".andy/exports")
 
     init {
-        // Tie the rolling 30s buffer to the mirror session (any page that keeps the stream
-        // warm) instead of LiveScreen composition, so Design → Live still has the window.
+        // Follow a *visible* mirror rather than LiveScreen composition, so Design → Live still has
+        // the window. A warm-but-hidden session deliberately gets no capture: it would keep an adb
+        // logcat stream, foreground/crash polling and ARGB sampling running for a rolling window
+        // nobody is in a position to save.
         scope.launch {
-            mirror.session
-                .map { it?.serial }
+            combine(mirror.session.map { it?.serial }, mirror.presenting) { serial, presenting ->
+                serial.takeIf { presenting }
+            }
                 .distinctUntilChanged()
                 .collect { serial -> syncCaptureToMirrorSession(serial) }
         }
@@ -130,19 +136,23 @@ class DesktopBugService(
             androidSerial != null -> {
                 lastAndroidMirrorSerial = androidSerial
                 val device = devices?.listDevices()?.firstOrNull { it.serial == androidSerial }
-                startCapture(androidSerial, device)
+                startCapture(androidSerial, device, auto = true)
             }
-            // Only tear down when an Android mirror session actually ended (or switched to iOS).
-            // Ignoring the idle initial emission avoids racing MCP/manual startCapture.
+            // Only tear down when a visible Android mirror actually went away. Ignoring the idle
+            // initial emission avoids racing MCP/manual startCapture, and an explicitly started
+            // capture outlives visibility because its owner is waiting on the result.
             lastAndroidMirrorSerial != null -> {
                 lastAndroidMirrorSerial = null
-                val recording = synchronized(lock) { recordingActive }
-                if (!recording) stopCapture()
+                val releasable = synchronized(lock) { !recordingActive && autoCapture }
+                if (releasable) stopCapture()
             }
         }
     }
 
-    override suspend fun startCapture(serial: String, device: AndroidDevice?) {
+    override suspend fun startCapture(serial: String, device: AndroidDevice?) =
+        startCapture(serial, device, auto = false)
+
+    private suspend fun startCapture(serial: String, device: AndroidDevice?, auto: Boolean) {
         if (captureSerial == serial && status.value.active) return
         stopCapture()
         synchronized(lock) {
@@ -151,6 +161,7 @@ class DesktopBugService(
             captureDevice = device
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = false
+            autoCapture = auto
             lastFrameSampledAtMillis = 0L
         }
         status.value = BugCaptureStatus(active = true, deviceSerial = serial, message = "Recording last 30s for $serial")
@@ -263,11 +274,19 @@ class DesktopBugService(
             captureDevice = null
             captureStartedAtMillis = 0L
             recordingActive = false
+            autoCapture = false
         }
         status.value = BugCaptureStatus(message = "Bug capture idle")
     }
 
     override suspend fun beginRecording() {
+        if (synchronized(lock) { captureSerial } == null) {
+            // Recording can start from an idle window — a hidden Live, or an MCP client that goes
+            // straight to record. Claim the warm session so the recording owns it from here on.
+            val live = mirror.session.value?.serial?.takeUnless { IosTargetRegistry.isIosTarget(it) }
+            val serial = checkNotNull(live) { "Connect to a device before recording." }
+            startCapture(serial, devices?.listDevices()?.firstOrNull { it.serial == serial }, auto = false)
+        }
         val serial = synchronized(lock) {
             checkNotNull(captureSerial) { "Connect to a device before recording." }
             // Keep SPS/PPS across the reset — scrcpy usually sends them once at stream start,
@@ -275,6 +294,7 @@ class DesktopBugService(
             clearCaptureLocked(preserveH264Config = true)
             captureStartedAtMillis = System.currentTimeMillis()
             recordingActive = true
+            autoCapture = false
             captureSerial
         }
         synchronized(lock) {

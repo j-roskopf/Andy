@@ -17,6 +17,7 @@ import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.currentTimeMillis
 import app.andy.service.MirrorTouchAction
+import app.andy.ui.shell.ContentScrollBusyRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -118,6 +119,21 @@ private const val BugTapMaxDistancePx = 24
 
 @Composable
 internal fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @Composable (Flow<MirrorFrame>, MirrorFrame?) -> Unit) {
+    // Every Live surface funnels through here, so this is where the engine learns whether anyone
+    // can actually see the stream. Sessions stay connected either way; only presentation pauses.
+    // While main content (e.g. chat) is scrolling, drop the hold so Metal is not fighting Skia.
+    val contentScrollBusy = ContentScrollBusyRegistry.anyBusy
+    // Hide the inline overlay immediately; acquire/release still has a handoff grace that would
+    // leave Metal painting through the first half-second of a scroll gesture.
+    MirrorPresentationVisibilityEffect(visible = !contentScrollBusy, enabled = true)
+    DisposableEffect(mirror, contentScrollBusy) {
+        if (contentScrollBusy) {
+            onDispose { }
+        } else {
+            mirror.acquirePresentation()
+            onDispose { mirror.releasePresentation() }
+        }
+    }
     var frame by remember(mirror, resetKey) { mutableStateOf<MirrorFrame?>(null) }
     LaunchedEffect(mirror, resetKey) {
         mirror.frames.collectLatest { next ->

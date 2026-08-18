@@ -735,6 +735,9 @@ class McpAgentRunClient(
     override fun isTerminalLive(taskId: String): Boolean =
         localBridge?.isTerminalLive(taskId) == true
 
+    override fun sessionRootPid(taskId: String): Long? =
+        localBridge?.sessionRootPid(taskId)
+
     override fun isLaneLive(taskId: String): Boolean =
         localBridge?.isLaneLive(taskId) == true
 

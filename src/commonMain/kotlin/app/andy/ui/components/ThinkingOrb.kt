@@ -3,7 +3,8 @@ package app.andy.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -28,16 +29,24 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.round
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Dotted thought-orb activity marker, adapted from
  * [thinking-orbs](https://github.com/Jakubantalik/thinking-orbs) (MIT).
  *
- * A lat/long dotted sphere with a slow tumble and a radial pulse — reads as a
- * breathing globe rather than orbiting particles. Animation is wall-clock
- * driven at a coarse cadence so multiple instances stay in phase and Skiko
- * invalidation stays cheaper than a full-refresh infinite transition.
+ * On Compose Desktop, writing animation state — even when read only inside Canvas
+ * draw — schedules a full-window Skiko redraw, not a scoped one. An earlier version
+ * gave every orb its own `LaunchedEffect` phase timer, so N simultaneously-working
+ * sessions meant N independently-timed full-window redraws per tick, which fought
+ * ACP transcript scrolling for the skiko dispatcher. [ThinkingOrbClock] fixes that by
+ * routing every orb through one ref-counted, shared phase: all mounted orbs read the
+ * same state, so a tick produces exactly one redraw no matter how many are on screen,
+ * and the ticker fully stops (zero cost) once nothing is animating.
  */
 @Composable
 internal fun ThinkingOrb(
@@ -47,31 +56,21 @@ internal fun ThinkingOrb(
     speed: Float = 1f,
     animate: Boolean = true,
     contentDescription: String = "Working",
+    /** Test hook: fires when this composable's composition scope restarts. */
+    onComposed: (() -> Unit)? = null,
 ) {
+    SideEffect { onComposed?.invoke() }
     val density = LocalDensity.current
     val sizePx = with(density) { size.toPx() }
     val preset = remember(sizePx) { resolveSpherePreset(sizePx) }
-    var tSec by remember { mutableFloatStateOf(0.6f) }
 
-    LaunchedEffect(animate, speed, preset.speed) {
-        if (!animate) {
-            tSec = 0.6f
-            return@LaunchedEffect
-        }
-        val eff = preset.speed * speed
-        // Wall-clock phase, but never epoch-as-Float — millis since 1970 lose
-        // all sub-minute precision in Float32 and the orb looks frozen.
-        while (true) {
-            val phaseSec = (currentTimeMillis() % 86_400_000L) / 1000.0
-            tSec = (phaseSec * eff).toFloat()
-            // ~12 fps — coarse enough to avoid full-refresh Skiko churn in dense layouts.
-            delay(80)
-        }
+    DisposableEffect(animate) {
+        if (animate) ThinkingOrbClock.acquire()
+        onDispose { if (animate) ThinkingOrbClock.release() }
     }
 
-    val dots = remember(tSec, sizePx, preset) {
-        buildSphereDots(sizePx, tSec, preset)
-    }
+    val tSec = if (animate) ThinkingOrbClock.phaseSec * preset.speed * speed else 0.6f
+    val dots = remember(sizePx, tSec, preset) { buildSphereDots(sizePx, tSec, preset) }
 
     Canvas(
         modifier
@@ -79,6 +78,53 @@ internal fun ThinkingOrb(
             .semantics { this.contentDescription = contentDescription },
     ) {
         paintDots(dots, color, preset.rMin)
+    }
+}
+
+/**
+ * App-lifetime, ref-counted wall-clock driver shared by every [ThinkingOrb].
+ *
+ * Ticks at [TICK_MS] only while at least one orb is animating; idles at a cheap
+ * poll otherwise. Because every subscriber reads the same [phaseSec] snapshot
+ * state, Compose batches all of their invalidations into a single recomposition
+ * (and therefore a single Skiko redraw) per tick, regardless of orb count.
+ */
+internal object ThinkingOrbClock {
+    private const val TICK_MS = 100L
+    private const val IDLE_POLL_MS = 250L
+
+    private var phaseState by mutableFloatStateOf(0.6f)
+    val phaseSec: Float get() = phaseState
+
+    private var refCount = 0
+    private var started = false
+    // Main, not Default: keeps acquire/release/runLoop on one thread (the same one
+    // Compose recomposes on), so refCount needs no cross-thread synchronization.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    fun acquire() {
+        refCount++
+        if (!started) {
+            started = true
+            scope.launch { runLoop() }
+        }
+    }
+
+    fun release() {
+        if (refCount > 0) refCount--
+    }
+
+    private suspend fun runLoop() {
+        while (true) {
+            if (refCount > 0) {
+                // Wall-clock phase, but never epoch-as-Float — millis since 1970 lose
+                // all sub-minute precision in Float32 and the orb looks frozen.
+                phaseState = ((currentTimeMillis() % 86_400_000L) / 1000.0).toFloat()
+                delay(TICK_MS)
+            } else {
+                delay(IDLE_POLL_MS)
+            }
+        }
     }
 }
 

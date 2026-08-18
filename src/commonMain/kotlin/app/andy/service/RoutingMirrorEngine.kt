@@ -6,10 +6,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -47,6 +49,12 @@ class RoutingMirrorEngine(
             else -> androidEngine.flatMapLatest { it.status }
         }
     }
+    override val presenting: StateFlow<Boolean> = _session.flatMapLatest { session ->
+        when {
+            session != null && IosTargetRegistry.isIosTarget(session.serial) -> ios.presenting
+            else -> androidEngine.flatMapLatest { it.presenting }
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, true)
 
     init {
         scope.launch {
@@ -86,6 +94,20 @@ class RoutingMirrorEngine(
     }
 
     private fun android(): MirrorEngine = androidEngine.value
+
+    /**
+     * Both backends count the hold. A Live surface stays composed across an Android ↔ iOS switch,
+     * so the engine that takes over must already know a viewer is watching.
+     */
+    override fun acquirePresentation() {
+        android().acquirePresentation()
+        ios.acquirePresentation()
+    }
+
+    override fun releasePresentation() {
+        android().releasePresentation()
+        ios.releasePresentation()
+    }
 
     private fun engineFor(udid: String): MirrorEngine =
         if (IosTargetRegistry.isIosTarget(udid)) ios else android()

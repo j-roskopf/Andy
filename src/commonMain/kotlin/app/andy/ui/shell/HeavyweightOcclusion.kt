@@ -1,17 +1,29 @@
 package app.andy.ui.shell
 
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 /**
  * When true, desktop [androidx.compose.ui.awt.SwingPanel] hosts (device mirror, DHU, editors)
- * should leave composition (not merely set child visibility) so chrome menus and dialogs can
- * paint. Leaving an invisible Swing interop host still punches a Skia clear-hole and can keep a
- * white JPanel above the menu.
+ * should leave composition (not merely set child visibility) so in-window dialogs can paint.
+ * Leaving an invisible Swing interop host still punches a Skia clear-hole and can keep a
+ * white JPanel above the dialog.
+ *
+ * Chrome menus no longer use this: they expand in-layout under the toolbar / dock tab strip
+ * so Live and Browser reflow instead of fighting z-order.
  */
 internal val LocalSuppressHeavyweightSurfaces = compositionLocalOf { false }
 
@@ -42,21 +54,84 @@ internal object ModalDialogRegistry {
 }
 
 /**
- * In-window chrome menus that must paint above Swing/Metal mirrors. Unlike [ModalDialogRegistry],
- * callers push/pop synchronously from click handlers so suppression is active in the same frame
- * the menu opens — SideEffect-driven flags arrive one frame late and leave the mirror visible.
+ * Main-content scroll in progress (chat transcript, etc.). Live mirrors pause Metal presentation
+ * while this is held so sibling Compose scrolling is not fighting the GPU presenter every frame.
+ *
+ * Refcounted: multiple scrollable surfaces can be busy at once.
  */
-internal object HeavyweightOverlayRegistry {
-    private var suppressCount by mutableStateOf(0)
+internal object ContentScrollBusyRegistry {
+    private var busyCount by mutableStateOf(0)
 
-    val anyActive: Boolean get() = suppressCount > 0
+    val anyBusy: Boolean get() = busyCount > 0
 
-    fun push() {
-        suppressCount++
+    fun begin() {
+        busyCount++
     }
 
-    fun pop() {
-        suppressCount = (suppressCount - 1).coerceAtLeast(0)
+    fun end() {
+        busyCount = (busyCount - 1).coerceAtLeast(0)
+    }
+}
+
+/** Gap between trackpad/wheel ticks before treating scroll as finished. */
+internal const val ContentScrollBusyReleaseDebounceMs = 120L
+
+/**
+ * Holds [ContentScrollBusyRegistry] while [listState] reports scroll in progress, or while
+ * [wheelScrollTicks] emits (desktop wheel/trackpad often never sets [LazyListState.isScrollInProgress]).
+ */
+@Composable
+internal fun ReportContentScrollBusy(
+    listState: LazyListState,
+    wheelScrollTicks: Flow<Unit>,
+) {
+    LaunchedEffect(listState, wheelScrollTicks) {
+        var held = false
+        fun acquire() {
+            if (!held) {
+                ContentScrollBusyRegistry.begin()
+                held = true
+            }
+        }
+        fun release() {
+            if (held) {
+                ContentScrollBusyRegistry.end()
+                held = false
+            }
+        }
+        try {
+            coroutineScope {
+                var releaseJob: Job? = null
+                fun scheduleRelease() {
+                    releaseJob?.cancel()
+                    releaseJob = launch {
+                        delay(ContentScrollBusyReleaseDebounceMs)
+                        if (!listState.isScrollInProgress) release()
+                    }
+                }
+                launch {
+                    snapshotFlow { listState.isScrollInProgress }
+                        .distinctUntilChanged()
+                        .collect { inProgress ->
+                            if (inProgress) {
+                                releaseJob?.cancel()
+                                acquire()
+                            } else {
+                                scheduleRelease()
+                            }
+                        }
+                }
+                launch {
+                    wheelScrollTicks.collect {
+                        releaseJob?.cancel()
+                        acquire()
+                        scheduleRelease()
+                    }
+                }
+            }
+        } finally {
+            release()
+        }
     }
 }
 

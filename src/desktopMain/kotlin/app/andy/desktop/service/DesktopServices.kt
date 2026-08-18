@@ -210,6 +210,13 @@ fun createDaemonRuntime(
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
     val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 
+    val localServers = DesktopLocalServerService(
+        runner = runner,
+        agentRuns = agentRuns,
+        actionRuns = actionRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+
     val services = AndyServices(
         devices = devices,
         iosDevices = iosDevices,
@@ -254,6 +261,7 @@ fun createDaemonRuntime(
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
         orchestrationPreferences = orchestrationPreferences,
+        localServers = localServers,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -473,6 +481,13 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
             }
     }
 
+    val localServers = DesktopLocalServerService(
+        runner = runner,
+        agentRuns = remoteAgents,
+        actionRuns = actionRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+
     val services = AndyServices(
         devices = devices,
         iosDevices = iosDevices,
@@ -516,6 +531,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
         orchestrationPreferences = orchestrationPreferences,
+        localServers = localServers,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -670,6 +686,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         }
     }
 
+    val localServers = DesktopLocalServerService(
+        runner = runner,
+        agentRuns = agentRuns,
+        actionRuns = actionRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+
     val services = AndyServices(
         devices = devices,
         iosDevices = iosDevices,
@@ -714,6 +737,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
         orchestrationPreferences = orchestrationPreferences,
+        localServers = localServers,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),

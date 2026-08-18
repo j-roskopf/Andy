@@ -30,11 +30,13 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class MirrorLifecycleTest {
     @Test
-    fun liveScreenKeepsMirrorConnectedWhenRemovedFromComposition() = withComposeMirrorRenderer {
+    fun liveScreenKeepsMirrorConnectedButStopsPresentingWhenRemovedFromComposition() = withComposeMirrorRenderer {
         // Prior Compose desktop tests can leave uncaught Job failures that poison the next
         // runTest scope. Consume that once, then assert the lifecycle behavior.
         runDesktopComposeUiTestDrainingPriorFailures {
@@ -72,12 +74,15 @@ class MirrorLifecycleTest {
             }
 
             waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
+            assertTrue(mirror.presenting.value, "a composed Live surface presents")
             runOnUiThread { visible.value = false }
+            waitUntil(timeoutMillis = 5_000) { !mirror.presenting.value }
             // Give composition teardown a moment; disconnect must not fire on leave.
             runBlocking { delay(250) }
 
             assertEquals(1, mirror.connectCalls)
             assertEquals(0, mirror.disconnectCalls)
+            assertFalse(mirror.presenting.value, "presentation must stay paused while nothing shows Live")
         }
     }
 
@@ -237,15 +242,27 @@ class MirrorLifecycleTest {
         private val mutableFrames = MutableSharedFlow<MirrorFrame>()
         private val mutableStatus = MutableStateFlow("Disconnected")
         override val session = MutableStateFlow<MirrorSession?>(null)
+        override val presenting = MutableStateFlow(true)
 
         var connectCalls = 0
             private set
         var disconnectCalls = 0
             private set
         val connectedSerials = mutableListOf<String>()
+        private var presentationHolders = 0
 
         override val frames: Flow<MirrorFrame> = mutableFrames
         override val status: Flow<String> = mutableStatus
+
+        override fun acquirePresentation() {
+            presentationHolders += 1
+            presenting.value = true
+        }
+
+        override fun releasePresentation() {
+            presentationHolders = (presentationHolders - 1).coerceAtLeast(0)
+            if (presentationHolders == 0) presenting.value = false
+        }
 
         override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
             connectCalls += 1

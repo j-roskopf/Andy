@@ -408,6 +408,35 @@ class AcpLaneTest {
     }
 
     @Test
+    fun replayFilterKeepsNewTextOpeningLikeAStrandedEarlierChunk() {
+        // A tool call between chunks ends the preceding turn, stranding its opening chunk as a
+        // one-character assistant message. A later answer beginning "I'll …" must survive intact.
+        val existing = listOf(
+            AgentEvent.AssistantText(atMillis = 1, text = "I", isStreamDelta = true),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "read", summary = "x", toolCallId = "call-1"),
+            AgentEvent.AssistantText(atMillis = 3, text = "'ve kicked off research", isStreamDelta = true),
+        )
+        val replayScratch = StringBuilder()
+        assertEquals(
+            AcpReplayFilterResult.Accept(),
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.AssistantText(atMillis = 4, text = "I", isStreamDelta = true),
+                replayScratch,
+            ),
+            "a one-character prior turn is not evidence of a replay",
+        )
+        assertEquals(
+            AcpReplayFilterResult.Accept(),
+            filterAcpProviderHistoryReplay(
+                existing,
+                AgentEvent.AssistantText(atMillis = 5, text = "'ll leave it wired up", isStreamDelta = true),
+                replayScratch,
+            ),
+        )
+    }
+
+    @Test
     fun replayFilterRecoversBufferedPrefixWhenNewThinkingDivergesFromPrior() {
         val existing = listOf(
             AgentEvent.Thinking(atMillis = 1, text = "reverting the old layout"),

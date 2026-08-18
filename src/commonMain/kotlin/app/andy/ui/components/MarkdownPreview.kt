@@ -125,8 +125,8 @@ internal fun ChatMarkdown(
     lineHeight: TextUnit = 19.sp,
     density: AndyMarkdownDensity = AndyMarkdownDensity.Chat,
     /**
-     * True for user-authored chat input. Provider markdown should stay false so wrapped source
-     * lines (common before inline emphasis) render as soft breaks instead of hard line breaks.
+     * Promote single newlines to Markdown hard breaks. Used for tool-detail bodies so
+     * plain source keeps its line structure. Leave false for provider chat markdown.
      */
     preserveLineBreaks: Boolean = false,
     /** Overrides the code/inline-code color, e.g. the plan card's teal technical-token accent. */

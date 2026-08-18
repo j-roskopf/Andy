@@ -54,6 +54,7 @@ class AgentTranscriptUiTest {
 
             onNodeWithTag("user-message-bubble").assertIsDisplayed()
             assertTrue(onAllNodesWithTag("agent-message-bubble").fetchSemanticsNodes().isEmpty())
+            onNodeWithText("user prompt").assertIsDisplayed()
             onNodeWithText("Worked for 2m 05s").assertIsDisplayed()
             onNodeWithText("completed response").assertIsDisplayed()
         }
@@ -389,6 +390,28 @@ class AgentTranscriptUiTest {
             }
             waitForIdle()
             onNodeWithTag("trailing-content").assertIsDisplayed()
+        }
+
+    @Test
+    fun userMessagesRenderAsPlainText() =
+        runTranscriptUiTest {
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(
+                                atMillis = 1,
+                                text = "# heading\n**bold** and `code`",
+                            ),
+                        ),
+                        isActive = false,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithText("# heading\n**bold** and `code`").assertIsDisplayed()
         }
 
     /** Some existing async service tests can leave one failure queued in coroutines-test. */

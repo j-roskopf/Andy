@@ -42,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -100,6 +102,7 @@ import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.ui.shell.LocalOpenAgentTask
+import app.andy.ui.shell.ReportContentScrollBusy
 import app.andy.ui.components.AndyMarkdownDensity
 import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.DraggableScrollbar
@@ -114,6 +117,7 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
+import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
@@ -121,12 +125,28 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+
+/**
+ * Test-only counter for how often [AgentTranscript]'s composition scope restarts.
+ * Reading [LazyListState.layoutInfo] during composition (e.g. as a [LaunchedEffect] key)
+ * forces a restart on every scroll frame — this counter catches that regression.
+ */
+internal class TranscriptCompositionCounter {
+    val rootRestarts = AtomicInteger(0)
+}
+
+internal val LocalTranscriptCompositionCounter = compositionLocalOf<TranscriptCompositionCounter?> { null }
 
 /** Explicit per-task scroll snapshot. */
 internal data class TranscriptScrollPosition(
@@ -163,6 +183,11 @@ internal class TranscriptScrollMemory {
 internal fun AgentTranscript(
     events: List<AgentEvent>,
     isActive: Boolean,
+    /**
+     * Live "Working" orb. Defaults off when [isActive] is only Blocked (permission wait) so a
+     * parked ACP chat does not keep a ~12fps full-window Skiko redraw alive.
+     */
+    showThinkingIndicator: Boolean = isActive,
     awaitingPlanConfirmation: Boolean = false,
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
@@ -193,6 +218,8 @@ internal fun AgentTranscript(
     currentTaskId: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val compositionCounter = LocalTranscriptCompositionCounter.current
+    SideEffect { compositionCounter?.rootRestarts?.incrementAndGet() }
     val scope = rememberCoroutineScope()
     val displayItems = remember(events, collapseActivityBetweenMessages) {
         transcriptDisplayItems(events, collapseActivityBetweenMessages)
@@ -239,11 +266,20 @@ internal fun AgentTranscript(
             },
         )
     }
-    // Desktop wheel/trackpad input can complete without isScrollInProgress ever becoming true.
-    var userScrollGeneration by remember(taskId) { mutableStateOf(0) }
+    // Desktop wheel/trackpad often never sets isScrollInProgress. Emit ticks without Compose
+    // state so each wheel event does not recompose the whole transcript. Keep a single slot and
+    // DROP_OLDEST so a fast fling cannot queue dozens of settle waits.
+    val wheelScrollTicks = remember(taskId) {
+        MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+    }
+    ReportContentScrollBusy(listState = listState, wheelScrollTicks = wheelScrollTicks)
     val rowKeys = remember(
         displayItems,
         isActive,
+        showThinkingIndicator,
         originalPromptVisible,
         pendingContent != null,
         trailingContent != null,
@@ -251,7 +287,7 @@ internal fun AgentTranscript(
     ) {
         buildList {
             if (pendingContent != null) add("pending-task-input")
-            if (isActive) add("agent-thinking")
+            if (showThinkingIndicator) add("agent-thinking")
             if (trailingContent != null) add("trailing-content")
             displayItems.asReversed().forEach { add(transcriptDisplayItemKey(it)) }
             if (originalPromptVisible) add("original-prompt")
@@ -259,9 +295,11 @@ internal fun AgentTranscript(
         }
     }
 
-    LaunchedEffect(taskId, eventsReady, listState.layoutInfo.totalItemsCount, rowKeys) {
+    // Never read listState.layoutInfo as a composition / LaunchedEffect key — that state
+    // updates every scroll frame and would recompose the entire transcript (markdown rows
+    // included). Stick-to-bottom restore needs no item count; exact restore waits in a flow.
+    LaunchedEffect(taskId, eventsReady, rowKeys) {
         if (scrollInitialized || !eventsReady) return@LaunchedEffect
-        val itemCount = listState.layoutInfo.totalItemsCount
         when (val plan = restorePlan) {
             TranscriptRestorePlan.StickToBottom -> {
                 // Index zero is bottom in reverseLayout. No settling loop or post-layout nudge.
@@ -269,7 +307,8 @@ internal fun AgentTranscript(
                 scrollInitialized = true
             }
             is TranscriptRestorePlan.Exact -> {
-                if (itemCount == 0) return@LaunchedEffect
+                val itemCount = snapshotFlow { listState.layoutInfo.totalItemsCount }
+                    .first { it > 0 }
                 val anchoredIndex = plan.anchorKey
                     ?.let(rowKeys::indexOf)
                     ?.takeIf { it >= 0 }
@@ -332,14 +371,18 @@ internal fun AgentTranscript(
             }
         }
     }
-    LaunchedEffect(userScrollGeneration, scrollInitialized) {
-        if (!scrollInitialized || userScrollGeneration == 0) return@LaunchedEffect
-        // Let wheel/trackpad input settle. A blocked downward tick at the live edge has no
-        // position change, so explicitly re-arm in that case.
-        withFrameMillis { }
-        withFrameMillis { }
-        if (transcriptIsAtBottom(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) {
-            stickToBottom = true
+    LaunchedEffect(taskId, listState, scrollInitialized, wheelScrollTicks) {
+        if (!scrollInitialized) return@LaunchedEffect
+        // collectLatest matches the old LaunchedEffect(userScrollGeneration) restart: a new
+        // tick cancels the in-flight settle instead of queueing two frames per event.
+        wheelScrollTicks.collectLatest {
+            // Let wheel/trackpad input settle. A blocked downward tick at the live edge has no
+            // position change, so explicitly re-arm in that case.
+            withFrameMillis { }
+            withFrameMillis { }
+            if (transcriptIsAtBottom(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) {
+                stickToBottom = true
+            }
         }
     }
 
@@ -374,7 +417,7 @@ internal fun AgentTranscript(
                                     // Detach before the wheel delta is applied. New streaming
                                     // content then grows below this viewport without moving it.
                                     stickToBottom = false
-                                    userScrollGeneration++
+                                    wheelScrollTicks.tryEmit(Unit)
                                 }
                             }
                         }
@@ -387,7 +430,7 @@ internal fun AgentTranscript(
                 if (pendingContent != null) {
                     item(key = "pending-task-input", contentType = "request") { pendingContent() }
                 }
-                if (isActive) {
+                if (showThinkingIndicator) {
                     item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
                 }
                 if (trailingContent != null) {
@@ -476,7 +519,7 @@ internal fun AgentTranscript(
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                        ChatMarkdown(prompt, lineHeight = 18.sp, preserveLineBreaks = true)
+                                        ChatUserText(prompt)
                                     }
                                     ChatAttachedImages(originalImagePaths)
                                 }
@@ -662,7 +705,7 @@ private fun TranscriptEvent(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (event.text.isNotBlank()) {
-                    ChatMarkdown(event.text, lineHeight = 18.sp, preserveLineBreaks = true)
+                    ChatUserText(event.text)
                 }
                 ChatAttachedImages(event.imagePaths)
                 if (event.skills.isNotEmpty()) {
@@ -893,6 +936,18 @@ private fun ThinkingStep(
             modifier = bodyModifier.padding(top = 4.dp),
         )
     }
+}
+
+@Composable
+private fun ChatUserText(text: String) {
+    Text(
+        text,
+        color = TextPrimary,
+        fontFamily = DisplayFont,
+        fontSize = 14.sp,
+        lineHeight = 18.sp,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
@@ -1238,19 +1293,33 @@ private fun CompactToolCallsBlock(
     knownTasks: List<AgentTask> = emptyList(),
     currentTaskId: String? = null,
 ) {
-    val spawnSources = AgentSpawnPresentation.spawnSources(events)
-    val spawnOnly = spawnSources.isNotEmpty() &&
-        events.none { it is AgentEvent.ToolResult && it.isError } &&
-        events.all { event ->
+    // isAgentSpawn runs several regex passes over each event's summary/detail. Classifying
+    // once per composition (memoized on `events`) instead of on every recomposition — e.g.
+    // toggling one tool's expanded state used to reclassify every event in the block — is
+    // what kept this from being a per-frame cost while scrolling an ACP transcript.
+    val classification = remember(events) {
+        val spawnFlags = events.map { event ->
             when (event) {
                 is AgentEvent.ToolCall -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
                 is AgentEvent.ToolResult -> AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)
                 else -> false
             }
         }
-    if (spawnOnly) {
+        val spawnSources = AgentSpawnPresentation.spawnSources(events)
+        val spawnOnly = spawnSources.isNotEmpty() &&
+            events.none { it is AgentEvent.ToolResult && it.isError } &&
+            spawnFlags.all { it }
+        ToolCallsBlockClassification(
+            spawnFlags = spawnFlags,
+            spawnSources = spawnSources,
+            spawnOnly = spawnOnly,
+            hasError = events.any { it is AgentEvent.ToolResult && it.isError },
+            headline = compactActivityHeadline(events),
+        )
+    }
+    if (classification.spawnOnly) {
         SpawningAgentsBlock(
-            sources = spawnSources,
+            sources = classification.spawnSources,
             expanded = expanded,
             onExpandedChange = onExpandedChange,
             knownTasks = knownTasks,
@@ -1259,11 +1328,10 @@ private fun CompactToolCallsBlock(
         return
     }
 
-    val hasError = events.any { it is AgentEvent.ToolResult && it.isError }
-    val headlineColor = if (hasError) Red.copy(alpha = 0.9f) else TextSecondary
+    val headlineColor = if (classification.hasError) Red.copy(alpha = 0.9f) else TextSecondary
 
     TranscriptExpandableRow(
-        headline = compactActivityHeadline(events),
+        headline = classification.headline,
         expanded = expanded,
         onExpandedChange = onExpandedChange,
         headlineColor = headlineColor,
@@ -1275,13 +1343,14 @@ private fun CompactToolCallsBlock(
         ) {
             events.forEachIndexed { offset, event ->
                 val eventKey = transcriptEventKey(startIndex + offset, event)
+                val isSpawn = classification.spawnFlags[offset]
                 when (event) {
                     is AgentEvent.Thinking -> ThinkingStep(
                         text = event.text,
                         expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandActivitySections),
                         onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
                     )
-                    is AgentEvent.ToolCall -> if (AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+                    is AgentEvent.ToolCall -> if (isSpawn) {
                         val source = AgentSpawnPresentation.spawnSources(listOf(event)).singleOrNull()
                             ?: AgentSpawnPresentation.SpawnSource(event.toolName, event.summary, event.detail)
                         SpawnedAgentLine(
@@ -1307,7 +1376,7 @@ private fun CompactToolCallsBlock(
                             onToolFileOpen = onToolFileOpen,
                         )
                     }
-                    is AgentEvent.ToolResult -> if (event.isError || !AgentSpawnPresentation.isAgentSpawn(event.toolName, event.summary, event.detail)) {
+                    is AgentEvent.ToolResult -> if (event.isError || !isSpawn) {
                         ToolBlock(
                             expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
@@ -1327,6 +1396,14 @@ private fun CompactToolCallsBlock(
         }
     }
 }
+
+private data class ToolCallsBlockClassification(
+    val spawnFlags: List<Boolean>,
+    val spawnSources: List<AgentSpawnPresentation.SpawnSource>,
+    val spawnOnly: Boolean,
+    val hasError: Boolean,
+    val headline: String,
+)
 
 @Composable
 private fun SpawningAgentsBlock(
@@ -1687,24 +1764,35 @@ internal fun toolDetailMarkdown(body: String, path: String? = null): String {
     }
 }
 
+// Checked per line of a tool's detail body (a file read or command output can be thousands of
+// lines), so these must be compiled once — constructing a fresh Regex per line per render was
+// measurable CPU on any transcript row with a sizeable tool output.
+private val MarkdownHeadingPattern = Regex("""^#{1,6}\s+""")
+private val MarkdownBulletPattern = Regex("""^[-*+]\s+""")
+private val MarkdownOrderedListPattern = Regex("""^\d+[.)]\s+""")
+private val MarkdownTableRowPattern = Regex("""^\|.+\|$""")
+
 private fun looksLikeMarkdown(text: String): Boolean = text.lineSequence().any { line ->
     val trimmed = line.trimStart()
     trimmed.startsWith("```") ||
         trimmed.startsWith("~~~") ||
-        Regex("""^#{1,6}\s+""").containsMatchIn(trimmed) ||
+        MarkdownHeadingPattern.containsMatchIn(trimmed) ||
         trimmed.startsWith("> ") ||
-        Regex("""^[-*+]\s+""").containsMatchIn(trimmed) ||
-        Regex("""^\d+[.)]\s+""").containsMatchIn(trimmed) ||
-        Regex("""^\|.+\|$""").containsMatchIn(trimmed)
+        MarkdownBulletPattern.containsMatchIn(trimmed) ||
+        MarkdownOrderedListPattern.containsMatchIn(trimmed) ||
+        MarkdownTableRowPattern.containsMatchIn(trimmed)
 }
+
+private val CodeKeywordLinePattern =
+    Regex("""^\s*(fun|class|interface|object|enum|data class|val|var|import|package|def|function|const|let|fn|struct)\b""")
+private val CodeShellLinePattern = Regex("""^\s*([+>$]|at\s+\S+|[A-Za-z0-9_./-]+:\d+:)""")
 
 private fun looksLikeCode(text: String): Boolean =
     text.contains('\n') && text.lineSequence().any { line ->
         line.startsWith("    ") ||
             line.startsWith("\t") ||
-            Regex("""^\s*(fun|class|interface|object|enum|data class|val|var|import|package|def|function|const|let|fn|struct)\b""")
-                .containsMatchIn(line) ||
-            Regex("""^\s*([+>$]|at\s+\S+|[A-Za-z0-9_./-]+:\d+:)""").containsMatchIn(line) ||
+            CodeKeywordLinePattern.containsMatchIn(line) ||
+            CodeShellLinePattern.containsMatchIn(line) ||
             line.trimEnd().endsWith("{") ||
             line.trimEnd().endsWith(";")
     }
@@ -1977,8 +2065,10 @@ private const val ToolHeadlineLimit = 160
  * be a whole multi-line command or a 4 KB command result. Collapse it to one short line and leave
  * the rest to the expanded body.
  */
+private val WhitespaceRunPattern = Regex("""\s+""")
+
 internal fun condenseToolHeadline(text: String): String {
-    val collapsed = text.replace(Regex("""\s+"""), " ").trim()
+    val collapsed = text.replace(WhitespaceRunPattern, " ").trim()
     return if (collapsed.length <= ToolHeadlineLimit) {
         collapsed
     } else {

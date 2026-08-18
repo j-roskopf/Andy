@@ -413,6 +413,20 @@ object TmuxAndy {
         return result.stdout.trim()
     }
 
+    /** Shell pid owning the task pane (`#{pane_pid}`), or null when the session is gone. */
+    fun panePid(taskId: String): Long? {
+        if (!hasSession(taskId)) return null
+        val result = run(
+            listOf(
+                tmuxBinary(), "-L", SERVER,
+                "display-message", "-p", "-t", sessionName(taskId), "#{pane_pid}",
+            ),
+            checkExit = false,
+        )
+        if (result.exitCode != 0) return null
+        return result.stdout.trim().toLongOrNull()?.takeIf { it > 0L }
+    }
+
     /** Liveness + title + pane text from a single tmux invocation. See [probePane]. */
     data class PaneProbe(val alive: Boolean, val title: String, val content: String)
 
