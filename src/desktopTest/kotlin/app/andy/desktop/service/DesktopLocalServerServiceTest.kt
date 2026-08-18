@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assume.assumeTrue
 
 /** Fake with a large chat history, mirroring a real Andy install with hundreds of past tasks. */
 private class FakeHistoryAgentRunService(
@@ -52,6 +53,7 @@ private class FakeHistoryAgentRunService(
 class DesktopLocalServerServiceTest {
     @Test
     fun doesNotScanUntilStartWatching() = runBlocking {
+        assumePosixScan()
         val runs = AtomicInteger(0)
         val runner = CommandRunner { _, _ ->
             runs.incrementAndGet()
@@ -87,6 +89,7 @@ class DesktopLocalServerServiceTest {
 
     @Test
     fun repeatedScanWithUnchangedPidsSkipsPsAndCwdForks() = runBlocking {
+        assumePosixScan()
         val commands = mutableListOf<List<String>>()
         val runner = CommandRunner { command, _ ->
             commands += command
@@ -127,6 +130,7 @@ class DesktopLocalServerServiceTest {
 
     @Test
     fun ownerAttributionOnlyForksTmuxForLiveChats() = runBlocking {
+        assumePosixScan()
         // p9999 has no matching Andy task/cwd, so attribution is never satisfied and every
         // task in a deep chat history would previously be probed via a tmux fork pair.
         val runner = CommandRunner { command, _ ->
@@ -167,6 +171,7 @@ class DesktopLocalServerServiceTest {
 
     @Test
     fun processInfoWalksGrandparentPids() = runBlocking {
+        assumePosixScan()
         val psPFlags = mutableListOf<String>()
         val runner = CommandRunner { command, _ ->
             when (command.firstOrNull()) {
@@ -206,4 +211,38 @@ class DesktopLocalServerServiceTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun windowsRefreshDoesNotForkAndListsNothing() = runBlocking {
+        assumeTrue("POSIX hosts exercise lsof/ps in the other tests", isWindows())
+        val runs = AtomicInteger(0)
+        val runner = CommandRunner { _, _ ->
+            runs.incrementAndGet()
+            CommandResult.success("")
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val service = DesktopLocalServerService(
+            runner = runner,
+            agentRuns = UnavailableAgentRunService,
+            actionRuns = UnavailableActionRunService,
+            scope = scope,
+        )
+        try {
+            service.refresh()
+            service.startWatching()
+            delay(80)
+            assertEquals(0, runs.get(), "Windows must not fork lsof/ps")
+            assertTrue(service.servers.value.isEmpty())
+        } finally {
+            service.dispose()
+            scope.cancel()
+        }
+    }
+}
+
+private fun isWindows(): Boolean =
+    System.getProperty("os.name").orEmpty().contains("windows", ignoreCase = true)
+
+private fun assumePosixScan() {
+    assumeTrue("lsof/ps local-server scan is POSIX-only", !isWindows())
 }
