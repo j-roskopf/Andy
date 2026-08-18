@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
@@ -628,7 +629,9 @@ private fun AgentChatComposer(
                 branch = state.currentBranch,
                 useWorktree = state.useWorktree,
                 onUseWorktreeChange = { state.useWorktree = it },
-                modifier = Modifier.padding(start = AndySpace.Space4),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AndySpace.Space4),
             )
         }
         ChatComposerFrame(
@@ -1020,6 +1023,7 @@ private fun ComposerBranchWorktreeChip(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
+            Modifier.weight(1f, fill = false),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -1035,6 +1039,9 @@ private fun ComposerBranchWorktreeChip(
                 fontWeight = FontWeight.Medium,
                 fontSize = 12.sp,
                 maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
         }
         Row(
