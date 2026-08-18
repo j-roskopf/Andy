@@ -19,4 +19,15 @@ class LocalModelProbeTest {
         assertTrue(probe.query(workspace).isEmpty())
         assertTrue(probe.reachable(workspace).values.all { reachable -> !reachable })
     }
+
+    @Test
+    fun closedLoopbackPortIsUnreachable() {
+        val probe = LocalModelProbe()
+        val workspace = WorkspaceState(
+            ollamaBaseUrl = "http://127.0.0.1:9/v1",
+            lmStudioBaseUrl = "http://127.0.0.1:9/v1",
+        )
+        assertTrue(probe.query(workspace).isEmpty())
+        assertTrue(probe.reachable(workspace).values.all { reachable -> !reachable })
+    }
 }

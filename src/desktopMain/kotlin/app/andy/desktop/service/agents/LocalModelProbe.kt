@@ -15,7 +15,9 @@ import java.time.Duration
 
 internal class LocalModelProbe(
     private val client: HttpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(2))
+        .connectTimeout(Duration.ofMillis(400))
+        .version(HttpClient.Version.HTTP_1_1)
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
 ) {
     fun query(workspace: WorkspaceState): Map<AgentKind, List<AgentModelOption>> =
@@ -32,7 +34,7 @@ internal class LocalModelProbe(
         runCatching {
             val url = workspace.localModelBaseUrl(backend).trimEnd('/') + "/models"
             val request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(3))
+                .timeout(Duration.ofMillis(800))
                 .header("Accept", "application/json")
                 .GET()
             workspace.localModelBearerToken(backend)?.let { token ->

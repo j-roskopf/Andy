@@ -124,6 +124,8 @@ private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
 private const val PROVIDER_QUOTA_REFRESH_MILLIS = 5 * 60 * 1000L
 /** GUI Settings writes `workspace.properties`; standalone andyd must reload it. */
 private const val LOCAL_MODEL_SETTINGS_POLL_MILLIS = 750L
+/** Shared across run-service instances so parallel tests cannot stampede Dispatchers.IO. */
+private val LocalModelProbeDispatcher = Dispatchers.IO.limitedParallelism(2)
 /**
  * Review/verify agents can look idle on screen before the JSON artifact lands on disk.
  * Production waits this long after process exit; tests inject a short value so missing
@@ -3282,7 +3284,6 @@ class DesktopAgentRunService(
             _localModelBackends.value = emptyMap()
             return
         }
-        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
         val models = withContext(Dispatchers.IO) {
             statuses
                 .mapNotNull { status ->
@@ -3293,12 +3294,28 @@ class DesktopAgentRunService(
                 .filterNotNull()
                 .toMap()
         }
-        val localModels = withContext(Dispatchers.IO) {
+        _providerModels.update { current ->
+            current.filterKeys { !it.isLocalModelBackend } + models
+        }
+        AgentModelCatalog.publishDiscovered(_providerModels.value)
+        // Local HTTP probes must not block CLI refresh or occupy unbounded IO
+        // threads — a closed Ollama/LM Studio port that accepts-then-stalls
+        // used to serialize every DesktopAgentRunService init onto Dispatchers.IO.
+        scope.launch { refreshLocalModelCatalog() }
+    }
+
+    private suspend fun refreshLocalModelCatalog() {
+        if (!enableProbes) {
+            _localModelBackends.value = emptyMap()
+            return
+        }
+        val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
+        val localModels = withContext(LocalModelProbeDispatcher) {
             runCatching { localModelProbe.query(workspace) }.getOrElse { emptyMap() }
         }
         publishLocalModels(localModels)
         _providerModels.update { current ->
-            current.filterKeys { !it.isLocalModelBackend } + models + localModels
+            current.filterKeys { !it.isLocalModelBackend } + localModels
         }
         AgentModelCatalog.publishDiscovered(_providerModels.value)
     }
@@ -3319,18 +3336,7 @@ class DesktopAgentRunService(
                 val key = localModelSettingsKey(workspace)
                 if (key == last) continue
                 last = key
-                if (!enableProbes) {
-                    _localModelBackends.value = emptyMap()
-                    continue
-                }
-                val localModels = withContext(Dispatchers.IO) {
-                    runCatching { localModelProbe.query(workspace) }.getOrElse { emptyMap() }
-                }
-                publishLocalModels(localModels)
-                _providerModels.update { current ->
-                    current.filterKeys { !it.isLocalModelBackend } + localModels
-                }
-                AgentModelCatalog.publishDiscovered(_providerModels.value)
+                refreshLocalModelCatalog()
             }
         }
     }
