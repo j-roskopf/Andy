@@ -144,6 +144,11 @@ internal fun AgentTaskComposerPane(
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
     val scope = rememberCoroutineScope()
+    CollectChatComposerInbox(active = dictationActive) { item ->
+        val (text, images) = applyChatComposerAttachment(form.state.promptValue, form.state.imagePaths, item)
+        form.state.promptValue = text
+        form.state.imagePaths = images
+    }
     LaunchedEffect(projectContext?.id, initialPrompt) {
         if (form.state.promptValue.text.isBlank() && !initialPrompt.isNullOrBlank()) {
             form.state.promptValue = TextFieldValue(

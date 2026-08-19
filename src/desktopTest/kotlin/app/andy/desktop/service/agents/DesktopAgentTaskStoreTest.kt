@@ -127,6 +127,7 @@ class DesktopAgentTaskStoreTest {
             contextWindowTokens = 272_000,
             ownsWorktree = true,
             parentWorktreeTaskId = "task-parent-1",
+            parentChatTaskId = "task-chat-parent",
             workflowTaskId = "build-1",
             workflowStage = ProjectWorkflowStage.Build,
             workflowAttempt = 2,

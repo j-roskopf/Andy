@@ -49,6 +49,7 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
+import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -201,6 +202,21 @@ internal fun ProjectActivityIndicator(size: Dp = 16.dp) {
         color = Cyan,
         animate = true,
         contentDescription = "Working",
+    )
+}
+
+@Composable
+internal fun ChatInboxSectionLabel(
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        label.uppercase(),
+        color = TextSecondary.copy(alpha = 0.72f),
+        fontFamily = MonoFont,
+        fontWeight = FontWeight.Bold,
+        fontSize = 10.sp,
+        modifier = modifier.padding(start = 10.dp, top = 6.dp, bottom = 2.dp),
     )
 }
 

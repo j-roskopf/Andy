@@ -78,6 +78,7 @@ internal fun TerminalPaneTreeView(
     callbacks: TerminalPaneCallbacks,
     modifier: Modifier = Modifier,
     addKindMenu: Boolean = false,
+    showChatInAddMenu: Boolean = true,
 ) {
     val tree = tab.terminalTree ?: return
     TerminalPaneNodeView(
@@ -90,6 +91,7 @@ internal fun TerminalPaneTreeView(
         callbacks = callbacks,
         modifier = modifier,
         addKindMenu = addKindMenu,
+        showChatInAddMenu = showChatInAddMenu,
         showLeafChrome = terminalLeafChromeVisible(tree, dockStripCollapsed = addKindMenu),
     )
 }
@@ -105,6 +107,7 @@ private fun TerminalPaneNodeView(
     callbacks: TerminalPaneCallbacks,
     modifier: Modifier = Modifier,
     addKindMenu: Boolean = false,
+    showChatInAddMenu: Boolean = true,
     showLeafChrome: Boolean,
 ) {
     when (node) {
@@ -117,6 +120,7 @@ private fun TerminalPaneNodeView(
             callbacks = callbacks,
             modifier = modifier,
             addKindMenu = addKindMenu,
+            showChatInAddMenu = showChatInAddMenu,
             showChrome = showLeafChrome,
         )
         is TerminalPaneNode.Split -> TerminalSplitView(
@@ -129,6 +133,7 @@ private fun TerminalPaneNodeView(
             callbacks = callbacks,
             modifier = modifier,
             addKindMenu = addKindMenu,
+            showChatInAddMenu = showChatInAddMenu,
             showLeafChrome = showLeafChrome,
         )
     }
@@ -145,6 +150,7 @@ private fun TerminalSplitView(
     callbacks: TerminalPaneCallbacks,
     modifier: Modifier = Modifier,
     addKindMenu: Boolean = false,
+    showChatInAddMenu: Boolean = true,
     showLeafChrome: Boolean,
 ) {
     // Local weights drive the live drag feel; committed to the tree via onWeightsChanged on
@@ -171,8 +177,17 @@ private fun TerminalSplitView(
                 node.children.forEachIndexed { index, child ->
                     Box(Modifier.weight(weights.getOrElse(index) { 1f }.coerceAtLeast(0.05f))) {
                         TerminalPaneNodeView(
-                            services, child, focusedLeafId, running, terminalBackground, topLevelTabId, callbacks,
-                            Modifier.fillMaxSize(), addKindMenu, showLeafChrome,
+                            services = services,
+                            node = child,
+                            focusedLeafId = focusedLeafId,
+                            running = running,
+                            terminalBackground = terminalBackground,
+                            topLevelTabId = topLevelTabId,
+                            callbacks = callbacks,
+                            modifier = Modifier.fillMaxSize(),
+                            addKindMenu = addKindMenu,
+                            showChatInAddMenu = showChatInAddMenu,
+                            showLeafChrome = showLeafChrome,
                         )
                     }
                     if (index < node.children.lastIndex) {
@@ -187,8 +202,17 @@ private fun TerminalSplitView(
                 node.children.forEachIndexed { index, child ->
                     Box(Modifier.weight(weights.getOrElse(index) { 1f }.coerceAtLeast(0.05f))) {
                         TerminalPaneNodeView(
-                            services, child, focusedLeafId, running, terminalBackground, topLevelTabId, callbacks,
-                            Modifier.fillMaxSize(), addKindMenu, showLeafChrome,
+                            services = services,
+                            node = child,
+                            focusedLeafId = focusedLeafId,
+                            running = running,
+                            terminalBackground = terminalBackground,
+                            topLevelTabId = topLevelTabId,
+                            callbacks = callbacks,
+                            modifier = Modifier.fillMaxSize(),
+                            addKindMenu = addKindMenu,
+                            showChatInAddMenu = showChatInAddMenu,
+                            showLeafChrome = showLeafChrome,
                         )
                     }
                     if (index < node.children.lastIndex) {
@@ -213,6 +237,7 @@ private fun TerminalLeafView(
     callbacks: TerminalPaneCallbacks,
     modifier: Modifier = Modifier,
     addKindMenu: Boolean = false,
+    showChatInAddMenu: Boolean = true,
     showChrome: Boolean,
 ) {
     var addMenuExpanded by remember { mutableStateOf(false) }
@@ -320,6 +345,7 @@ private fun TerminalLeafView(
                         if (kind == DockTabKind.Terminal) callbacks.onAddTab(topLevelTabId, leaf.id)
                         else callbacks.onAddPaneKind(kind)
                     },
+                    showChat = showChatInAddMenu,
                 )
             }
         }

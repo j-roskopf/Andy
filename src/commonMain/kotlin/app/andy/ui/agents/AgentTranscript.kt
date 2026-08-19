@@ -1144,39 +1144,44 @@ private fun ChatImagePreviewDialog(
             dismissOnClickOutside = true,
         ),
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier
-                .widthIn(max = 1100.dp)
-                .heightIn(max = 860.dp)
-                .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Control))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
-                .clickable(onClick = onDismiss)
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-        ) {
-            Text(
-                fileName.ifBlank { "image" },
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Image(
-                bitmap = bitmap,
-                contentDescription = fileName,
+        // Dialogs are a separate window/layout tree. This preview is still composed
+        // under the transcript SelectionContainer, so a mouse press on Text here
+        // crashes desktop Compose: "layouts are not part of the same hierarchy".
+        DisableSelection {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
-                    .widthIn(max = 1060.dp)
-                    .heightIn(max = 780.dp),
-                contentScale = ContentScale.Fit,
-            )
-            Text(
-                "click to close",
-                color = TextSecondary.copy(alpha = 0.8f),
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-            )
+                    .widthIn(max = 1100.dp)
+                    .heightIn(max = 860.dp)
+                    .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Control))
+                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                    .clickable(onClick = onDismiss)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            ) {
+                Text(
+                    fileName.ifBlank { "image" },
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = fileName,
+                    modifier = Modifier
+                        .widthIn(max = 1060.dp)
+                        .heightIn(max = 780.dp),
+                    contentScale = ContentScale.Fit,
+                )
+                Text(
+                    "click to close",
+                    color = TextSecondary.copy(alpha = 0.8f),
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                )
+            }
         }
     }
 }

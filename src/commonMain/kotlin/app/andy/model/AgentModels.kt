@@ -536,6 +536,8 @@ data class AgentTask(
     val ownsWorktree: Boolean = false,
     /** Task id whose worktree branch this task's worktree was forked from. Null for root worktrees and non-worktree tasks. */
     val parentWorktreeTaskId: String? = null,
+    /** Chat this side-chat pane was opened from. Independent of worktree parentage. */
+    val parentChatTaskId: String? = null,
     /** Optional typed project task that launched this raw agent session. */
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
@@ -684,6 +686,8 @@ data class AgentTaskDraft(
     val existingBranchName: String? = null,
     /** When set (and useWorktree = true), the new worktree forks from this task's branch instead of originDir's current HEAD. */
     val baseWorktreeTaskId: String? = null,
+    /** Chat this draft is a side chat of, if launched from a dock Chat pane. */
+    val parentChatTaskId: String? = null,
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
     val workflowAttempt: Int? = null,

@@ -53,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -107,6 +108,8 @@ import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
 import app.andy.model.WorkspaceState
+import app.andy.domain.isPriorityChat
+import app.andy.domain.visibleChatSessions
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
@@ -125,6 +128,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentHeaderAction
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
+import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
 import app.andy.ui.agents.agentStatusColor
 import app.andy.ui.agents.agentStatusLabel
@@ -201,6 +205,7 @@ private fun ProjectCockpit(
     active: Boolean,
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    onViewedTaskChange: (String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val copyText = rememberCopyText()
@@ -396,10 +401,18 @@ private fun ProjectCockpit(
         val taskId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
         if (taskId != null) {
             services.agentRuns.setChatViewing(taskId, viewing = true)
+            onViewedTaskChange(taskId)
         }
         onDispose {
-            if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
+            if (taskId != null) {
+                services.agentRuns.setChatViewing(taskId, viewing = false)
+                onViewedTaskChange(null)
+            }
         }
+    }
+    val viewingChatId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
+    SideEffect {
+        if (viewingChatId != null) onViewedTaskChange(viewingChatId)
     }
     LaunchedEffect(loadedProjectWorkflow?.tasks, selectedWorkflowTaskId) {
         if (selectedWorkflowTaskId != null && loadedProjectWorkflow != null && loadedProjectWorkflow.tasks.none { it.id == selectedWorkflowTaskId }) {
@@ -453,25 +466,36 @@ private fun ProjectCockpit(
                             val archivedSessions = chatLists.archived
                             val viewingArchived = viewingArchivedForProjectId == item.id
                             val sessionsCollapsed = !searchActive && item.id in collapsedProjectIds
+                            val pinPriority = workspaceState.agentPinPriorityChats && !viewingArchived
+                            val sourceSessions = when {
+                                entry.searchSessions != null -> entry.searchSessions
+                                sessionsCollapsed -> emptyList()
+                                viewingArchived -> archivedSessions
+                                else -> sessions
+                            }
+                            val expandedSessions = entry.searchSessions != null ||
+                                viewingArchived ||
+                                expandedProjectSessionsId == item.id
+                            val visibleSessions = visibleChatSessions(
+                                sessions = sourceSessions,
+                                pinPriority = pinPriority,
+                                expanded = expandedSessions,
+                                limit = RecentSessionsPerProject,
+                            )
                             ProjectSessionGroup(
                                 project = item,
                                 selected = item.id == selectedProjectId,
                                 hasUnread = item.id in unreadProjectIds,
                                 chatCount = chatLists.active.size,
-                                sessions = when {
-                                    entry.searchSessions != null -> entry.searchSessions
-                                    sessionsCollapsed -> emptyList()
-                                    viewingArchived -> archivedSessions
-                                    expandedProjectSessionsId == item.id -> sessions
-                                    else -> sessions.take(RecentSessionsPerProject)
-                                },
+                                sessions = visibleSessions,
+                                pinPriority = pinPriority && visibleSessions.any { it.isPriorityChat() },
                                 selectedSessionId = selectedTaskId,
                                 sessionsCollapsed = sessionsCollapsed,
                                 viewingArchived = viewingArchived && entry.searchSessions == null,
                                 archivedCount = archivedSessions.size,
                                 showMore = !searchActive && !sessionsCollapsed && !viewingArchived &&
-                                    sessions.size > RecentSessionsPerProject &&
-                                    expandedProjectSessionsId != item.id,
+                                    expandedProjectSessionsId != item.id &&
+                                    visibleSessions.size < sessions.size,
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
                                         updateCollapsedProjectIds { ids ->
@@ -901,6 +925,7 @@ internal fun ActionsScreen(
     onNotifyTerminalRun: (String) -> Unit = {},
     workspaceState: WorkspaceState = WorkspaceState(),
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit = {},
+    onViewedTaskChange: (String?) -> Unit = {},
 ) {
     if (showIntroduction) {
         ProjectsIntroduction(onComplete = onIntroductionComplete)
@@ -922,6 +947,7 @@ internal fun ActionsScreen(
             active = active,
             workspaceState = workspaceState,
             onUpdateWorkspace = onUpdateWorkspace,
+            onViewedTaskChange = onViewedTaskChange,
         )
     }
 }
@@ -1341,6 +1367,7 @@ private fun ProjectSessionGroup(
     hasUnread: Boolean,
     chatCount: Int,
     sessions: List<AgentTask>,
+    pinPriority: Boolean,
     selectedSessionId: String?,
     sessionsCollapsed: Boolean,
     viewingArchived: Boolean,
@@ -1424,19 +1451,34 @@ private fun ProjectSessionGroup(
                 Modifier.padding(start = AndySpace.Space3),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                sessions.forEach { task ->
-                    ProjectSessionRow(
-                        task = task,
-                        selected = task.id == selectedSessionId,
-                        onOpen = { onOpenSession(task) },
-                        onMarkUnread = { onMarkSessionUnread(task) },
-                        onArchive = {
-                            if (viewingArchived) onUnarchiveSession(task) else onArchiveSession(task)
-                        },
-                        archiveLabel = if (viewingArchived) "Unarchive" else "Archive",
-                        onDelete = { onDeleteSession(task) },
+                val prioritySessions = if (pinPriority) sessions.filter { it.isPriorityChat() } else emptyList()
+                val restSessions = if (pinPriority) sessions.filterNot { it.isPriorityChat() } else sessions
+                if (prioritySessions.isNotEmpty()) {
+                    ChatInboxSectionLabel("Priority")
+                    ProjectSessionRows(
+                        tasks = prioritySessions,
+                        selectedSessionId = selectedSessionId,
+                        viewingArchived = viewingArchived,
+                        onOpenSession = onOpenSession,
+                        onMarkSessionUnread = onMarkSessionUnread,
+                        onArchiveSession = onArchiveSession,
+                        onUnarchiveSession = onUnarchiveSession,
+                        onDeleteSession = onDeleteSession,
                     )
+                    if (restSessions.isNotEmpty()) {
+                        ChatInboxSectionLabel("Recent")
+                    }
                 }
+                ProjectSessionRows(
+                    tasks = restSessions,
+                    selectedSessionId = selectedSessionId,
+                    viewingArchived = viewingArchived,
+                    onOpenSession = onOpenSession,
+                    onMarkSessionUnread = onMarkSessionUnread,
+                    onArchiveSession = onArchiveSession,
+                    onUnarchiveSession = onUnarchiveSession,
+                    onDeleteSession = onDeleteSession,
+                )
                 if (showMore) {
                     Text(
                         "Show all chats",
@@ -1463,6 +1505,32 @@ private fun ProjectSessionGroup(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ProjectSessionRows(
+    tasks: List<AgentTask>,
+    selectedSessionId: String?,
+    viewingArchived: Boolean,
+    onOpenSession: (AgentTask) -> Unit,
+    onMarkSessionUnread: (AgentTask) -> Unit,
+    onArchiveSession: (AgentTask) -> Unit,
+    onUnarchiveSession: (AgentTask) -> Unit,
+    onDeleteSession: (AgentTask) -> Unit,
+) {
+    tasks.forEach { task ->
+        ProjectSessionRow(
+            task = task,
+            selected = task.id == selectedSessionId,
+            onOpen = { onOpenSession(task) },
+            onMarkUnread = { onMarkSessionUnread(task) },
+            onArchive = {
+                if (viewingArchived) onUnarchiveSession(task) else onArchiveSession(task)
+            },
+            archiveLabel = if (viewingArchived) "Unarchive" else "Archive",
+            onDelete = { onDeleteSession(task) },
+        )
     }
 }
 

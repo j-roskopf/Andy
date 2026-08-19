@@ -20,6 +20,9 @@ internal object WkBrowserJni {
         { _, _, _, _, _ -> }
         private set
 
+    @Volatile
+    var onAnnotate: (json: String?, png: ByteArray?) -> Unit = { _, _ -> }
+
     /** Last URL reported by WKWebView; used to skip reload when the surface remounts. */
     @Volatile
     private var currentUrl: String = ""
@@ -95,6 +98,17 @@ internal object WkBrowserJni {
         if (loadResult.isSuccess) runCatching { nativeClose() }
     }
 
+    fun evaluateJavaScript(script: String) {
+        if (!loadResult.isSuccess || script.isBlank()) return
+        runCatching { nativeEvaluateJavaScript(script) }
+    }
+
+    /** Called from native (any thread); must stay public for JNI GetMethodID. */
+    @Suppress("unused")
+    fun onAnnotateFromNative(json: String?, png: ByteArray?) {
+        runCatching { onAnnotate(json, png) }
+    }
+
     /** Called from native (any thread); must stay public for JNI GetMethodID. */
     @Suppress("unused")
     fun onNavStateFromNative(
@@ -152,4 +166,5 @@ internal object WkBrowserJni {
     private external fun nativeGoForward()
     private external fun nativeReload()
     private external fun nativeClose()
+    private external fun nativeEvaluateJavaScript(script: String)
 }

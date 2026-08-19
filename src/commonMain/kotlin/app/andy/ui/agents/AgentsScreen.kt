@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +33,7 @@ import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
+import app.andy.domain.splitPriorityChats
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
@@ -59,6 +61,7 @@ private fun AgentCommandCenter(
     requestedTaskId: String?,
     onRequestedTaskConsumed: () -> Unit,
     workspaceState: WorkspaceState,
+    onViewedTaskChange: (String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val tasks by services.agentRuns.tasks.collectAsState()
@@ -132,17 +135,34 @@ private fun AgentCommandCenter(
             }
             .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
     }
+    val pinPriority = workspaceState.agentPinPriorityChats && !showArchived
+    val groupedInbox = remember(inbox, pinPriority) {
+        if (pinPriority) splitPriorityChats(inbox) else null
+    }
     val selected = tasks.firstOrNull { it.id == selectedTaskId && it.projectId == null && it.archived == showArchived }
         ?: inbox.firstOrNull()
     val activeTasks = inbox.filter { it.isActive }
+    fun openInboxTask(task: AgentTask) {
+        selectedTaskId = task.id
+        composing = false
+        services.agentRuns.setChatViewing(task.id, viewing = true)
+    }
     DisposableEffect(active, selected?.id, composing) {
         val taskId = selected?.id?.takeIf { active && !composing }
         if (taskId != null) {
             services.agentRuns.setChatViewing(taskId, viewing = true)
+            onViewedTaskChange(taskId)
         }
         onDispose {
-            if (taskId != null) services.agentRuns.setChatViewing(taskId, viewing = false)
+            if (taskId != null) {
+                services.agentRuns.setChatViewing(taskId, viewing = false)
+                onViewedTaskChange(null)
+            }
         }
+    }
+    val viewingChatId = selected?.id?.takeIf { active && !composing }
+    SideEffect {
+        if (viewingChatId != null) onViewedTaskChange(viewingChatId)
     }
 
     WorkspaceSplit(
@@ -187,15 +207,36 @@ private fun AgentCommandCenter(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(inbox, key = { it.id }) { task ->
+                    val priority = groupedInbox?.priority.orEmpty()
+                    val rest = groupedInbox?.rest ?: inbox
+                    if (priority.isNotEmpty()) {
+                        item(key = "priority-header", contentType = "section-label") {
+                            ChatInboxSectionLabel("Priority")
+                        }
+                        items(priority, key = { it.id }) { task ->
+                            AgentInboxRow(
+                                task = task,
+                                selected = !composing && task.id == selected?.id,
+                                onClick = { openInboxTask(task) },
+                                onMarkUnread = { services.agentRuns.markUnread(task.id) },
+                                onArchive = {
+                                    services.agentRuns.archive(task.id)
+                                    if (selectedTaskId == task.id) selectedTaskId = null
+                                },
+                                onDelete = ::requestDelete,
+                            )
+                        }
+                    }
+                    if (priority.isNotEmpty() && rest.isNotEmpty()) {
+                        item(key = "recent-header", contentType = "section-label") {
+                            ChatInboxSectionLabel("Recent")
+                        }
+                    }
+                    items(rest, key = { it.id }) { task ->
                         AgentInboxRow(
                             task = task,
                             selected = !composing && task.id == selected?.id,
-                            onClick = {
-                                selectedTaskId = task.id
-                                composing = false
-                                services.agentRuns.setChatViewing(task.id, viewing = true)
-                            },
+                            onClick = { openInboxTask(task) },
                             onMarkUnread = { services.agentRuns.markUnread(task.id) },
                             onArchive = if (showArchived) {
                                 { services.agentRuns.unarchive(task.id) }
@@ -268,8 +309,9 @@ internal fun AgentsScreen(
     requestedTaskId: String? = null,
     onRequestedTaskConsumed: () -> Unit = {},
     workspaceState: WorkspaceState = WorkspaceState(),
+    onViewedTaskChange: (String?) -> Unit = {},
 ) {
-    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, workspaceState)
+    AgentCommandCenter(services, active, requestedTaskId, onRequestedTaskConsumed, workspaceState, onViewedTaskChange)
 }
 
 @Composable

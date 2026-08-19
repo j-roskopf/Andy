@@ -39,6 +39,9 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(messaging)
         assertEquals(AgentMessageDeliveryMode.Queue, DesktopWorkspaceStore(file).load().agentMessageDeliveryMode)
 
+        DesktopWorkspaceStore(file).save(saved.copy(agentPinPriorityChats = true))
+        assertEquals(true, DesktopWorkspaceStore(file).load().agentPinPriorityChats)
+
         val retention = saved.copy(
             retentionCleanupEnabled = false,
             retentionCompressArchiveAfterDays = 12,

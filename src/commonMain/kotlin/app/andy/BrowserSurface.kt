@@ -46,6 +46,9 @@ internal expect fun rememberBrowserEngineState(): BrowserEngineState
  */
 internal expect fun resignEmbeddedBrowserKey()
 
+/** Give the embedded WKWebView key-window status. No-op off macOS. */
+internal expect fun focusEmbeddedBrowser()
+
 /**
  * Tear down the process-wide embedded browser (WKWebView). Call when the last Browser
  * dock tab is closed; hiding a pane or switching tabs must not destroy it or the page

@@ -31,4 +31,6 @@ internal actual fun rememberBrowserEngineState(): BrowserEngineState =
 
 internal actual fun resignEmbeddedBrowserKey() = Unit
 
+internal actual fun focusEmbeddedBrowser() = Unit
+
 internal actual fun closeEmbeddedBrowser() = Unit

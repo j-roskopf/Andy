@@ -1114,6 +1114,7 @@ class DesktopAgentRunService(
                 maxBudgetUsd = draft.maxBudgetUsd,
                 contextBundleIds = draft.contextBundleIds,
                 provenance = draft.provenance,
+                parentChatTaskId = draft.parentChatTaskId,
                 status = AgentStatus.Error,
                 errorMessage = message,
                 lane = draft.lane ?: preferredLane(draft.runtimeKind()),
@@ -1176,6 +1177,7 @@ class DesktopAgentRunService(
                 maxBudgetUsd = draft.maxBudgetUsd,
                 contextBundleIds = draft.contextBundleIds,
                 provenance = draft.provenance,
+                parentChatTaskId = draft.parentChatTaskId,
                 status = AgentStatus.Error,
                 errorMessage = "existing worktree path is missing or not a directory",
                 vendorSessionId = null,
@@ -1221,6 +1223,7 @@ class DesktopAgentRunService(
             maxBudgetUsd = draft.maxBudgetUsd,
             contextBundleIds = draft.contextBundleIds,
             provenance = draft.provenance,
+            parentChatTaskId = draft.parentChatTaskId,
             status = null,
             vendorSessionId = null,
             lane = draft.lane ?: preferredLane(draft.runtimeKind()),
@@ -3085,8 +3088,10 @@ class DesktopAgentRunService(
             list.mapNotNull { existing ->
                 when {
                     existing.id == taskId -> null
-                    existing.parentWorktreeTaskId == taskId -> existing.copy(parentWorktreeTaskId = null)
-                    else -> existing
+                    else -> existing.copy(
+                        parentWorktreeTaskId = existing.parentWorktreeTaskId.takeUnless { it == taskId },
+                        parentChatTaskId = existing.parentChatTaskId.takeUnless { it == taskId },
+                    )
                 }
             }
         }

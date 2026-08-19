@@ -134,6 +134,8 @@ data class WorkspaceState(
     val agentTranscriptCollapseActivityBlocks: Boolean = false,
     /** When [AgentMessageDeliveryMode.Queue], follow-ups wait in a queue until the current run finishes. */
     val agentMessageDeliveryMode: AgentMessageDeliveryMode = AgentMessageDeliveryMode.Immediate,
+    /** Pin working, blocked, unread, and failed chats in a separate section at the top of chat lists. */
+    val agentPinPriorityChats: Boolean = false,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
     /** Project ids whose chat lists are collapsed in the Projects sidebar. */

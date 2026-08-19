@@ -201,6 +201,11 @@ internal fun AgentTaskDetail(
     }
     var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
+    CollectChatComposerInbox(active = dictationActive) { item ->
+        val (text, images) = applyChatComposerAttachment(followUpValue, followUpImagePaths, item)
+        followUpValue = text
+        followUpImagePaths = images
+    }
     var voiceError by remember(task.id) { mutableStateOf<String?>(null) }
     val voiceController = rememberVoiceDictationController(
         voice = services.voiceDictation,
