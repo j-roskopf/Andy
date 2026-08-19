@@ -324,8 +324,21 @@ class ShellDocksTest {
         val pane = DockPane().withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
         val hidden = pane.forDisplay(showChat = false)
         assertFalse(hidden.visible)
+        assertTrue(hidden.tabs.isEmpty())
         assertTrue(pane.visible)
         assertEquals(1, pane.tabs.size)
+    }
+
+    @Test
+    fun placementIconOpensLandingWhenChatOnlyPaneIsOffstage() {
+        val docks = ShellDocks(
+            right = DockPane().withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a")),
+        )
+        val next = docks.onPlacementIconClick(DockPlacement.Right, showChat = false)
+        assertEquals(DockPlacement.Right, next.landingFor)
+        assertTrue(next.right.visible)
+        assertEquals(1, next.right.tabs.size)
+        assertEquals(DockTabKind.Chat, next.right.tabs.single().kind)
     }
 
     @Test

@@ -268,7 +268,7 @@ internal data class DockPane(
         if (showChat) return this
         val remaining = tabs.filter { it.kind != DockTabKind.Chat }
         if (remaining.size == tabs.size) return this
-        if (remaining.isEmpty()) return copy(visible = false)
+        if (remaining.isEmpty()) return DockPane()
         val nextActive = remaining.firstOrNull { it.id == activeTabId }?.id ?: remaining.last().id
         return copy(tabs = remaining, activeTabId = nextActive)
     }
@@ -289,11 +289,13 @@ internal data class ShellDocks(
     }
 
     /**
-     * Right/bottom chrome button: hide if open, show if it already has tabs,
-     * otherwise toggle the Live / Terminal / Browser / Chat landing chooser.
+     * Right/bottom chrome button: hide if the displayed pane is open, show if it
+     * already has visible tabs, otherwise toggle the Live / Terminal / Browser / Chat
+     * landing chooser. [showChat] matches destination chrome so chat-only panes
+     * off Agents/Projects still open the chooser.
      */
-    fun onPlacementIconClick(placement: DockPlacement): ShellDocks {
-        val pane = pane(placement)
+    fun onPlacementIconClick(placement: DockPlacement, showChat: Boolean = true): ShellDocks {
+        val pane = pane(placement).forDisplay(showChat)
         return when {
             pane.visible -> update(placement) { it.hide() }
             pane.tabs.isNotEmpty() -> update(placement) { it.copy(visible = true) }

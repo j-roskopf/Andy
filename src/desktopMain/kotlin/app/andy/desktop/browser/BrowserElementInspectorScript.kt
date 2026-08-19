@@ -248,6 +248,12 @@ internal const val BROWSER_ELEMENT_INSPECTOR_SCRIPT: String = """
     placeHighlight(el);
   }
 
+  function consume(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+  }
+
   function onClick(ev) {
     if (!state.enabled) return;
     if (state.composing) {
@@ -255,13 +261,12 @@ internal const val BROWSER_ELEMENT_INSPECTOR_SCRIPT: String = """
       for (var i = 0; i < path.length; i++) {
         if (path[i] && path[i].id === 'form') return;
       }
+      consume(ev);
       return;
     }
     var el = pickFromPoint(ev.clientX, ev.clientY);
     if (!el) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    ev.stopImmediatePropagation();
+    consume(ev);
     showForm(el);
   }
 

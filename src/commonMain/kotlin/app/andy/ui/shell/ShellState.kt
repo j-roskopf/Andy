@@ -296,7 +296,7 @@ internal class ShellState(
      * otherwise show the landing chooser (empty pane).
      */
     fun onPlacementIconClick(placement: DockPlacement) {
-        docks = docks.onPlacementIconClick(placement)
+        docks = docks.onPlacementIconClick(placement, destination.showsSideChat)
     }
 
     fun dismissDockLanding() {

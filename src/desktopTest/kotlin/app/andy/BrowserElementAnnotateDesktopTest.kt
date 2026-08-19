@@ -1,9 +1,11 @@
 package app.andy
 
+import app.andy.desktop.browser.BROWSER_ELEMENT_INSPECTOR_SCRIPT
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BrowserElementAnnotateDesktopTest {
     @Test
@@ -38,5 +40,13 @@ class BrowserElementAnnotateDesktopTest {
         assertEquals(517, submitted.annotation.width)
         assertEquals(58, submitted.annotation.height)
         assertNull(submitted.annotation.imagePath)
+    }
+
+    @Test
+    fun inspectorScriptConsumesClicksOutsideFormWhileComposing() {
+        val composingBranch = BROWSER_ELEMENT_INSPECTOR_SCRIPT
+            .substringAfter("if (state.composing)")
+            .substringBefore("var el = pickFromPoint")
+        assertTrue(composingBranch.contains("consume(ev)"))
     }
 }
