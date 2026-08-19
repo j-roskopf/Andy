@@ -92,6 +92,8 @@ fun nextScheduleOccurrence(
         is AutomationSchedule.Once ->
             if (lastFiredAtMillis != null) {
                 null
+            } else if (schedule.atMillis > 0L) {
+                schedule.atMillis
             } else {
                 nextMatchingDay(from, hour, minute) { true }
             }

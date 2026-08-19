@@ -220,6 +220,8 @@ class DesktopAutomationService(
                 val after = agentRuns.tasks.value.firstOrNull { it.id == finished.id }
                 val text = after?.completedResultText.orEmpty()
                 stopWhenYes = parseAndyStopTag(text) == true
+                // Evaluator follow-up is over; later work turns on this chat must notify again.
+                agentRuns.updateAutomationNotifySuppress(finished.id, false)
             }
             if (!workFailed &&
                 latest.mode == AutomationMode.Standalone &&
@@ -238,7 +240,7 @@ class DesktopAutomationService(
                     AutomationMode.Standalone -> current.boundTaskId
                 }
                 val onceDone = current.schedule is AutomationSchedule.Once
-                val paused = policy.paused || onceDone
+                val paused = current.paused || policy.paused || onceDone
                 val pauseReason = when {
                     policy.pauseReason != null -> policy.pauseReason
                     onceDone -> "Completed one-time run"
@@ -282,14 +284,25 @@ class DesktopAutomationService(
         } catch (error: Throwable) {
             mutex.withLock {
                 val current = _automations.value.firstOrNull { it.id == automation.id } ?: return@withLock
+                val now = nowMillis()
                 val policy = applyAutomationWorkOutcome(current, workFailed = true, stopWhenYes = false)
+                val onceDone = current.schedule is AutomationSchedule.Once
+                val paused = current.paused || policy.paused || onceDone
+                val updated = current.copy(
+                    paused = paused,
+                    pauseReason = error.message ?: policy.pauseReason ?: current.pauseReason,
+                    consecutiveFailures = policy.consecutiveFailures,
+                    fireCount = policy.fireCount,
+                    lastFiredAtMillis = now,
+                    updatedAtMillis = now,
+                )
                 upsert(
-                    current.copy(
-                        paused = policy.paused,
-                        pauseReason = error.message ?: policy.pauseReason,
-                        consecutiveFailures = policy.consecutiveFailures,
-                        fireCount = policy.fireCount,
-                        updatedAtMillis = nowMillis(),
+                    updated.copy(
+                        nextRunAtMillis = if (paused) {
+                            null
+                        } else {
+                            computeNext(updated, now, catchUp = false)
+                        },
                     ),
                 )
             }

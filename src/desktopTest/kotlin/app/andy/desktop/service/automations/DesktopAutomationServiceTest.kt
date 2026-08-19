@@ -8,6 +8,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AutomationDraft
 import app.andy.model.AutomationLaunchSnapshot
+import app.andy.model.AutomationFailurePolicy
 import app.andy.model.AutomationMode
 import app.andy.model.AutomationNotify
 import app.andy.model.AutomationSchedule
@@ -144,7 +145,33 @@ class DesktopAutomationServiceTest {
             assertEquals("Stop condition met", ran.pauseReason)
             assertEquals("stop_yes", ran.runs.single().outcome)
             assertTrue(fake.resumeCalls.single().second.contains("the PR is merged"))
-            assertEquals(true, fake.notifySuppress.last())
+            assertEquals(listOf(true, false), fake.notifySuppress)
+        }
+    }
+
+    @Test
+    fun stopWhenNoClearsNotifySuppressForLaterTurns() = runBlocking {
+        withService { service, fake, _ ->
+            fake.evaluatorReply = "Still open\nANDY_STOP=NO"
+            val created = service.create(
+                sampleDraft(mode = AutomationMode.Dedicated, stopWhen = "the PR is merged"),
+                arm = true,
+            )
+            val ran = service.runNow(created.id)
+            assertEquals(false, ran.paused)
+            assertEquals(listOf(true, false), fake.notifySuppress)
+        }
+    }
+
+    @Test
+    fun runNowOnPausedAutomationStaysPaused() = runBlocking {
+        withService { service, _, _ ->
+            val created = service.create(sampleDraft(), arm = false)
+            assertTrue(created.paused)
+            val ran = service.runNow(created.id)
+            assertTrue(ran.paused)
+            assertEquals("Paused until resume", ran.pauseReason)
+            assertNull(ran.nextRunAtMillis)
         }
     }
 
@@ -219,6 +246,55 @@ class DesktopAutomationServiceTest {
     }
 
     @Test
+    fun dispatchFailureAdvancesNextRunInsteadOfHotLooping() = runBlocking {
+        val dir = File.createTempFile("andy-auto-fail", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+        val now = 50_000_000L
+        store.saveAutomation(
+            app.andy.model.Automation(
+                id = "due-fail",
+                projectId = "garden",
+                title = "Due",
+                prompt = "look",
+                schedule = AutomationSchedule.Daily,
+                timeZone = "UTC",
+                launch = AutomationLaunchSnapshot(agent = AgentKind.Codex.name),
+                failurePolicy = AutomationFailurePolicy.KeepRunning,
+                paused = false,
+                createdAtMillis = 1,
+                updatedAtMillis = 1,
+                nextRunAtMillis = now,
+            ),
+        )
+        val fake = FakeAutomationAgentRuns().also { it.failStart = true }
+        val service = DesktopAutomationService(
+            store = store,
+            agentRuns = fake,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            startScheduler = true,
+            nowMillis = { now },
+        )
+        try {
+            withTimeout(2_000) {
+                while (fake.startCalls.isEmpty()) delay(10)
+            }
+            delay(150)
+            val latest = service.automations.value.single()
+            assertEquals(1, fake.startCalls.size)
+            assertEquals(1, latest.consecutiveFailures)
+            assertEquals(false, latest.paused)
+            assertNotNull(latest.nextRunAtMillis)
+            assertTrue(latest.nextRunAtMillis!! > now)
+        } finally {
+            service.stop()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun idleSchedulerDoesNotStartWorkWhenNothingIsArmed() = runBlocking {
         withService(startScheduler = true) { _, fake, _ ->
             delay(150)
@@ -285,6 +361,7 @@ private class FakeAutomationAgentRuns : AgentRunService by UnavailableAgentRunSe
     val cleanedWorktrees = mutableListOf<String>()
     val notifySuppress = mutableListOf<Boolean>()
     var evaluatorReply: String? = null
+    var failStart = false
     private var seq = 0
 
     fun seed(task: AgentTask) {
@@ -300,6 +377,7 @@ private class FakeAutomationAgentRuns : AgentRunService by UnavailableAgentRunSe
 
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
         startCalls += draft
+        if (failStart) error("launch failed")
         seq += 1
         val task = AgentTask(
             id = "task-$seq",

@@ -58,11 +58,27 @@ class AutomationScheduleMathTest {
     }
 
     @Test
-    fun onceUsesNextWallClockInZone() {
+    fun onceHonorsExplicitTimestamp() {
+        val from = ZonedDateTime.of(2026, 8, 19, 15, 23, 3, 0, java.time.ZoneId.of("America/Chicago"))
+            .toInstant().toEpochMilli()
+        val at = from + 7L * 24L * 60L * 60L * 1000L
+        val next = nextScheduleOccurrence(
+            schedule = AutomationSchedule.Once(at),
+            timeZone = "Central",
+            runHour = 15,
+            runMinute = 30,
+            fromExclusiveMillis = from,
+            lastFiredAtMillis = null,
+        )
+        assertEquals(at, next)
+    }
+
+    @Test
+    fun onceUsesNextWallClockWhenTimestampIsUnset() {
         val from = ZonedDateTime.of(2026, 8, 19, 15, 23, 3, 0, java.time.ZoneId.of("America/Chicago"))
             .toInstant().toEpochMilli()
         val next = nextScheduleOccurrence(
-            schedule = AutomationSchedule.Once(from + 60_000),
+            schedule = AutomationSchedule.Once(0L),
             timeZone = "Central",
             runHour = 15,
             runMinute = 30,
