@@ -5230,9 +5230,11 @@ class DesktopAgentRunService(
                     status = snapshot.status,
                     statusConfident = snapshot.confident,
                     // Live Working/Blocked means the turn is not finished anymore.
+                    // Done/Error scrapes must not stamp finishedAtMillis — finishTask
+                    // owns that so completedChanges still get captured.
                     finishedAtMillis = when (snapshot.status) {
                         AgentStatus.Working, AgentStatus.Blocked -> null
-                        AgentStatus.Done, AgentStatus.Error -> it.finishedAtMillis ?: System.currentTimeMillis()
+                        else -> it.finishedAtMillis
                     },
                     resumable = if (clearResumable) false else it.resumable,
                 )
@@ -5336,6 +5338,8 @@ class DesktopAgentRunService(
                     completedChanges = completedChanges ?: task.completedChanges,
                     completedPlanText = completedPlanText,
                 )
+            } else if (completedChanges != null && task.completedChanges == null) {
+                task.copy(completedChanges = completedChanges)
             } else {
                 task
             }
