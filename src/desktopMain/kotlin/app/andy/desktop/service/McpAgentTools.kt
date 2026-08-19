@@ -172,6 +172,7 @@ fun Server.registerAgentProjectTools(
                         put("branchName", task.branchName.orEmpty())
                         put("ownsWorktree", task.ownsWorktree)
                         put("parentWorktreeTaskId", task.parentWorktreeTaskId.orEmpty())
+                        put("parentChatTaskId", task.parentChatTaskId.orEmpty())
                         put("attachAndyMcp", task.attachAndyMcp)
                         put("autonomy", task.autonomy.name)
                         put("model", task.model.orEmpty())
@@ -462,6 +463,10 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "Optional Andy task id whose worktree branch to fork from")
             },
+            "parentChatTaskId" to buildJsonObject {
+                put("type", "string")
+                put("description", "Optional Andy task id of the chat this side chat is opened from")
+            },
             "attachAndyMcp" to buildJsonObject {
                 put("type", "boolean")
                 put(
@@ -567,6 +572,7 @@ fun Server.registerAgentProjectTools(
                 useWorktree = useWorktree,
                 existingWorktreePath = existingWorktreePath,
                 baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
+                parentChatTaskId = str(args, "parentChatTaskId")?.takeIf { it.isNotBlank() },
                 attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
                 model = model,

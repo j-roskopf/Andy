@@ -1,7 +1,11 @@
 package app.andy.ui.shell
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,14 +20,18 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -37,12 +45,21 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.BrowserElementAnnotateEvent
 import app.andy.BrowserEngineStage
 import app.andy.BrowserEngineState
 import app.andy.BrowserSurface
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.browser_select_element
+import app.andy.focusEmbeddedBrowser
+import app.andy.formatBrowserElementAnnotation
+import app.andy.observeBrowserElementAnnotations
 import app.andy.rememberBrowserEngineState
 import app.andy.resignEmbeddedBrowserKey
+import app.andy.setBrowserElementInspectEnabled
 import app.andy.service.AndyServices
+import app.andy.ui.agents.ChatComposerAttachment
+import app.andy.ui.agents.LocalChatComposerInbox
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.TextField
 import app.andy.ui.theme.AndyColors
@@ -56,6 +73,7 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
 
 /**
  * Address bar + [BrowserSurface] for one Browser dock tab. Owns the URL text field and a local
@@ -77,12 +95,53 @@ internal fun BrowserPaneView(
         MutableSharedFlow<BrowserNavCommand>(extraBufferCapacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     }
     var addressText by remember(state.url) { mutableStateOf(state.url) }
+    var inspectEnabled by remember { mutableStateOf(false) }
+    var inspectHintVisible by remember { mutableStateOf(false) }
+    val composerInbox = LocalChatComposerInbox.current
+    val latestInbox = rememberUpdatedState(composerInbox)
     // Starts the (possibly one-time, per-machine) engine download/init as soon as a Browser
     // tab is open, not lazily on first navigation — so its progress is visible immediately
     // and the address bar can stay disabled until it's actually safe to load a page into.
     val engineState = rememberBrowserEngineState()
     val engineReady = engineState is BrowserEngineState.Ready
     val bottomCornerRadiusPx = with(LocalDensity.current) { AndyRadius.Sheet.toPx() }
+    val canInspect = engineReady && state.url.isNotBlank()
+
+    DisposableEffect(Unit) {
+        val unregister = observeBrowserElementAnnotations { event ->
+            when (event) {
+                BrowserElementAnnotateEvent.Cancelled -> {
+                    inspectEnabled = false
+                    setBrowserElementInspectEnabled(false)
+                }
+                is BrowserElementAnnotateEvent.Submitted -> {
+                    inspectEnabled = false
+                    setBrowserElementInspectEnabled(false)
+                    latestInbox.value.offer(
+                        ChatComposerAttachment(
+                            imagePaths = listOfNotNull(event.annotation.imagePath),
+                            text = formatBrowserElementAnnotation(event.annotation),
+                        ),
+                    )
+                }
+            }
+        }
+        onDispose {
+            unregister()
+            setBrowserElementInspectEnabled(false)
+        }
+    }
+    LaunchedEffect(canInspect) {
+        if (!canInspect) inspectEnabled = false
+    }
+    LaunchedEffect(inspectEnabled, canInspect, state.loading, state.url) {
+        if (inspectEnabled && canInspect && !state.loading) {
+            setBrowserElementInspectEnabled(true)
+            focusEmbeddedBrowser()
+        } else if (!inspectEnabled) {
+            setBrowserElementInspectEnabled(false)
+        }
+    }
 
     fun markLoading(url: String = state.url) {
         onNavStateChanged(state.title, url, state.canGoBack, state.canGoForward, true)
@@ -185,6 +244,42 @@ internal fun BrowserPaneView(
                         }
                     },
             )
+            BrowserSelectElementButton(
+                enabled = canInspect,
+                selected = inspectEnabled,
+                onHoverChange = { inspectHintVisible = it },
+                onClick = {
+                    if (!canInspect) return@BrowserSelectElementButton
+                    val next = !inspectEnabled
+                    inspectEnabled = next
+                    if (next) {
+                        setBrowserElementInspectEnabled(true)
+                        focusEmbeddedBrowser()
+                    } else {
+                        setBrowserElementInspectEnabled(false)
+                        resignEmbeddedBrowserKey()
+                    }
+                },
+            )
+        }
+        if (inspectHintVisible) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(AndyColors.SurfaceRaised)
+                    .padding(start = AndySpace.Space4, end = AndySpace.Space4, bottom = AndySpace.Space2),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Text(
+                    "Select an element to annotate",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .background(AndyColors.Neutral900, RoundedCornerShape(999.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
         Box(
             Modifier
@@ -265,6 +360,55 @@ private fun BrowserBarGlyphButton(
             color = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.4f),
             fontFamily = MonoFont,
             fontSize = 15.sp,
+        )
+    }
+}
+
+@Composable
+private fun BrowserSelectElementButton(
+    enabled: Boolean,
+    selected: Boolean,
+    onHoverChange: (Boolean) -> Unit,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    DisposableEffect(hovered, enabled) {
+        onHoverChange(hovered && enabled)
+        onDispose { onHoverChange(false) }
+    }
+    val fill = when {
+        !enabled -> Color.Transparent
+        selected || hovered -> if (AndyColors.isLight) {
+            Color.Black.copy(alpha = 0.08f)
+        } else {
+            Color.White.copy(alpha = 0.10f)
+        }
+        else -> Color.Transparent
+    }
+    Box(
+        Modifier
+            .size(28.dp)
+            .background(fill, RoundedCornerShape(6.dp))
+            .semantics {
+                contentDescription = "Select an element to annotate"
+                role = Role.Button
+            }
+            .hoverable(interactionSource, enabled = enabled)
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painter = painterResource(Res.drawable.browser_select_element),
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            colorFilter = ColorFilter.tint(
+                when {
+                    !enabled -> TextSecondary.copy(alpha = 0.4f)
+                    selected -> TextPrimary
+                    else -> TextPrimary.copy(alpha = 0.82f)
+                },
+            ),
         )
     }
 }

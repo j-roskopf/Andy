@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
+import app.andy.showsSideChat
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
@@ -308,6 +309,7 @@ internal fun TopChrome(
                         onOpenDockKind(placement, kind)
                         closeFlyout()
                     },
+                    showChat = destination.showsSideChat,
                 )
                 null -> Unit
             }

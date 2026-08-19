@@ -249,4 +249,106 @@ class ShellDocksTest {
         assertEquals(DockPlacement.Bottom, shown.landingFor)
         assertFalse(shown.bottom.visible)
     }
+
+    @Test
+    fun chatTabsAreIndependentNotSingleton() {
+        val pane = DockPane()
+            .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+            .withTab(DockTab.chat("chat-2", parentChatTaskId = "parent-a"))
+        assertEquals(2, pane.tabs.count { it.kind == DockTabKind.Chat })
+        assertEquals("chat-2", pane.activeTabId)
+    }
+
+    @Test
+    fun reopeningSameChatTabIdSelectsInPlace() {
+        val pane = DockPane()
+            .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+            .withTab(DockTab.logs())
+            .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+        assertEquals(2, pane.tabs.size)
+        assertEquals("chat-1", pane.activeTabId)
+    }
+
+    @Test
+    fun existingChatTabForParentPrefersVisibleMatch() {
+        val docks = ShellDocks(
+            right = DockPane().withTab(DockTab.chat("chat-right", parentChatTaskId = "parent-a")),
+            bottom = DockPane().withTab(DockTab.chat("chat-bottom", parentChatTaskId = "parent-a")),
+        )
+        assertEquals(DockPlacement.Right to "chat-right", docks.existingChatTabForParent("parent-a"))
+    }
+
+    @Test
+    fun existingChatTabForParentFindsHiddenTab() {
+        val docks = ShellDocks(
+            right = DockPane().withTab(DockTab.chat("chat-hidden", parentChatTaskId = "parent-a")).hide(),
+            bottom = DockPane().withTab(DockTab.logs()),
+        )
+        assertEquals(DockPlacement.Right to "chat-hidden", docks.existingChatTabForParent("parent-a"))
+    }
+
+    @Test
+    fun existingChatTabForParentIsNullWhenNoneOpen() {
+        val docks = ShellDocks(right = DockPane().withTab(DockTab.logs()))
+        assertNull(docks.existingChatTabForParent("parent-a"))
+    }
+
+    @Test
+    fun updateTabSetsAgentTaskId() {
+        val pane = DockPane()
+            .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+            .updateTab("chat-1") { it.copy(agentTaskId = "child-1") }
+        assertEquals("child-1", pane.tabs.single().agentTaskId)
+    }
+
+    @Test
+    fun bindUnstartedSideChatsFollowsTheViewedChat() {
+        val pane = DockPane()
+            .withTab(DockTab.chat("chat-1"))
+            .bindUnstartedSideChats("parent-a", "Side · Alpha")
+        assertEquals("parent-a", pane.tabs.single().parentChatTaskId)
+        assertEquals("Side · Alpha", pane.tabs.single().title)
+    }
+
+    @Test
+    fun bindUnstartedSideChatsDoesNotRetargetAStartedChat() {
+        val pane = DockPane()
+            .withTab(DockTab.chat("chat-1", agentTaskId = "child-1", parentChatTaskId = "parent-a"))
+            .bindUnstartedSideChats("parent-b", "Side · Beta")
+        assertEquals("parent-a", pane.tabs.single().parentChatTaskId)
+        assertEquals("child-1", pane.tabs.single().agentTaskId)
+    }
+
+    @Test
+    fun forDisplayHidesChatOnlyPaneWhenChatIsOffstage() {
+        val pane = DockPane().withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+        val hidden = pane.forDisplay(showChat = false)
+        assertFalse(hidden.visible)
+        assertTrue(hidden.tabs.isEmpty())
+        assertTrue(pane.visible)
+        assertEquals(1, pane.tabs.size)
+    }
+
+    @Test
+    fun placementIconOpensLandingWhenChatOnlyPaneIsOffstage() {
+        val docks = ShellDocks(
+            right = DockPane().withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a")),
+        )
+        val next = docks.onPlacementIconClick(DockPlacement.Right, showChat = false)
+        assertEquals(DockPlacement.Right, next.landingFor)
+        assertTrue(next.right.visible)
+        assertEquals(1, next.right.tabs.size)
+        assertEquals(DockTabKind.Chat, next.right.tabs.single().kind)
+    }
+
+    @Test
+    fun forDisplayKeepsOtherTabsWhenChatIsOffstage() {
+        val pane = DockPane()
+            .withTab(DockTab.logs())
+            .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
+        val shown = pane.forDisplay(showChat = false)
+        assertTrue(shown.visible)
+        assertEquals(listOf(DockTabKind.Logs), shown.tabs.map { it.kind })
+        assertEquals("logs", shown.activeTabId)
+    }
 }

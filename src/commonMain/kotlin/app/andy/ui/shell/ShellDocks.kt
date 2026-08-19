@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +51,7 @@ import app.andy.model.ActionRunStatus
 import app.andy.model.AndroidDevice
 import app.andy.model.RunningAction
 import app.andy.model.TerminalThemePreset
+import app.andy.model.WorkspaceState
 import app.andy.model.palette
 import app.andy.resignEmbeddedBrowserKey
 import app.andy.service.AndyServices
@@ -85,7 +87,7 @@ private val DockContentCornerInset = AndySpace.Space2
 private enum class PaneToggleEdge { Left, Right, Bottom }
 
 /** Kind of surface shown inside a dock tab. */
-internal enum class DockTabKind { Live, Terminal, Logs, Browser }
+internal enum class DockTabKind { Live, Terminal, Logs, Browser, Chat }
 
 /**
  * One tab inside a right/bottom dock pane. A Terminal-kind tab is itself a whole split
@@ -100,6 +102,10 @@ internal data class DockTab(
     val title: String? = null,
     val terminalTree: TerminalPaneNode? = null,
     val focusedTerminalLeafId: String? = null,
+    /** Child [app.andy.model.AgentTask] shown in a Chat dock tab, once started. */
+    val agentTaskId: String? = null,
+    /** Parent chat the side-chat tab was opened against. */
+    val parentChatTaskId: String? = null,
 ) {
     companion object {
         fun live(title: String? = null): DockTab =
@@ -114,6 +120,19 @@ internal data class DockTab(
         /** A Browser dock tab. WKWebView is process-wide, so the shell keeps at most one. */
         fun browser(id: String, title: String? = null): DockTab =
             DockTab(id = id, kind = DockTabKind.Browser, title = title)
+        /** A side-chat dock tab. Multiple can coexist; they merge only on an exact id match. */
+        fun chat(
+            id: String,
+            agentTaskId: String? = null,
+            parentChatTaskId: String? = null,
+            title: String? = null,
+        ): DockTab = DockTab(
+            id = id,
+            kind = DockTabKind.Chat,
+            title = title,
+            agentTaskId = agentTaskId,
+            parentChatTaskId = parentChatTaskId,
+        )
     }
 }
 
@@ -148,7 +167,7 @@ internal data class DockPane(
         // workspaces are independent and merge only on an exact id match.
         val existing = when (tab.kind) {
             DockTabKind.Live, DockTabKind.Logs, DockTabKind.Browser -> tabs.firstOrNull { it.kind == tab.kind }
-            DockTabKind.Terminal -> tabs.firstOrNull { it.id == tab.id }
+            DockTabKind.Terminal, DockTabKind.Chat -> tabs.firstOrNull { it.id == tab.id }
         }
         return if (existing != null) {
             copy(visible = true, activeTabId = existing.id)
@@ -176,6 +195,11 @@ internal data class DockPane(
         val normalized = title.trim().takeIf { it.isNotEmpty() } ?: return this
         if (tabs.none { it.id == tabId }) return this
         return copy(tabs = tabs.map { tab -> if (tab.id == tabId) tab.copy(title = normalized) else tab })
+    }
+
+    fun updateTab(tabId: String, transform: (DockTab) -> DockTab): DockPane {
+        if (tabs.none { it.id == tabId }) return this
+        return copy(tabs = tabs.map { tab -> if (tab.id == tabId) transform(tab) else tab })
     }
 
     fun hide(): DockPane = copy(visible = false)
@@ -218,11 +242,41 @@ internal data class DockPane(
         }
         return copy(tabs = remaining, activeTabId = nextActive)
     }
+
+    /**
+     * Unstarted side-chat tabs follow the chat currently on screen so opening the pane
+     * before selecting a session still binds once one is.
+     */
+    fun bindUnstartedSideChats(parentId: String, title: String): DockPane {
+        var changed = false
+        val next = tabs.map { tab ->
+            if (tab.kind == DockTabKind.Chat && tab.agentTaskId == null && tab.parentChatTaskId != parentId) {
+                changed = true
+                tab.copy(parentChatTaskId = parentId, title = title)
+            } else {
+                tab
+            }
+        }
+        return if (changed) copy(tabs = next) else this
+    }
+
+    /**
+     * Chat tabs are companions to Agents/Projects. Off those destinations they drop out of
+     * the visible strip; [visible] is false when that would leave the pane empty.
+     */
+    fun forDisplay(showChat: Boolean): DockPane {
+        if (showChat) return this
+        val remaining = tabs.filter { it.kind != DockTabKind.Chat }
+        if (remaining.size == tabs.size) return this
+        if (remaining.isEmpty()) return DockPane()
+        val nextActive = remaining.firstOrNull { it.id == activeTabId }?.id ?: remaining.last().id
+        return copy(tabs = remaining, activeTabId = nextActive)
+    }
 }
 
 /**
  * Global shell docks. Placement icons toggle a pane that already has tabs;
- * a landing menu picks Live / Terminal / Browser only when that pane is empty.
+ * a landing menu picks Live / Terminal / Browser / Chat only when that pane is empty.
  */
 internal data class ShellDocks(
     val right: DockPane = DockPane(),
@@ -235,11 +289,13 @@ internal data class ShellDocks(
     }
 
     /**
-     * Right/bottom chrome button: hide if open, show if it already has tabs,
-     * otherwise toggle the Live / Terminal / Browser landing chooser.
+     * Right/bottom chrome button: hide if the displayed pane is open, show if it
+     * already has visible tabs, otherwise toggle the Live / Terminal / Browser / Chat
+     * landing chooser. [showChat] matches destination chrome so chat-only panes
+     * off Agents/Projects still open the chooser.
      */
-    fun onPlacementIconClick(placement: DockPlacement): ShellDocks {
-        val pane = pane(placement)
+    fun onPlacementIconClick(placement: DockPlacement, showChat: Boolean = true): ShellDocks {
+        val pane = pane(placement).forDisplay(showChat)
         return when {
             pane.visible -> update(placement) { it.hide() }
             pane.tabs.isNotEmpty() -> update(placement) { it.copy(visible = true) }
@@ -386,6 +442,20 @@ internal data class ShellDocks(
         }
         return null
     }
+
+    /**
+     * Side-chat tab already opened against [parentTaskId], if any.
+     * Prefers a visible pane's match, then right, then bottom.
+     */
+    fun existingChatTabForParent(parentTaskId: String): Pair<DockPlacement, String>? {
+        fun DockPane.match(): DockTab? =
+            tabs.lastOrNull { it.kind == DockTabKind.Chat && it.parentChatTaskId == parentTaskId }
+        if (right.visible) right.match()?.let { return DockPlacement.Right to it.id }
+        if (bottom.visible) bottom.match()?.let { return DockPlacement.Bottom to it.id }
+        right.match()?.let { return DockPlacement.Right to it.id }
+        bottom.match()?.let { return DockPlacement.Bottom to it.id }
+        return null
+    }
 }
 
 @Composable
@@ -472,11 +542,12 @@ private fun PaneToggle(
     }
 }
 
-/** In-layout Live / Terminal / Browser chooser — no Popup, so docks reflow under it. */
+/** In-layout Live / Terminal / Browser / Chat chooser — no Popup, so docks reflow under it. */
 @Composable
 internal fun DockLandingPanel(
     onSelect: (DockTabKind) -> Unit,
     modifier: Modifier = Modifier,
+    showChat: Boolean = true,
 ) {
     Column(modifier.fillMaxWidth()) {
         DockLandingItem(
@@ -494,6 +565,13 @@ internal fun DockLandingPanel(
             label = "Browser",
             onClick = { onSelect(DockTabKind.Browser) },
         )
+        if (showChat) {
+            DockLandingItem(
+                kind = DockTabKind.Chat,
+                label = "Chat",
+                onClick = { onSelect(DockTabKind.Chat) },
+            )
+        }
     }
 }
 
@@ -586,6 +664,21 @@ private fun DockKindIcon(kind: DockTabKind, modifier: Modifier = Modifier) {
                     style = stroke,
                 )
             }
+            DockTabKind.Chat -> {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(size.width * 0.12f, size.height * 0.14f),
+                    size = Size(size.width * 0.76f, size.height * 0.52f),
+                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+                    style = stroke,
+                )
+                val tail = Path().apply {
+                    moveTo(size.width * 0.28f, size.height * 0.66f)
+                    lineTo(size.width * 0.22f, size.height * 0.86f)
+                    lineTo(size.width * 0.44f, size.height * 0.66f)
+                }
+                drawPath(tail, color = color, style = stroke)
+            }
         }
     }
 }
@@ -632,10 +725,16 @@ internal fun ShellDockDrawer(
     browserPaneOf: (String) -> BrowserPaneState = { BrowserPaneState() },
     onBrowserNav: (tabId: String, BrowserNavCommand) -> Unit = { _, _ -> },
     onBrowserNavStateChanged: (tabId: String, title: String?, url: String, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) -> Unit = { _, _, _, _, _, _ -> },
+    workspaceState: WorkspaceState = WorkspaceState(),
+    onStartSideChat: (tabId: String, prompt: String, launch: SideChatLaunchConfig) -> Unit = { _, _, _ -> },
+    sideChatLaunchingIds: Set<String> = emptySet(),
+    showChatTabs: Boolean = true,
+    viewedAgentTaskId: String? = null,
     modifier: Modifier = Modifier,
     terminalThemeId: String = TerminalThemePreset.Default.id,
 ) {
     val active = pane.activeTab
+    val agentTasks by services.agentRuns.tasks.collectAsState()
     var addMenuExpanded by remember { mutableStateOf(false) }
     val reveal = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
@@ -650,12 +749,13 @@ internal fun ShellDockDrawer(
     val terminalBackground = remember(terminalThemeId) {
         Color(TerminalThemePreset.fromId(terminalThemeId).palette().background)
     }
-    // Live has no theme of its own to borrow, so the strip drops to the canvas the dock sits
-    // on — the pane then reads as the device surface floating on the shell, not as chrome.
+    // Live and Chat have no theme of their own to borrow, so the strip drops to the canvas
+    // the dock sits on — the pane then reads as the same surface as the main chat, not chrome.
     val liveHeader = active?.kind == DockTabKind.Live
+    val chatHeader = active?.kind == DockTabKind.Chat
     val headerBackground = when {
         terminalHeader -> terminalBackground
-        liveHeader -> AndyColors.ContentBg
+        liveHeader || chatHeader -> AndyColors.ContentBg
         else -> AndyColors.SurfaceRaised
     }
     // One terminal workspace on its own needs no dock tab strip: the tree's own leaf strip
@@ -714,13 +814,13 @@ internal fun ShellDockDrawer(
                     DockChromeButton(
                         glyph = "+",
                         label = "Add pane tab",
-                        onBleedSurface = terminalHeader || liveHeader,
+                        onBleedSurface = terminalHeader || liveHeader || chatHeader,
                         onClick = { addMenuExpanded = !addMenuExpanded },
                     )
                     DockChromeButton(
                         glyph = "×",
                         label = if (placement == DockPlacement.Right) "Close right pane" else "Close bottom pane",
-                        onBleedSurface = terminalHeader || liveHeader,
+                        onBleedSurface = terminalHeader || liveHeader || chatHeader,
                         onClick = onClose,
                     )
                 }
@@ -729,11 +829,17 @@ internal fun ShellDockDrawer(
             val terminalTabs = pane.tabs.filter { it.kind == DockTabKind.Terminal }
             pane.tabs.forEach { tab ->
                 val runningAction = if (tab.kind == DockTabKind.Terminal) tab.representativeRunningAction(running) else null
+                val chatTask = if (tab.kind == DockTabKind.Chat) {
+                    tab.agentTaskId?.let { id -> agentTasks.firstOrNull { it.id == id } }
+                } else {
+                    null
+                }
                 val accent = when (tab.kind) {
                     DockTabKind.Live -> Cyan
                     DockTabKind.Logs -> Green
                     DockTabKind.Terminal -> dockActionStatusColor(runningAction?.status)
                     DockTabKind.Browser -> Cyan
+                    DockTabKind.Chat -> if (chatTask?.unread == true) Yellow else Cyan
                 }
                 val selected = tab.id == active?.id
                 TabBarItem(
@@ -743,6 +849,7 @@ internal fun ShellDockDrawer(
                         DockTabKind.Terminal -> dockTerminalWorkspaceLabel(tab, terminalTabs)
                         DockTabKind.Browser ->
                             browserPaneOf(tab.id).title?.takeIf { it.isNotBlank() } ?: "Browser"
+                        DockTabKind.Chat -> chatTask?.title?.takeIf { it.isNotBlank() } ?: "Side chat"
                     },
                     selected = selected,
                     onClick = {
@@ -769,6 +876,7 @@ internal fun ShellDockDrawer(
                                 DockTabKind.Logs -> "≡"
                                 DockTabKind.Terminal -> actionIconMarker(runningAction?.icon.orEmpty())
                                 DockTabKind.Browser -> "◯"
+                                DockTabKind.Chat -> "◇"
                             },
                             color = if (selected) accent else accent.copy(alpha = 0.6f),
                             fontFamily = MonoFont,
@@ -801,22 +909,27 @@ internal fun ShellDockDrawer(
                     addMenuExpanded = false
                     onOpenKind(kind, true)
                 },
+                showChat = showChatTabs,
             )
         }
-        // Live and Terminal panels fill their own background/theme, so bleed them to the
+        // Live, Terminal, and Chat fill their own background/theme, so bleed them to the
         // card edges rather than boxing them in — that's what makes them feel like a real
-        // terminal/device surface instead of a widget floating inside a card.
+        // terminal/device/chat surface instead of a widget floating inside a card.
         val edgeToEdge = active?.kind == DockTabKind.Live || active?.kind == DockTabKind.Terminal ||
-            active?.kind == DockTabKind.Browser
+            active?.kind == DockTabKind.Browser || active?.kind == DockTabKind.Chat
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 // Terminal owns its theme color, so carry it under the corner inset too —
                 // otherwise the strip below the last text row exposes the chrome surface.
+                // Chat uses the same canvas as the main Agents transcript.
                 .then(
-                    if (active?.kind == DockTabKind.Terminal) Modifier.background(terminalBackground)
-                    else Modifier,
+                    when (active?.kind) {
+                        DockTabKind.Terminal -> Modifier.background(terminalBackground)
+                        DockTabKind.Chat -> Modifier.background(AndyColors.ContentBg)
+                        else -> Modifier
+                    },
                 )
                 .padding(
                     start = if (edgeToEdge) 0.dp else AndySpace.Space5,
@@ -824,7 +937,13 @@ internal fun ShellDockDrawer(
                     top = if (edgeToEdge) 0.dp else AndySpace.Space4,
                     // Browser clips itself to the card's rounded bottom; other kinds keep a
                     // hairline inset so Compose content doesn't sit on the corner arc.
-                    bottom = if (active?.kind == DockTabKind.Browser) 0.dp else DockContentCornerInset,
+                    // Chat sits on the same canvas as the main transcript, so keep the composer
+                    // on that bottom edge instead of floating it above the card corner.
+                    bottom = if (active?.kind == DockTabKind.Browser || active?.kind == DockTabKind.Chat) {
+                        0.dp
+                    } else {
+                        DockContentCornerInset
+                    },
                 ),
         ) {
             when (active?.kind) {
@@ -842,6 +961,7 @@ internal fun ShellDockDrawer(
                             // With the dock strip collapsed away, a leaf's "+" is the only add
                             // button left, so it takes over the strip's Live/Terminal menu.
                             addKindMenu = soloTerminalWorkspace,
+                            showChatInAddMenu = showChatTabs,
                         )
                     }
                 }
@@ -881,7 +1001,17 @@ internal fun ShellDockDrawer(
                 // Browser is retained below so switching to Live/Terminal doesn't
                 // dispose WKWebView and reload the page on the way back.
                 DockTabKind.Browser -> Unit
-                null -> EmptyState("Choose Live or Terminal")
+                DockTabKind.Chat -> SideChatPaneView(
+                    services = services,
+                    tab = active,
+                    workspaceState = workspaceState,
+                    launching = active.id in sideChatLaunchingIds,
+                    dictationActive = true,
+                    viewedAgentTaskId = viewedAgentTaskId,
+                    onStart = { prompt, launch -> onStartSideChat(active.id, prompt, launch) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                null -> EmptyState("Choose Live, Terminal, Browser, or Chat")
             }
             RetainedBrowserDockContent(
                 services = services,

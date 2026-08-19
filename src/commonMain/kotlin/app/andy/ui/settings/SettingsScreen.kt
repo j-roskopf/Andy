@@ -226,6 +226,7 @@ internal fun SettingsScreen(
                 LocalModelsPanel(workspaceState, onUpdateWorkspace)
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
+                AgentChatListPanel(workspaceState, onUpdateWorkspace)
                 AgentTranscriptPanel(workspaceState, onUpdateWorkspace)
                 if (services.agentRetention !is UnavailableAgentRetentionService) {
                     AgentRetentionPanel(workspaceState, onUpdateWorkspace, services)
@@ -1073,6 +1074,25 @@ private fun LocalModelsPanel(
                 colors = fieldColors(),
             )
         }
+    }
+}
+
+@Composable
+private fun AgentChatListPanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    PanelCard(Modifier.fillMaxWidth()) {
+        SettingsSectionHeader(
+            title = "Chat list",
+            description = "How the Agents inbox and Projects sidebar organize chats.",
+        )
+        SettingsCheckboxRow(
+            label = "Pin priority chats at the top",
+            checked = workspace.agentPinPriorityChats,
+            onCheckedChange = { value -> update { it.copy(agentPinPriorityChats = value) } },
+            description = "Working, blocked, unread, and launching chats sit in a separate section above the rest. Failed chats stay there for a day, or until you read them.",
+        )
     }
 }
 

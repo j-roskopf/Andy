@@ -13,6 +13,7 @@
 static JavaVM *andy_jvm = NULL;
 static jobject andy_listener = NULL;
 static jmethodID andy_on_nav_state = NULL;
+static jmethodID andy_on_annotate = NULL;
 static pthread_mutex_t andy_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static NSWindow *andy_browser_window = NULL;
@@ -51,7 +52,7 @@ static bool andy_geometry_scheduled = false;
 }
 @end
 
-@interface AndyBrowserDelegate : NSObject <WKNavigationDelegate>
+@interface AndyBrowserDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @end
 
 static AndyBrowserDelegate *andy_delegate = nil;
@@ -109,6 +110,88 @@ andy_emit_nav_state(void) {
     if (jTitle != NULL) (*env)->DeleteLocalRef(env, jTitle);
     if (jUrl != NULL) (*env)->DeleteLocalRef(env, jUrl);
     if (attached) (*jvm)->DetachCurrentThread(jvm);
+}
+
+static bool
+andy_jni_env(JNIEnv **out_env, bool *out_attached) {
+    *out_env = NULL;
+    *out_attached = false;
+    pthread_mutex_lock(&andy_lock);
+    JavaVM *jvm = andy_jvm;
+    pthread_mutex_unlock(&andy_lock);
+    if (jvm == NULL) return false;
+    JNIEnv *env = NULL;
+    jint getEnv = (*jvm)->GetEnv(jvm, (void **)&env, JNI_VERSION_1_8);
+    if (getEnv == JNI_EDETACHED) {
+        if ((*jvm)->AttachCurrentThread(jvm, (void **)&env, NULL) != JNI_OK || env == NULL) return false;
+        *out_attached = true;
+    } else if (getEnv != JNI_OK || env == NULL) {
+        return false;
+    }
+    *out_env = env;
+    return true;
+}
+
+static NSData *
+andy_png_from_image(NSImage *image) {
+    if (!image) return nil;
+    NSRect rect = NSMakeRect(0, 0, image.size.width, image.size.height);
+    CGImageRef cg = [image CGImageForProposedRect:&rect context:nil hints:nil];
+    if (!cg) return nil;
+    NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:cg];
+    return [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+}
+
+static NSString *
+andy_json_from_body(id body) {
+    if ([body isKindOfClass:[NSString class]]) return body;
+    if (![NSJSONSerialization isValidJSONObject:body]) return @"{}";
+    NSData *data = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    if (!data) return @"{}";
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{}";
+}
+
+static void
+andy_emit_annotate(NSString *json, NSData *png) {
+    pthread_mutex_lock(&andy_lock);
+    JavaVM *jvm = andy_jvm;
+    jobject listener = andy_listener;
+    jmethodID method = andy_on_annotate;
+    pthread_mutex_unlock(&andy_lock);
+    if (jvm == NULL || listener == NULL || method == NULL) return;
+
+    JNIEnv *env = NULL;
+    bool attached = false;
+    if (!andy_jni_env(&env, &attached) || env == NULL) return;
+
+    const char *utf = json.UTF8String ?: "{}";
+    jstring jJson = (*env)->NewStringUTF(env, utf);
+    jbyteArray jPng = NULL;
+    if (png != nil && png.length > 0) {
+        jsize len = (jsize) png.length;
+        jPng = (*env)->NewByteArray(env, len);
+        if (jPng != NULL) {
+            (*env)->SetByteArrayRegion(env, jPng, 0, len, (const jbyte *) png.bytes);
+        }
+    }
+    (*env)->CallVoidMethod(env, listener, method, jJson, jPng);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (jJson != NULL) (*env)->DeleteLocalRef(env, jJson);
+    if (jPng != NULL) (*env)->DeleteLocalRef(env, jPng);
+    if (attached) (*jvm)->DetachCurrentThread(jvm);
+}
+
+static NSRect
+andy_clamp_snapshot_rect(NSDictionary *bounds) {
+    NSRect view = andy_web_view ? andy_web_view.bounds : NSZeroRect;
+    if (!bounds || view.size.width < 2 || view.size.height < 2) return NSZeroRect;
+    CGFloat x = [bounds[@"x"] respondsToSelector:@selector(doubleValue)] ? [bounds[@"x"] doubleValue] : 0;
+    CGFloat y = [bounds[@"y"] respondsToSelector:@selector(doubleValue)] ? [bounds[@"y"] doubleValue] : 0;
+    CGFloat w = [bounds[@"w"] respondsToSelector:@selector(doubleValue)] ? [bounds[@"w"] doubleValue] : 0;
+    CGFloat h = [bounds[@"h"] respondsToSelector:@selector(doubleValue)] ? [bounds[@"h"] doubleValue] : 0;
+    const CGFloat pad = 2.0;
+    NSRect rect = NSMakeRect(x - pad, y - pad, w + pad * 2.0, h + pad * 2.0);
+    return NSIntersectionRect(rect, view);
 }
 
 static void
@@ -254,6 +337,8 @@ andy_open_window(void) {
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
         config.preferences.javaScriptCanOpenWindowsAutomatically = NO;
         config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+        [config.userContentController removeScriptMessageHandlerForName:@"andyAnnotate"];
+        [config.userContentController addScriptMessageHandler:andy_delegate name:@"andyAnnotate"];
         andy_web_view = [[WKWebView alloc] initWithFrame:content_rect configuration:config];
         andy_web_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         andy_web_view.navigationDelegate = andy_delegate;
@@ -318,6 +403,33 @@ didFailProvisionalNavigation:(WKNavigation *)navigation
     andy_emit_nav_state();
 }
 
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)userContentController;
+    if (![message.name isEqualToString:@"andyAnnotate"]) return;
+    NSString *json = andy_json_from_body(message.body);
+    NSDictionary *dict = [message.body isKindOfClass:[NSDictionary class]] ? message.body : nil;
+    NSString *type = [dict[@"type"] isKindOfClass:[NSString class]] ? dict[@"type"] : @"";
+    if (![type isEqualToString:@"submit"]) {
+        andy_emit_annotate(json, nil);
+        return;
+    }
+    if (!andy_web_view) {
+        andy_emit_annotate(json, nil);
+        return;
+    }
+    WKSnapshotConfiguration *cfg = [[WKSnapshotConfiguration alloc] init];
+    NSRect crop = andy_clamp_snapshot_rect(dict[@"bounds"]);
+    if (crop.size.width >= 2.0 && crop.size.height >= 2.0) {
+        cfg.rect = crop;
+    }
+    [andy_web_view takeSnapshotWithConfiguration:cfg completionHandler:^(NSImage *snapshot, NSError *error) {
+        (void)error;
+        NSData *png = andy_png_from_image(snapshot);
+        andy_emit_annotate(json, png);
+    }];
+}
+
 @end
 
 JNIEXPORT jboolean JNICALL
@@ -334,6 +446,11 @@ Java_app_andy_desktop_browser_WkBrowserJni_nativeInstall(
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         return JNI_FALSE;
     }
+    jmethodID annotate = (*env)->GetMethodID(
+        env, cls, "onAnnotateFromNative",
+        "(Ljava/lang/String;[B)V"
+    );
+    if (annotate == NULL && (*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     pthread_mutex_lock(&andy_lock);
     if (andy_listener != NULL) {
         (*env)->DeleteGlobalRef(env, andy_listener);
@@ -341,6 +458,7 @@ Java_app_andy_desktop_browser_WkBrowserJni_nativeInstall(
     }
     andy_listener = (*env)->NewGlobalRef(env, bridge);
     andy_on_nav_state = method;
+    andy_on_annotate = annotate;
     pthread_mutex_unlock(&andy_lock);
 
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -483,6 +601,18 @@ Java_app_andy_desktop_browser_WkBrowserJni_nativeReload(JNIEnv *env, jobject bri
 }
 
 JNIEXPORT void JNICALL
+Java_app_andy_desktop_browser_WkBrowserJni_nativeEvaluateJavaScript(
+    JNIEnv *env, jobject bridge, jstring script
+) {
+    (void)bridge;
+    NSString *js = AndyNSString(env, script);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!andy_web_view || js.length == 0) return;
+        [andy_web_view evaluateJavaScript:js completionHandler:nil];
+    });
+}
+
+JNIEXPORT void JNICALL
 Java_app_andy_desktop_browser_WkBrowserJni_nativeClose(JNIEnv *env, jobject bridge) {
     (void)env;
     (void)bridge;
@@ -494,6 +624,12 @@ Java_app_andy_desktop_browser_WkBrowserJni_nativeClose(JNIEnv *env, jobject brid
                 [andy_web_view removeObserver:andy_delegate forKeyPath:@"loading"];
                 [andy_web_view removeObserver:andy_delegate forKeyPath:@"canGoBack"];
                 [andy_web_view removeObserver:andy_delegate forKeyPath:@"canGoForward"];
+            } @catch (NSException *ex) {
+                (void)ex;
+            }
+            @try {
+                [andy_web_view.configuration.userContentController
+                    removeScriptMessageHandlerForName:@"andyAnnotate"];
             } @catch (NSException *ex) {
                 (void)ex;
             }

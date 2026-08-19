@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
+import app.andy.showsSideChat
 import app.andy.availableWithIosTarget
 import app.andy.isToggleableInSidebar
 import app.andy.model.DeviceConnectionState
@@ -55,6 +56,8 @@ import app.andy.model.ProxyStartOptions
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.RunningAction
+import app.andy.ui.agents.ChatComposerInbox
+import app.andy.ui.agents.LocalChatComposerInbox
 import app.andy.ui.agents.isSessionWorking
 import app.andy.service.AvailableUpdate
 import app.andy.ui.network.shouldAutoStartProxy
@@ -248,6 +251,7 @@ internal fun AndyShell(
         LocalSuppressHeavyweightSurfaces provides ModalDialogRegistry.anyOpen,
         LocalOpenAgentTask provides state::openAgentTask,
         LocalOpenInvestigation provides state::openInvestigation,
+        LocalChatComposerInbox provides remember { ChatComposerInbox() },
     ) {
     Box(
         Modifier.fillMaxSize().background(Ink)
@@ -340,8 +344,8 @@ internal fun AndyShell(
                             onDismiss = onDismiss,
                         )
                     },
-                    rightPaneOpen = state.docks.right.visible,
-                    bottomPaneOpen = state.docks.bottom.visible,
+                    rightPaneOpen = state.docks.right.forDisplay(state.destination.showsSideChat).visible,
+                    bottomPaneOpen = state.docks.bottom.forDisplay(state.destination.showsSideChat).visible,
                     projectPaneOpen = state.workspaceState.projectListPaneVisible,
                     dockLandingFor = state.docks.landingFor,
                     onPlacementIconClick = state::onPlacementIconClick,
@@ -381,6 +385,9 @@ internal fun AndyShell(
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                val showSideChat = state.destination.showsSideChat
+                val rightDock = state.docks.right.forDisplay(showSideChat)
+                val bottomDock = state.docks.bottom.forDisplay(showSideChat)
                 Row(
                     Modifier.weight(1f).fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -413,6 +420,7 @@ internal fun AndyShell(
                             onNotifyTerminalRun = state::notifyTerminalRun,
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
+                            onViewedTaskChange = state::noteViewedAgentTaskId,
                         )
                     }
                     RetainedDestination(active = agentsActive) {
@@ -421,6 +429,7 @@ internal fun AndyShell(
                             requestedTaskId = effectiveOpenAgentTask?.takeIf { it.projectId == null }?.taskId,
                             onRequestedTaskConsumed = consumeOpenAgentTask,
                             workspaceState = state.workspaceState,
+                            onViewedTaskChange = state::noteViewedAgentTaskId,
                         )
                     }
                     RetainedDestination(active = computerFilesActive) {
@@ -625,14 +634,14 @@ internal fun AndyShell(
                         )
                     }
                 }
-                if (state.docks.right.visible) {
+                if (rightDock.visible) {
                     PaneDivider(
                         onDrag = { dragX -> rightDockPaneWidth = (rightDockPaneWidth - dragX).coerceAtLeast(240f) },
                         onDragEnd = { state.updateWorkspace { it.copy(rightDockPaneWidth = rightDockPaneWidth) } },
                     )
                     ShellDockDrawer(
                         services = services,
-                        pane = state.docks.right,
+                        pane = rightDock,
                         placement = DockPlacement.Right,
                         running = runningActions,
                         serial = state.activeTargetId,
@@ -665,19 +674,26 @@ internal fun AndyShell(
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
                             state.updateBrowserNavState(tabId, url, title, canBack, canForward, loading)
                         },
+                        workspaceState = state.workspaceState,
+                        onStartSideChat = { tabId, prompt, launch ->
+                            state.startSideChat(DockPlacement.Right, tabId, prompt, launch)
+                        },
+                        sideChatLaunchingIds = state.sideChatLaunchingIds,
+                        showChatTabs = showSideChat,
+                        viewedAgentTaskId = state.viewedAgentTaskId,
                         modifier = Modifier.width(rightDockPaneWidth.dp).fillMaxHeight(),
                         terminalThemeId = state.workspaceState.terminalThemeId,
                     )
                 }
                 }
-                if (state.docks.bottom.visible) {
+                if (bottomDock.visible) {
                     HorizontalPaneDivider(
                         onDrag = { dragY -> bottomDockPaneHeight = (bottomDockPaneHeight - dragY).coerceAtLeast(120f) },
                         onDragEnd = { state.updateWorkspace { it.copy(bottomDockPaneHeight = bottomDockPaneHeight) } },
                     )
                     ShellDockDrawer(
                         services = services,
-                        pane = state.docks.bottom,
+                        pane = bottomDock,
                         placement = DockPlacement.Bottom,
                         running = runningActions,
                         serial = state.activeTargetId,
@@ -710,6 +726,13 @@ internal fun AndyShell(
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
                             state.updateBrowserNavState(tabId, url, title, canBack, canForward, loading)
                         },
+                        workspaceState = state.workspaceState,
+                        onStartSideChat = { tabId, prompt, launch ->
+                            state.startSideChat(DockPlacement.Bottom, tabId, prompt, launch)
+                        },
+                        sideChatLaunchingIds = state.sideChatLaunchingIds,
+                        showChatTabs = showSideChat,
+                        viewedAgentTaskId = state.viewedAgentTaskId,
                         modifier = Modifier.fillMaxWidth().height(bottomDockPaneHeight.dp),
                         terminalThemeId = state.workspaceState.terminalThemeId,
                     )

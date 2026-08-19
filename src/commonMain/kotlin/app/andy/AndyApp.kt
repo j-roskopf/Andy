@@ -57,6 +57,9 @@ enum class AndyDestination(val label: String) {
     Settings("Settings"),
 }
 
+internal val AndyDestination.showsSideChat: Boolean
+    get() = this == AndyDestination.Actions || this == AndyDestination.Agents
+
 /** Destinations that remain reachable while an iOS target is selected in the toolbar. */
 fun AndyDestination.availableWithIosTarget(): Boolean = when (this) {
     AndyDestination.Live,

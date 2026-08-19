@@ -144,6 +144,10 @@ internal actual fun resignEmbeddedBrowserKey() {
     if (!isScreenshotRenderer()) WkBrowserJni.resignKey()
 }
 
+internal actual fun focusEmbeddedBrowser() {
+    if (!isScreenshotRenderer()) WkBrowserJni.focus()
+}
+
 internal actual fun closeEmbeddedBrowser() {
     if (!isScreenshotRenderer()) WkBrowserJni.close()
 }

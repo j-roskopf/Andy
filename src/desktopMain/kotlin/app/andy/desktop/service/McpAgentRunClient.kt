@@ -306,6 +306,7 @@ class McpAgentRunClient(
             branchName = obj.string("branchName")?.takeIf { it.isNotBlank() },
             ownsWorktree = obj.bool("ownsWorktree"),
             parentWorktreeTaskId = obj.string("parentWorktreeTaskId")?.takeIf { it.isNotBlank() },
+            parentChatTaskId = obj.string("parentChatTaskId")?.takeIf { it.isNotBlank() },
             attachAndyMcp = obj.bool("attachAndyMcp"),
         )
     }
@@ -891,8 +892,10 @@ class McpAgentRunClient(
         _tasks.value = _tasks.value.mapNotNull { task ->
             when {
                 task.id == taskId -> null
-                task.parentWorktreeTaskId == taskId -> task.copy(parentWorktreeTaskId = null)
-                else -> task
+                else -> task.copy(
+                    parentWorktreeTaskId = task.parentWorktreeTaskId.takeUnless { it == taskId },
+                    parentChatTaskId = task.parentChatTaskId.takeUnless { it == taskId },
+                )
             }
         }
         scope.launch { runCatching { refreshTasks() } }

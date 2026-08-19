@@ -158,6 +158,7 @@ class DesktopWorkspaceStore(
             agentMessageDeliveryMode = props.getProperty("agentMessageDeliveryMode")?.let { value ->
                 AgentMessageDeliveryMode.entries.firstOrNull { it.name == value }
             } ?: AgentMessageDeliveryMode.Immediate,
+            agentPinPriorityChats = props.getProperty("agentPinPriorityChats")?.toBooleanStrictOrNull() ?: false,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             collapsedProjectChatIds = props.getProperty("collapsedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             ollamaBaseUrl = props.getProperty("ollamaBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().ollamaBaseUrl,
@@ -280,6 +281,7 @@ class DesktopWorkspaceStore(
             setProperty("agentTranscriptAutoExpandActivity", state.agentTranscriptAutoExpandActivity.toString())
             setProperty("agentTranscriptCollapseActivityBlocks", state.agentTranscriptCollapseActivityBlocks.toString())
             setProperty("agentMessageDeliveryMode", state.agentMessageDeliveryMode.name)
+            setProperty("agentPinPriorityChats", state.agentPinPriorityChats.toString())
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
             setProperty("collapsedProjectChatIds", state.collapsedProjectChatIds.joinToString("\n"))
             setProperty("ollamaBaseUrl", state.ollamaBaseUrl)

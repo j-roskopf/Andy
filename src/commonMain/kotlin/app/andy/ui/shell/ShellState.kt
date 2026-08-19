@@ -8,6 +8,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import app.andy.AndyDestination
 import app.andy.closeEmbeddedBrowser
+import app.andy.showsSideChat
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AndroidDevice
@@ -89,6 +90,11 @@ internal class ShellState(
     /** Nav state per Browser [DockTab.id] — kept out of [DockTab] itself, mirroring how
      * Terminal state lives in [DockTab.terminalTree] but browser tabs aren't a split tree. */
     var browserPanes by mutableStateOf<Map<String, BrowserPaneState>>(emptyMap())
+        private set
+    /** Chat currently on screen in Agents/Projects — seeds a new side-chat pane. */
+    var viewedAgentTaskId by mutableStateOf<String?>(null)
+        private set
+    var sideChatLaunchingIds by mutableStateOf<Set<String>>(emptySet())
         private set
 
     /** In-app deep links for contextual agent actions (§5), separate from OS-level requests. */
@@ -290,7 +296,7 @@ internal class ShellState(
      * otherwise show the landing chooser (empty pane).
      */
     fun onPlacementIconClick(placement: DockPlacement) {
-        docks = docks.onPlacementIconClick(placement)
+        docks = docks.onPlacementIconClick(placement, destination.showsSideChat)
     }
 
     fun dismissDockLanding() {
@@ -314,6 +320,69 @@ internal class ShellState(
                     .map { it.id }
                 discarded.forEach { closeBrowserPane(it) }
                 docks = docks.withBrowserExclusive(placement, tab)
+            }
+            DockTabKind.Chat -> {
+                if (!destination.showsSideChat) return
+                openSideChat(placement, forceNew = newTerminal)
+            }
+        }
+    }
+
+    fun noteViewedAgentTaskId(taskId: String?) {
+        viewedAgentTaskId = taskId
+        if (taskId == null) return
+        val parent = services.agentRuns.tasks.value.firstOrNull { it.id == taskId }
+        val title = parent?.title?.let { "Side · $it".take(40) } ?: "Side chat"
+        val nextRight = docks.right.bindUnstartedSideChats(taskId, title)
+        val nextBottom = docks.bottom.bindUnstartedSideChats(taskId, title)
+        if (nextRight !== docks.right || nextBottom !== docks.bottom) {
+            docks = docks.copy(right = nextRight, bottom = nextBottom)
+        }
+    }
+
+    fun openSideChat(placement: DockPlacement, forceNew: Boolean) {
+        val parentId = viewedAgentTaskId
+        if (!forceNew && parentId != null) {
+            docks.existingChatTabForParent(parentId)?.let { (from, tabId) ->
+                docks = docks.update(from) { it.selectTab(tabId) }
+                return
+            }
+        }
+        val parent = parentId?.let { id -> services.agentRuns.tasks.value.firstOrNull { it.id == id } }
+        val tab = DockTab.chat(
+            id = nextPaneId("chat"),
+            parentChatTaskId = parentId,
+            title = parent?.title?.let { "Side · $it".take(40) } ?: "Side chat",
+        )
+        docks = docks.update(placement) { it.withTab(tab) }
+    }
+
+    fun startSideChat(placement: DockPlacement, tabId: String, question: String, launch: SideChatLaunchConfig) {
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
+        if (tab.kind != DockTabKind.Chat || tab.agentTaskId != null) return
+        val parentId = tab.parentChatTaskId ?: viewedAgentTaskId ?: return
+        val parent = services.agentRuns.tasks.value.firstOrNull { it.id == parentId } ?: return
+        val trimmed = question.trim()
+        if (trimmed.isEmpty()) return
+        sideChatLaunchingIds = sideChatLaunchingIds + tabId
+        scope.launch {
+            try {
+                val child = services.agentRuns.createAndStart(
+                    sideChatDraft(
+                        parent = parent,
+                        question = trimmed,
+                        statuses = services.agentRuns.cliStatuses.value,
+                        providerDefaults = services.agentRuns.providerDefaults.value,
+                        launch = launch,
+                    ),
+                )
+                docks = docks.update(placement) {
+                    it.updateTab(tabId) { current ->
+                        current.copy(agentTaskId = child.id, title = current.title ?: child.title)
+                    }
+                }
+            } finally {
+                sideChatLaunchingIds = sideChatLaunchingIds - tabId
             }
         }
     }
