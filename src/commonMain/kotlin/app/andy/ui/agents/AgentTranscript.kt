@@ -95,6 +95,7 @@ import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.isRetriableConnectionStallMessage
+import app.andy.model.isSilentConnectionRecoveryPrompt
 import app.andy.model.stripTrailingConnectionStallError
 import app.andy.model.stripDecisionCheckpointMarkup
 import app.andy.model.AgentSkill
@@ -699,26 +700,29 @@ private fun TranscriptEvent(
             expanded = thinkingExpanded,
             onExpandedChange = { expanded -> onThinkingExpandedChange(eventKey, expanded) },
         )
-        is AgentEvent.UserMessage -> ChatMessageBubble(
-            alignEnd = true,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (event.text.isNotBlank()) {
-                    ChatUserText(event.text)
-                }
-                ChatAttachedImages(event.imagePaths)
-                if (event.skills.isNotEmpty()) {
-                    DisableSelection {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            event.skills.forEach { skill ->
-                                Text(
-                                    "/${skill.name}",
-                                    color = Cyan,
-                                    fontFamily = MonoFont,
-                                    fontSize = 11.sp,
-                                    textDecoration = TextDecoration.Underline,
-                                    modifier = Modifier.clickable { onSkillOpen(skill) },
-                                )
+        is AgentEvent.UserMessage -> {
+            if (event.text.isSilentConnectionRecoveryPrompt()) return
+            ChatMessageBubble(
+                alignEnd = true,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (event.text.isNotBlank()) {
+                        ChatUserText(event.text)
+                    }
+                    ChatAttachedImages(event.imagePaths)
+                    if (event.skills.isNotEmpty()) {
+                        DisableSelection {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                event.skills.forEach { skill ->
+                                    Text(
+                                        "/${skill.name}",
+                                        color = Cyan,
+                                        fontFamily = MonoFont,
+                                        fontSize = 11.sp,
+                                        textDecoration = TextDecoration.Underline,
+                                        modifier = Modifier.clickable { onSkillOpen(skill) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -2221,6 +2225,7 @@ internal fun transcriptEventKey(index: Int, event: AgentEvent): String = when (e
 private fun AgentEvent.isHiddenConnectionStallMessage(): Boolean = when (this) {
     is AgentEvent.AssistantText -> text.isRetriableConnectionStallMessage()
     is AgentEvent.TaskError -> message.isRetriableConnectionStallMessage()
+    is AgentEvent.UserMessage -> text.isSilentConnectionRecoveryPrompt()
     else -> false
 }
 

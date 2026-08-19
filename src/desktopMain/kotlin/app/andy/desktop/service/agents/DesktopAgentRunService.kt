@@ -66,9 +66,11 @@ import app.andy.model.toProjectProfile
 import app.andy.model.CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.MAX_CONNECTION_STALL_AUTO_RETRIES
+import app.andy.model.RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.hasRetriableConnectionStall
+import app.andy.model.hasRetriableResourceExhausted
 import app.andy.model.planTextFromAcpTranscript
 import app.andy.model.followUpCliPayload
 import app.andy.model.followUpPromptForLiveTerminal
@@ -2674,6 +2676,7 @@ class DesktopAgentRunService(
             acpManager.isAlive(taskId)
         ) {
             val nextAttempt = attempt + 1
+            val resourceExhausted = transcriptHasResourceExhausted(taskId)
             connectionStallAutoRetries[taskId] = nextAttempt
             appendLaunchDiagnostics(taskId, "connectionStallAutoRetry=$nextAttempt\n")
             updateTask(taskId) {
@@ -2688,7 +2691,12 @@ class DesktopAgentRunService(
                 taskId,
                 listOf(AgentEvent.UserMessage(System.currentTimeMillis(), CONNECTION_STALL_RETRY_PROMPT)),
             )
-            delay(CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS * nextAttempt)
+            val backoffMs = if (resourceExhausted) {
+                RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS * nextAttempt
+            } else {
+                CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS * nextAttempt
+            }
+            delay(backoffMs)
             val retrySuccess = acpManager.prompt(taskId, CONNECTION_STALL_RETRY_PROMPT, emptyList())
             return completeAcpPromptTurn(taskId, retrySuccess)
         }
@@ -2720,6 +2728,9 @@ class DesktopAgentRunService(
 
     private fun transcriptHasConnectionStall(taskId: String): Boolean =
         eventFlows[taskId]?.value.orEmpty().hasRetriableConnectionStall()
+
+    private fun transcriptHasResourceExhausted(taskId: String): Boolean =
+        eventFlows[taskId]?.value.orEmpty().hasRetriableResourceExhausted()
 
     private suspend fun ensureCursorVendorSession(taskId: String, binary: String, cwd: String?) {
         val current = currentTask(taskId) ?: return

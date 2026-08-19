@@ -9,6 +9,9 @@ const val MAX_CONNECTION_STALL_AUTO_RETRIES = 2
 /** Backoff before each automatic stall retry (multiplied by attempt number). */
 const val CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS = 1_000L
 
+/** Longer backoff when Cursor reports provider capacity exhaustion. */
+const val RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS = 3_000L
+
 /** Follow-up Andy sends when the user accepts a plan-mode turn and asks to implement. */
 const val IMPLEMENT_PLAN_PROMPT = "Implement the plan."
 
@@ -21,7 +24,7 @@ const val IMPLEMENT_PLAN_PROMPT = "Implement the plan."
  * and stream chunks like `" stalled"` must not count.
  */
 private val RETRIABLE_STALL_LINE = Regex(
-    """(?i)^(?:error:\s*)?retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?)\s*$""",
+    """(?i)^(?:error:\s*)?retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?|\[resource_exhausted\](?:\s+error)?)\s*$""",
 )
 
 private fun CharSequence.rawNonEmptyLines(): List<String> =
@@ -56,14 +59,31 @@ fun CharSequence.stripTrailingConnectionStallError(): String {
 }
 
 fun List<AgentEvent>.hasRetriableConnectionStall(): Boolean =
-    coalesceAcpTranscriptEvents(latestTurnEvents()).any { event ->
+    latestTurnStallTexts().any { it.hasRetriableConnectionStallError() }
+
+/** True when the latest-turn stall is provider capacity exhaustion, which needs a longer pause. */
+fun List<AgentEvent>.hasRetriableResourceExhausted(): Boolean =
+    latestTurnStallTexts().any { it.hasRetriableResourceExhaustedError() }
+
+/** Automatic continue prompts are kept in the log for turn boundaries, not shown in the transcript. */
+fun CharSequence.isSilentConnectionRecoveryPrompt(): Boolean =
+    trim() == CONNECTION_STALL_RETRY_PROMPT
+
+private fun List<AgentEvent>.latestTurnStallTexts(): Sequence<CharSequence> = sequence {
+    for (event in coalesceAcpTranscriptEvents(latestTurnEvents())) {
         when (event) {
-            is AgentEvent.AssistantText -> event.text.hasRetriableConnectionStallError()
-            is AgentEvent.TaskError -> event.message.hasRetriableConnectionStallError()
-            is AgentEvent.ToolResult -> event.isError && event.detail.hasRetriableConnectionStallError()
-            else -> false
+            is AgentEvent.AssistantText -> yield(event.text)
+            is AgentEvent.TaskError -> yield(event.message)
+            is AgentEvent.ToolResult -> if (event.isError) yield(event.detail)
+            else -> Unit
         }
     }
+}
+
+private fun CharSequence.hasRetriableResourceExhaustedError(): Boolean {
+    val line = rawNonEmptyLines().lastOrNull() ?: return false
+    return line.isProviderStallLine() && line.contains("[resource_exhausted]", ignoreCase = true)
+}
 
 /** Events after the most recent user message — the active/latest turn. */
 fun List<AgentEvent>.latestTurnEvents(): List<AgentEvent> {
