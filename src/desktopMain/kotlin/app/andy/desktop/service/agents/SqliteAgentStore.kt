@@ -79,6 +79,25 @@ internal class SqliteAgentStore(
         db.agentStoreQueries.deleteKanbanBoard(project_id = projectId)
     }
 
+    fun loadAllAutomations(): List<app.andy.model.Automation> =
+        db.agentStoreQueries.selectAllAutomations().executeAsList().mapNotNull { row ->
+            runCatching { json.decodeFromString(app.andy.model.Automation.serializer(), row.payload) }
+                .getOrNull()
+        }
+
+    fun saveAutomation(automation: app.andy.model.Automation) {
+        db.agentStoreQueries.upsertAutomation(
+            id = automation.id,
+            project_id = automation.projectId,
+            updated_at_millis = automation.updatedAtMillis,
+            payload = json.encodeToString(app.andy.model.Automation.serializer(), automation),
+        )
+    }
+
+    fun deleteAutomation(id: String) {
+        db.agentStoreQueries.deleteAutomation(id = id)
+    }
+
     fun save(state: AgentStoreState, allowEmptyTaskList: Boolean = false) {
         // Guard against failed-load recovery wiping a populated DB; intentional deletes opt in.
         val existingCount = db.agentStoreQueries.countTasks().executeAsOne()

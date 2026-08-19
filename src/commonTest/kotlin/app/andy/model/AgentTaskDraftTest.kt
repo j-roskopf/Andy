@@ -38,4 +38,16 @@ class AgentTaskDraftTest {
         )
         assertEquals("first.jpg (+1)", draft.fallbackTitle())
     }
+
+    @Test
+    fun fallbackTitleUsesImportedThreadWhenPromptBlank() {
+        val draft = AgentTaskDraft(
+            title = "",
+            prompt = "",
+            agent = AgentKind.ClaudeCode,
+            projectId = null,
+            vendorSessionId = "sess-9",
+        )
+        assertEquals("Imported Claude thread", draft.fallbackTitle())
+    }
 }

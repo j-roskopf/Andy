@@ -10,6 +10,7 @@ actual fun AgentTerminalSurface(
     taskId: String,
     sessionActive: Boolean,
     onImagesStaged: (List<String>) -> Unit,
+    maskBottomChrome: Boolean,
     modifier: Modifier,
 ) {
     // Web has no PTY host.

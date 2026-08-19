@@ -990,7 +990,7 @@ private fun AgentCompletion(
 ) {
     val duration = event.durationMs
         ?.takeIf { it >= 0L }
-        ?.let { formatElapsed(0L, it, 0L) }
+        ?.let { formatWorkedClock(it) }
     val cost = formatCost(event.costUsd, event.costIsEstimated)
     val tokens = formatTokens(event.inputTokens, event.outputTokens)
 

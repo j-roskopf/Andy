@@ -27,18 +27,30 @@ fun openAndyAgentDatabase(dbFile: File): AndyAgentDatabase {
  */
 internal fun ensureAdditiveSchema(driver: SqlDriver) {
     migrateLegacyKanbanTable(driver)
-    driver.execute(
-        identifier = null,
-        sql = """
+        driver.execute(
+            identifier = null,
+            sql = """
             CREATE TABLE IF NOT EXISTS kanban_board (
               project_id TEXT NOT NULL PRIMARY KEY,
               updated_at_millis INTEGER NOT NULL,
               payload TEXT NOT NULL
             )
         """.trimIndent(),
-        parameters = 0,
-    )
-}
+            parameters = 0,
+        )
+        driver.execute(
+            identifier = null,
+            sql = """
+            CREATE TABLE IF NOT EXISTS automation (
+              id TEXT NOT NULL PRIMARY KEY,
+              project_id TEXT NOT NULL,
+              updated_at_millis INTEGER NOT NULL,
+              payload TEXT NOT NULL
+            )
+        """.trimIndent(),
+            parameters = 0,
+        )
+    }
 
 /**
  * The board used to be a singleton. There is no reliable project to attribute that data to,

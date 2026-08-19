@@ -93,6 +93,7 @@ import app.andy.ui.components.AndyAlertDialog
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
+import app.andy.ui.automations.AutomationsScreen
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentLaneKind
@@ -179,6 +180,7 @@ private val ProjectChatSort =
 private enum class ProjectCanvas(val label: String) {
     Chat("Chat"),
     Tasks("Tasks"),
+    Automations("Automations"),
     Kanban("Kanban"),
     Runbook("Runbook"),
     Scratchpad("Scratchpad"),
@@ -740,6 +742,18 @@ private fun ProjectCockpit(
                                         modifier = Modifier.weight(1f).fillMaxHeight(),
                                     )
                                 }
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Automations) {
+                                AutomationsScreen(
+                                    services = services,
+                                    project = current,
+                                    onOpenChat = { chatTaskId ->
+                                        selectedTaskId = chatTaskId
+                                        canvas = ProjectCanvas.Chat
+                                        services.agentRuns.setChatViewing(chatTaskId, viewing = true)
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                             RetainedDestination(active = canvas == ProjectCanvas.Kanban) {
                                 KanbanBoardScreen(

@@ -20,5 +20,7 @@ expect fun AgentTerminalSurface(
     taskId: String,
     sessionActive: Boolean,
     onImagesStaged: (List<String>) -> Unit = {},
+    /** Cover the last TUI chrome rows on read-only replay so picker/status text cannot collide. */
+    maskBottomChrome: Boolean = false,
     modifier: Modifier = Modifier,
 )

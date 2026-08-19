@@ -549,6 +549,8 @@ interface AgentRunService {
     /** Toggles Andy plan mode for follow-ups; syncs the live ACP session mode when supported. */
     fun updatePlanMode(taskId: String, planMode: Boolean)
     suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean = false): WorktreeDeleteOutcome
+    fun updateAutomationNotifySuppress(taskId: String, suppress: Boolean) = Unit
+    suspend fun cleanupOwnedWorktree(taskId: String) = Unit
     /** Clears the unread indicator for a finished chat (e.g. when opened). */
     fun markRead(taskId: String)
     /** Marks a chat unread so list/dock badges show again. */
@@ -966,6 +968,7 @@ data class AndyServices(
     val agentRetention: AgentRetentionService = UnavailableAgentRetentionService,
     val projectWorkflows: ProjectWorkflowService,
     val kanban: KanbanService = UnavailableKanbanService,
+    val automations: AutomationService = UnavailableAutomationService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,

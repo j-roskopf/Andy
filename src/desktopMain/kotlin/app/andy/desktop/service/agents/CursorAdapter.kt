@@ -22,6 +22,7 @@ class CursorAdapter : AgentCliAdapter {
 
     override fun buildInteractiveCommand(binary: String, task: AgentTask, mcpUrl: String?): List<String> = buildList {
         add(binary)
+        addCursorWorkspace(task)
         task.vendorSessionId?.let { chatId ->
             add("--resume"); add(chatId)
         }
@@ -42,6 +43,7 @@ class CursorAdapter : AgentCliAdapter {
         val chatId = task.vendorSessionId?.takeIf { it.isNotBlank() }
         return buildList {
             add(binary)
+            addCursorWorkspace(task)
             if (chatId != null) {
                 add("--resume"); add(chatId)
             }
@@ -58,11 +60,22 @@ class CursorAdapter : AgentCliAdapter {
 
     override fun interactiveResumeCommand(binary: String, task: AgentTask): String {
         val chatId = task.vendorSessionId?.takeIf { it.isNotBlank() }
-        return if (chatId != null) {
-            "${shellQuote(binary)} --resume ${shellQuote(chatId)}"
-        } else {
-            shellQuote(binary)
+        val workspace = task.cwd?.takeIf { it.isNotBlank() }
+        return buildString {
+            append(shellQuote(binary))
+            if (workspace != null) {
+                append(" --workspace "); append(shellQuote(workspace))
+            }
+            if (chatId != null) {
+                append(" --resume "); append(shellQuote(chatId))
+            }
         }
+    }
+}
+
+private fun MutableList<String>.addCursorWorkspace(task: AgentTask) {
+    task.cwd?.takeIf { it.isNotBlank() }?.let { cwd ->
+        add("--workspace"); add(cwd)
     }
 }
 

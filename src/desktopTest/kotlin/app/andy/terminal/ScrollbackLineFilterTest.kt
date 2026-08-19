@@ -111,6 +111,19 @@ class ScrollbackLineFilterTest {
     }
 
     @Test
+    fun displayFormatterDropsCursorPickerHintsAndEditedFilesCount() {
+        val raw = """
+            Edited 30 files
+            Ctrl+L to show all projects · Ctrl+B to only show current branch · Space to preview
+            the reducer now validates the checkout path
+        """.trimIndent()
+        val formatted = formatScrollbackForDisplay(raw)
+        assertFalse(formatted.contains("Edited 30 files"))
+        assertFalse(formatted.contains("Ctrl+L"))
+        assertTrue(formatted.contains("the reducer now validates the checkout path"))
+    }
+
+    @Test
     fun scrollbackDisplayTextFromRealCaptureIsLeftAlignedConversation() {
         val raw = """
                               Antigravity CLI 1.1.7

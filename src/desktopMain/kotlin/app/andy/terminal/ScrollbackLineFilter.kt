@@ -51,6 +51,10 @@ private val DurationOnlyLine = Regex("""^\d+ms$""")
 private val ExitCodeLine = Regex("""exit\s+\d+""")
 private val VersionBannerLine = Regex("""v\d{4}\.\d{2}\.\d{2}.*""")
 private val EditedSummaryLine = Regex("""\bEdited\b.*\+\d+""")
+private val EditedFilesCountLine = Regex("""(?i)^edited \d+ files?$""")
+private val PickerHintLine = Regex(
+    """(?i)ctrl\+l to show all projects|only show current branch|space to preview|type to search""",
+)
 
 /**
  * Lines that agent TUIs repaint in place (status footers, spinners) rather than append.
@@ -114,6 +118,8 @@ internal fun isScrollbackDisplayNoise(line: String): Boolean {
     if (VersionBannerLine.matches(lower)) return true
     if (ToolProgressLine.containsMatchIn(trimmed)) return true
     if (EditedSummaryLine.containsMatchIn(trimmed)) return true
+    if (EditedFilesCountLine.matches(trimmed)) return true
+    if (PickerHintLine.containsMatchIn(trimmed)) return true
     if (EarlierItemsHiddenLine.containsMatchIn(trimmed)) return true
     if (TruncatedReviewLine.containsMatchIn(trimmed)) return true
     if (ShellEchoLine.containsMatchIn(trimmed)) return true

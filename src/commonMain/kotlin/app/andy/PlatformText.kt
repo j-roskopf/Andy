@@ -10,6 +10,9 @@ internal fun currentTimeMillis(): Long = Clock.System.now().toEpochMilliseconds(
 /** Local wall-clock display time for epoch millis (empty/"-" for non-positive). */
 internal expect fun formatDisplayDateTime(epochMillis: Long): String
 
+/** IANA id for the host's current zone, e.g. America/Chicago. */
+internal expect fun hostTimeZoneId(): String
+
 internal fun formatDecimal(value: Number, fractionDigits: Int): String {
     require(fractionDigits >= 0)
     val number = value.toDouble()

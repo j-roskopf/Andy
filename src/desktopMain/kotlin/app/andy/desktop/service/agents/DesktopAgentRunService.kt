@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentContextualProvenance
+import app.andy.model.turnCompletionResult
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
@@ -93,6 +94,7 @@ import app.andy.service.AgentRunService
 import app.andy.service.McpServerService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.WorkspaceStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -1080,6 +1082,32 @@ class DesktopAgentRunService(
 
     private suspend fun createAndStart(draft: AgentTaskDraft, taskId: String?): AgentTask {
         ready.await()
+        val importedVendorSession = draft.vendorSessionId?.trim()?.takeIf { it.isNotBlank() }
+        val importedCursorWorkspace = if (draft.agent == AgentKind.Cursor && importedVendorSession != null) {
+            withContext(Dispatchers.IO) { CursorChatWorkspaces.find(importedVendorSession) }
+        } else {
+            null
+        }
+        if (draft.agent == AgentKind.Cursor && importedVendorSession != null && importedCursorWorkspace == null) {
+            val now = System.currentTimeMillis()
+            val task = AgentTask(
+                id = taskId ?: newAgentTaskId(),
+                title = draft.title.ifBlank { draft.fallbackTitle() }.truncateForSummary(60),
+                prompt = draft.prompt,
+                agent = draft.agent,
+                cwd = draft.directory,
+                originDir = draft.directory,
+                status = AgentStatus.Error,
+                errorMessage = "Cursor chat $importedVendorSession was not found under ~/.cursor/chats. Chat ids are stored per workspace folder — paste a CLI chat id from this machine.",
+                vendorSessionId = importedVendorSession,
+                lane = AgentLaneKind.Terminal,
+                createdAtMillis = now,
+                finishedAtMillis = now,
+            )
+            upsertTask(task)
+            persist()
+            return task
+        }
         // A task's explicit lane is a one-off override. Only the settings panel changes the
         // provider preference, so an older terminal chat cannot silently turn ACP off for all
         // future chats with the same provider.
@@ -1144,7 +1172,11 @@ class DesktopAgentRunService(
         // Reuse wins over create: never persist useWorktree=true with a reused path, or a
         // task-store reload (ownsWorktree := useWorktree && worktreePath) will claim ownership
         // and later cleanup can delete someone else's worktree.
-        val useWorktree = draft.useWorktree && resolvedExistingWorktree == null
+        // Imported vendor threads must keep the original workspace; a worktree cwd would
+        // hash to a different Cursor chat bucket and look empty.
+        val useWorktree = draft.useWorktree &&
+            resolvedExistingWorktree == null &&
+            importedVendorSession == null
         if (existingWorktreePath != null && resolvedExistingWorktree == null) {
             val task = AgentTask(
                 id = id,
@@ -1189,18 +1221,20 @@ class DesktopAgentRunService(
             persist()
             return task
         }
+        val originDirectory = importedCursorWorkspace?.cwd ?: draft.directory
         val resolvedCwd = withContext(Dispatchers.IO) {
-            resolvedExistingWorktree ?: AgentScratchWorkspace.resolveCwd(draft.directory)
+            resolvedExistingWorktree ?: AgentScratchWorkspace.resolveCwd(originDirectory)
         }
         var task = AgentTask(
             id = id,
-            title = draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
+            title = importedCursorWorkspace?.title?.takeIf { it.isNotBlank() }
+                ?: draft.title.ifBlank { draft.fallbackTitle().truncateForSummary(60) },
             prompt = draft.prompt,
             agent = draft.agent,
             localRuntime = draft.localRuntime,
             projectId = draft.projectId,
             cwd = resolvedCwd,
-            originDir = draft.directory,
+            originDir = originDirectory,
             useWorktree = useWorktree,
             worktreePath = resolvedExistingWorktree,
             branchName = draft.existingBranchName,
@@ -1216,7 +1250,7 @@ class DesktopAgentRunService(
             model = draft.model,
             reasoningEffort = draft.reasoningEffort,
             fastMode = draft.fastMode,
-            openClawNewSession = draft.openClawNewSession,
+            openClawNewSession = if (importedVendorSession != null) false else draft.openClawNewSession,
             imagePaths = draft.imagePaths,
             skills = draft.skills.filter { it.path in discoveredSkillPaths },
             goal = draft.goal,
@@ -1224,9 +1258,20 @@ class DesktopAgentRunService(
             contextBundleIds = draft.contextBundleIds,
             provenance = draft.provenance,
             parentChatTaskId = draft.parentChatTaskId,
-            status = null,
-            vendorSessionId = null,
-            lane = draft.lane ?: preferredLane(draft.runtimeKind()),
+            // Import reopens an already-finished vendor thread. Seed Done so the
+            // badge is not Working while the TUI sits at an idle prompt with no turn.
+            status = if (importedVendorSession != null) AgentStatus.Done else null,
+            statusConfident = importedVendorSession != null,
+            resumable = importedVendorSession != null,
+            finishedAtMillis = if (importedVendorSession != null) now else null,
+            vendorSessionId = importedVendorSession,
+            automationId = draft.automationId,
+            automationNotifyFailedOnly = draft.automationNotifyFailedOnly,
+            automationSuppressOsNotify = draft.automationSuppressOsNotify,
+            lane = when {
+                importedVendorSession != null -> AgentLaneKind.Terminal
+                else -> draft.lane ?: preferredLane(draft.runtimeKind())
+            },
             createdAtMillis = now,
         )
 
@@ -1315,15 +1360,25 @@ class DesktopAgentRunService(
         }
         upsertTask(task)
         persist()
-        val initialPrompt = task.promptForCli().takeIf { it.isNotBlank() }
+        val initialPrompt = task.promptForCli().takeIf { it.isNotBlank() && importedVendorSession == null }
         // Prefer argv/flag delivery when the CLI supports it (agy --prompt-interactive,
         // claude/codex/cursor positional). PTY typing is a fragile fallback.
         val writeAfterStart = initialPrompt.takeUnless { adapter.embedsInitialPrompt }
         // Do not await the PTY on the caller's dispatcher (often Main). BossTerm
         // initializes on the Compose path — awaiting here can stall the UI thread
         // and leave the UI stuck on "Starting terminal…" even after the session is Idle.
-        launchRun(task, writeAfterStart = writeAfterStart) { nextAdapter, resolvedBinary, mcpUrl ->
-            nextAdapter.buildInteractiveCommand(resolvedBinary, currentTask(task.id) ?: task, mcpUrl)
+        launchRun(
+            task,
+            writeAfterStart = writeAfterStart,
+            quietResume = importedVendorSession != null,
+        ) { nextAdapter, resolvedBinary, mcpUrl ->
+            val current = currentTask(task.id) ?: task
+            if (importedVendorSession != null) {
+                nextAdapter.buildInteractiveResumeCommand(resolvedBinary, current, mcpUrl)
+                    ?: nextAdapter.buildInteractiveCommand(resolvedBinary, current, mcpUrl)
+            } else {
+                nextAdapter.buildInteractiveCommand(resolvedBinary, current, mcpUrl)
+            }
         }
         return task
     }
@@ -1970,6 +2025,19 @@ class DesktopAgentRunService(
                     runProcess(task.id, handle, argvBuilder, writeAfterStart, quietResume, onTerminalStarted = {
                         terminalReady.complete(true)
                     })
+                } catch (error: CancellationException) {
+                    terminals.stop(task.id)
+                    if (handle.stopRequested || currentTask(task.id)?.isActive == true) {
+                        finishTask(
+                            task.id,
+                            AgentStatus.Done,
+                            exitCode = null,
+                            error = null,
+                            stoppedByUser = handle.stopRequested,
+                            forceKillTerminal = true,
+                        )
+                    }
+                    throw error
                 } catch (error: Throwable) {
                     terminals.stop(task.id)
                     finishTask(
@@ -2179,6 +2247,18 @@ class DesktopAgentRunService(
             )
         }.getOrElse { error ->
             agyMintLock?.unlock()
+            if (error is CancellationException || handle.stopRequested) {
+                finishTask(
+                    taskId,
+                    AgentStatus.Done,
+                    exitCode = null,
+                    error = null,
+                    stoppedByUser = true,
+                    forceKillTerminal = true,
+                )
+                if (error is CancellationException) throw error
+                return
+            }
             finishTask(taskId, AgentStatus.Error, exitCode = null, error = "failed to start: ${error.message}")
             return
         }
@@ -3025,6 +3105,7 @@ class DesktopAgentRunService(
             updateTask(taskId) {
                 it.copy(
                     status = AgentStatus.Done,
+                    stoppedByUser = true,
                     userInputRequest = null,
                     errorMessage = null,
                     finishedAtMillis = System.currentTimeMillis(),
@@ -3036,17 +3117,17 @@ class DesktopAgentRunService(
             }
             return
         }
-        val handle = handles[taskId] ?: run {
-            terminals.stop(taskId)
-            return
-        }
-        handle.stopRequested = true
-        scope.launch(Dispatchers.IO) {
-            terminals.stop(taskId)
-            if (handle.job?.isActive != true) {
-                finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
-            }
-        }
+        val handle = handles[taskId]
+        handle?.stopRequested = true
+        handle?.job?.cancel()
+        finishTask(
+            taskId = taskId,
+            status = AgentStatus.Done,
+            exitCode = null,
+            error = null,
+            stoppedByUser = true,
+            forceKillTerminal = true,
+        )
     }
 
     override suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean): WorktreeDeleteOutcome {
@@ -3104,6 +3185,24 @@ class DesktopAgentRunService(
         }
         persist(allowEmptyTaskList = true)
         return WorktreeDeleteOutcome.Deleted
+    }
+
+    override fun updateAutomationNotifySuppress(taskId: String, suppress: Boolean) {
+        updateTask(taskId) { it.copy(automationSuppressOsNotify = suppress) }
+        persistSync()
+    }
+
+    override suspend fun cleanupOwnedWorktree(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        val worktreePath = task.worktreePath ?: return
+        if (!task.ownsWorktree) return
+        task.originDir?.let { originDir ->
+            withContext(Dispatchers.IO) { worktrees.remove(originDir, worktreePath, task.branchName) }
+        }
+        updateTask(taskId) { current ->
+            current.copy(worktreePath = null, ownsWorktree = false, useWorktree = false)
+        }
+        persist()
     }
 
     private fun detachDeletedWorkflowRun(projectTaskId: String, runId: String) {
@@ -4956,6 +5055,23 @@ class DesktopAgentRunService(
 
     private fun appendAcpEvent(taskId: String, event: AgentEvent) = appendEvents(taskId, listOf(event))
 
+    private fun appendTurnCompletionEvent(taskId: String, success: Boolean) {
+        val task = currentTask(taskId) ?: return
+        val finishedAt = task.finishedAtMillis ?: System.currentTimeMillis()
+        val events = eventFlows[taskId]?.value.orEmpty()
+        val result = turnCompletionResult(
+            events = events,
+            startedAtMillis = task.startedAtMillis,
+            finishedAtMillis = finishedAt,
+            success = success,
+            costUsd = task.totalCostUsd,
+            costIsEstimated = task.costIsEstimated,
+            inputTokens = task.inputTokens,
+            outputTokens = task.outputTokens,
+        ) ?: return
+        appendEvents(taskId, listOf(result))
+    }
+
     private fun ensureAcpArtifactMonitor(taskId: String, artifacts: AgentWorkflowArtifacts) {
         if (acpArtifactJobs.containsKey(taskId)) return
         acpArtifactJobs[taskId] = scope.launch {
@@ -5105,7 +5221,7 @@ class DesktopAgentRunService(
                     // Live Working/Blocked means the turn is not finished anymore.
                     finishedAtMillis = when (snapshot.status) {
                         AgentStatus.Working, AgentStatus.Blocked -> null
-                        else -> it.finishedAtMillis
+                        AgentStatus.Done, AgentStatus.Error -> it.finishedAtMillis ?: System.currentTimeMillis()
                     },
                     resumable = if (clearResumable) false else it.resumable,
                 )
@@ -5178,9 +5294,13 @@ class DesktopAgentRunService(
                 worktrees.changeSnapshot(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
             }
         }
+        var finalized = false
         updateTask(taskId) { task ->
-            val shouldFinalize = task.finishedAtMillis == null && (task.isActive || task.status != null)
+            // Launching chats keep status=null. User stop must still leave that overlay.
+            val shouldFinalize = task.finishedAtMillis == null &&
+                (task.isActive || task.status != null || stoppedByUser)
             if (shouldFinalize) {
+                finalized = true
                 val resolvedPlanText = if (status == AgentStatus.Done && task.planMode) {
                     resolveCompletedPlanText(taskId, task)
                 } else {
@@ -5208,6 +5328,9 @@ class DesktopAgentRunService(
             } else {
                 task
             }
+        }
+        if (finalized && lane == AgentLaneKind.Acp) {
+            appendTurnCompletionEvent(taskId, success = status == AgentStatus.Done)
         }
         val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
         handles.remove(taskId)

@@ -14,6 +14,8 @@ import app.andy.model.defaultLane
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.importedThreadTitle
+import app.andy.model.withImportedVendorSession
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.hasVendorCli
 import app.andy.model.isLocalModelBackend
@@ -25,7 +27,9 @@ import app.andy.model.AgentUserInputRequest
 import app.andy.model.ContextualActionKind
 import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
+import app.andy.service.AutomationService
 import app.andy.service.ProjectWorkflowService
+import app.andy.service.UnavailableAutomationService
 import app.andy.terminal.TmuxAndy
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
@@ -73,6 +77,7 @@ fun Server.registerAgentProjectTools(
     agentRuns: AgentRunService,
     projectWorkflows: ProjectWorkflowService,
     callerTaskId: String? = null,
+    automations: AutomationService = UnavailableAutomationService,
 ) {
     fun register(
         name: String,
@@ -192,6 +197,9 @@ fun Server.registerAgentProjectTools(
                         put("acpSessionId", task.acpSessionId.orEmpty())
                         put("stopReason", task.stopReason.orEmpty())
                         put("errorMessage", task.errorMessage.orEmpty())
+                        put("automationId", task.automationId.orEmpty())
+                        put("automationNotifyFailedOnly", task.automationNotifyFailedOnly)
+                        put("automationSuppressOsNotify", task.automationSuppressOsNotify)
                         task.userInputRequest?.let { request ->
                             put("userInputRequest", buildJsonObject {
                                 put("id", request.id)
@@ -487,6 +495,14 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "Optional one-off lane override: ACP or Terminal")
             },
+            "vendorSessionId" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Optional provider thread/session id. Creates a local Andy chat that resumes " +
+                        "that existing conversation instead of starting a new one.",
+                )
+            },
             "autonomy" to buildJsonObject {
                 put("type", "string")
                 put(
@@ -523,7 +539,9 @@ fun Server.registerAgentProjectTools(
         required = listOf("prompt", "agent"),
     ) { args ->
         rejectRawEvidencePaths(args)
-        val prompt = str(args, "prompt") ?: error("prompt required")
+        val vendorSessionId = str(args, "vendorSessionId")?.trim()?.takeIf { it.isNotBlank() }
+        val prompt = str(args, "prompt").orEmpty()
+        if (prompt.isBlank() && vendorSessionId == null) error("prompt required")
         val agentName = str(args, "agent") ?: error("agent required")
         val agent = AgentKind.entries.firstOrNull {
             it.name.equals(agentName, ignoreCase = true) ||
@@ -563,7 +581,8 @@ fun Server.registerAgentProjectTools(
             ?: false
         val imagePaths = parseImagePathsArg(args)
         val draft = AgentTaskDraft(
-                title = str(args, "title")?.takeIf { it.isNotBlank() } ?: prompt.take(48),
+                title = str(args, "title")?.takeIf { it.isNotBlank() }
+                    ?: prompt.take(48).ifBlank { agent.importedThreadTitle() },
                 prompt = prompt,
                 agent = agent,
                 localRuntime = runtime,
@@ -583,7 +602,8 @@ fun Server.registerAgentProjectTools(
                 imagePaths = imagePaths,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
-            )
+                vendorSessionId = vendorSessionId,
+            ).let { if (vendorSessionId != null) it.withImportedVendorSession(vendorSessionId) else it }
         draft.localModelLaunchError()?.let { error(it) }
         val task = agentRuns.createAndStart(draft)
         if (task.status == AgentStatus.Error) {
@@ -1163,6 +1183,8 @@ fun Server.registerAgentProjectTools(
         projectWorkflows.startBuildPair(id)
         textResult("""{"ok":true,"buildTaskId":"$id"}""")
     }
+
+    registerAutomationTools(automations, agentRuns, callerTaskId)
 }
 
 /**
@@ -1224,4 +1246,4 @@ fun agentProjectToolNames(): List<String> = listOf(
     "workflow.save_spec",
     "workflow.run_spec",
     "workflow.start_build",
-)
+) + automationToolNames()

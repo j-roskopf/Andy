@@ -18,6 +18,7 @@ import app.andy.desktop.service.agents.HermesAdapter
 import app.andy.desktop.service.agents.OpenClawAdapter
 import app.andy.desktop.service.agents.GooseAdapter
 import app.andy.desktop.service.agents.WorktreeManager
+import app.andy.desktop.service.automations.DesktopAutomationService
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
 import app.andy.desktop.service.ios.DesktopIosDeviceService
@@ -200,7 +201,13 @@ fun createDaemonRuntime(
         actionConfig = actionConfig,
         terminalMode = AgentTerminalMode.TmuxHeadless,
     )
-    mcp.bindAgentServices(agentRuns, agentRuns)
+    val automations = DesktopAutomationService(
+        store = agentTaskStore,
+        agentRuns = agentRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        startScheduler = true,
+    )
+    mcp.bindAgentServices(agentRuns, agentRuns, automations)
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -259,6 +266,7 @@ fun createDaemonRuntime(
         agentRetention = agentRetention,
         projectWorkflows = agentRuns,
         kanban = kanban,
+        automations = automations,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
@@ -323,6 +331,7 @@ fun createDaemonRuntime(
         onShutdown = {
             networkAccessReconciler.stop()
             daemonScope.cancel()
+            runCatching { automations.stop() }
             runCatching { agentRuns.shutdownForProcessExit() }
             runCatching { mcp.stopUnixSocketBlocking() }
             runBlocking {
@@ -530,6 +539,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         agentRuns = remoteAgents,
         projectWorkflows = remoteAgents,
         kanban = kanban,
+        automations = remoteAgents,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
@@ -651,7 +661,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         actionConfig = actionConfig,
     )
-    mcp.bindAgentServices(agentRuns, agentRuns)
+    val automations = DesktopAutomationService(
+        store = agentTaskStore,
+        agentRuns = agentRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        startScheduler = true,
+    )
+    mcp.bindAgentServices(agentRuns, agentRuns, automations)
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -737,6 +753,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         agentRetention = agentRetention,
         projectWorkflows = agentRuns,
         kanban = kanban,
+        automations = automations,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
