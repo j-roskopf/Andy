@@ -29,6 +29,10 @@ import java.util.Locale
  */
 class DesktopIosFileService(
     private val runner: CommandRunner,
+    private val simulatorDevicesRoot: File = File(
+        System.getProperty("user.home"),
+        "Library/Developer/CoreSimulator/Devices",
+    ),
 ) : FileService {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -37,17 +41,19 @@ class DesktopIosFileService(
         if (normalized.isBlank() || normalized == "/" || normalized == "/sdcard") {
             return@withContext listContainerRoots(serial)
         }
-        val dir = File(normalized)
-        dir.listFiles()
-            ?.map { it.toDeviceFile() }
-            ?.sortedWith(compareByDescending<DeviceFile> { it.isDirectory }.thenBy { it.name.lowercase() })
-            .orEmpty()
+        runCatching {
+            val dir = requireUnderSimulator(serial, normalized)
+            dir.listFiles()
+                ?.map { it.toDeviceFile() }
+                ?.sortedWith(compareByDescending<DeviceFile> { it.isDirectory }.thenBy { it.name.lowercase() })
+                .orEmpty()
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun pull(serial: String, remotePath: String, localPath: String): CommandResult =
         withContext(Dispatchers.IO) {
             runCatching {
-                val source = File(remotePath)
+                val source = requireUnderSimulator(serial, remotePath)
                 require(source.exists()) { "$remotePath does not exist" }
                 val target = File(localPath)
                 if (source.isDirectory) {
@@ -65,7 +71,7 @@ class DesktopIosFileService(
             runCatching {
                 val source = File(localPath)
                 require(source.exists()) { "$localPath does not exist" }
-                val target = File(remotePath)
+                val target = requireUnderSimulator(serial, remotePath)
                 if (source.isDirectory) {
                     source.copyRecursively(target, overwrite = true)
                 } else {
@@ -78,12 +84,30 @@ class DesktopIosFileService(
 
     override suspend fun delete(serial: String, remotePath: String): CommandResult = withContext(Dispatchers.IO) {
         runCatching {
-            val target = File(remotePath)
+            val target = requireUnderSimulator(serial, remotePath)
             require(target.exists()) { "$remotePath does not exist" }
             val ok = if (target.isDirectory) target.deleteRecursively() else target.delete()
             if (!ok) error("Failed to delete $remotePath")
             CommandResult.success("Deleted $remotePath")
         }.getOrElse { CommandResult.failure(it.message ?: "Delete failed") }
+    }
+
+    /**
+     * Simulator file ops must stay under that UDID's CoreSimulator device tree. The Files UI can
+     * still type an absolute path; rejecting anything outside the selected simulator prevents
+     * browsing/deleting arbitrary host files.
+     */
+    private fun requireUnderSimulator(serial: String, remotePath: String): File {
+        val udid = serial.trim()
+        require(udid.isNotEmpty()) { "Missing simulator UDID" }
+        val root = File(simulatorDevicesRoot, udid).canonicalFile
+        val target = File(remotePath).canonicalFile
+        val rootPath = root.path
+        val targetPath = target.path
+        require(targetPath == rootPath || targetPath.startsWith(rootPath + File.separator)) {
+            "Path is outside the selected simulator"
+        }
+        return target
     }
 
     /** Data container path for [bundleId], or null if unresolved. */

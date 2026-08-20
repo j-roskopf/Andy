@@ -36,7 +36,7 @@ class DesktopIosAppDatabaseService(
                     ?: error("Could not resolve app container for $packageName")
                 val root = File(container)
                 findDatabaseFiles(root).map { file ->
-                    val relative = file.relativeTo(root).path
+                    val relative = file.relativeTo(root).invariantSeparatorsPath
                     val wal = File(file.parentFile, "${file.name}-wal").isFile
                     val shm = File(file.parentFile, "${file.name}-shm").isFile
                     AppDatabaseInfo(name = relative, path = relative, hasWal = wal, hasShm = shm)
@@ -256,11 +256,10 @@ class DesktopIosAppDatabaseService(
         File(queriesDir, packageName.replace(Regex("[^A-Za-z0-9._-]"), "_"))
 
     private fun parseCsv(text: String): DbQueryResult {
-        val lines = text.lineSequence().filter { it.isNotEmpty() }.toList()
-        if (lines.isEmpty()) return DbQueryResult(emptyList(), emptyList())
-        val columns = parseCsvLine(lines.first())
-        val rows = lines.drop(1).map { line ->
-            val cells = parseCsvLine(line)
+        val records = parseCsvRecords(text)
+        if (records.isEmpty()) return DbQueryResult(emptyList(), emptyList())
+        val columns = records.first()
+        val rows = records.drop(1).map { cells ->
             columns.indices.map { index ->
                 when (val cell = cells.getOrNull(index)) {
                     null -> null
@@ -272,16 +271,18 @@ class DesktopIosAppDatabaseService(
         return DbQueryResult(columns, rows)
     }
 
-    private fun parseCsvLine(line: String): List<String> {
+    /** Record-oriented CSV parse so quoted fields may contain embedded newlines. */
+    private fun parseCsvRecords(text: String): List<List<String>> {
+        val records = mutableListOf<List<String>>()
         val values = mutableListOf<String>()
         val current = StringBuilder()
         var inQuotes = false
         var i = 0
-        while (i < line.length) {
-            val ch = line[i]
+        while (i < text.length) {
+            val ch = text[i]
             when {
                 ch == '"' -> {
-                    if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+                    if (inQuotes && i + 1 < text.length && text[i + 1] == '"') {
                         current.append('"')
                         i++
                     } else {
@@ -292,12 +293,26 @@ class DesktopIosAppDatabaseService(
                     values += current.toString()
                     current.clear()
                 }
+                (ch == '\n' || ch == '\r') && !inQuotes -> {
+                    if (ch == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++
+                    values += current.toString()
+                    current.clear()
+                    if (values.size > 1 || values.singleOrNull()?.isNotEmpty() == true) {
+                        records += values.toList()
+                    }
+                    values.clear()
+                }
                 else -> current.append(ch)
             }
             i++
         }
-        values += current.toString()
-        return values
+        if (current.isNotEmpty() || values.isNotEmpty()) {
+            values += current.toString()
+            if (values.size > 1 || values.singleOrNull()?.isNotEmpty() == true) {
+                records += values.toList()
+            }
+        }
+        return records
     }
 
     companion object {

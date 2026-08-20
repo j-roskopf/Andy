@@ -1378,6 +1378,7 @@ class DesktopAgentRunService(
             }
         }
         upsertTask(task)
+        rememberTemporaryWorkflowDir(task)
         persist()
         val initialPrompt = task.promptForCli().takeIf { it.isNotBlank() && importedVendorSession == null }
         // Prefer argv/flag delivery when the CLI supports it (agy --prompt-interactive,
@@ -3238,6 +3239,12 @@ class DesktopAgentRunService(
         tempArtifacts.discard(task.id)
         runCatching { AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).deleteRecursively() }
         Unit
+    }
+
+    private fun rememberTemporaryWorkflowDir(task: AgentTask) {
+        if (!task.temporary) return
+        val workflowDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
+        tempArtifacts.rememberWorkflowDir(task.id, workflowDir)
     }
 
     /**

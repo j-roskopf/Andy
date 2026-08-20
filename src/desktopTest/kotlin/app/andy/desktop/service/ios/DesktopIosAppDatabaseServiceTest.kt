@@ -200,4 +200,22 @@ class DesktopIosAppDatabaseServiceTest {
         assertTrue(deleted)
         assertTrue(service.listSavedQueries(bundleId).isEmpty())
     }
+
+    @Test
+    fun queryParsesQuotedCsvFieldsWithEmbeddedNewlines() = runBlocking {
+        val container = newTempDir()
+        File(container, "app.db").writeText("placeholder")
+        val csv = "id,note\r\n1,\"line one\nline two\"\r\n"
+        val service = DesktopIosAppDatabaseService(
+            containerRunner(container) { CommandResult.success(csv) },
+            sqliteLocator = { fakeSqlite },
+        )
+
+        val result = service.query("udid", bundleId, "app.db", "SELECT id, note FROM t", limit = 10).getOrThrow()
+
+        assertEquals(listOf("id", "note"), result.columns)
+        assertEquals(1, result.rows.size)
+        assertEquals("1", result.rows.single()[0])
+        assertEquals("line one\nline two", result.rows.single()[1])
+    }
 }

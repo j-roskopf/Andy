@@ -45,9 +45,23 @@ actual suspend fun fetchRemoteBytes(url: String): ByteArray? = withContext(Dispa
             .GET()
             .header("Accept", "image/*,*/*;q=0.8")
             .build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofByteArray())
+        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() !in 200..299) return@runCatching null
-        val body = response.body() ?: return@runCatching null
-        if (body.size.toLong() > MaxRemoteImageBytes) null else body
+        response.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull()?.let { length ->
+            if (length > MaxRemoteImageBytes) return@runCatching null
+        }
+        response.body().use { input ->
+            val output = java.io.ByteArrayOutputStream(minOf(64 * 1024, MaxRemoteImageBytes.toInt()))
+            val chunk = ByteArray(16 * 1024)
+            var total = 0L
+            while (true) {
+                val read = input.read(chunk)
+                if (read < 0) break
+                total += read
+                if (total > MaxRemoteImageBytes) return@runCatching null
+                output.write(chunk, 0, read)
+            }
+            output.toByteArray()
+        }
     }.getOrNull()
 }

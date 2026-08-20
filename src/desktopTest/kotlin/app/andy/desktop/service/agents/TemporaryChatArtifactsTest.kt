@@ -103,4 +103,28 @@ class TemporaryChatArtifactsTest {
             parent.deleteRecursively()
         }
     }
+
+    @Test
+    fun sweepOrphansAlsoDeletesRememberedWorkflowDirs() {
+        val parent = tempParent()
+        val project = tempParent()
+        try {
+            val staleRoot = File(parent, "andy-temp-chats-crashed").apply { mkdirs() }
+            val taskDir = File(staleRoot, "task-1").apply { mkdirs() }
+            val workflowDir = File(project, ".andy/task-1").apply { mkdirs() }
+            File(workflowDir, "status.json").writeText("{}")
+            File(taskDir, TemporaryChatArtifacts.WORKFLOW_DIR_MARKER).writeText(workflowDir.absolutePath)
+            val twoDaysAgo = System.currentTimeMillis() - 2L * 24 * 60 * 60 * 1000
+            staleRoot.setLastModified(twoDaysAgo)
+
+            val swept = TemporaryChatArtifacts.sweepOrphans(parent)
+
+            assertEquals(1, swept)
+            assertFalse(staleRoot.exists())
+            assertFalse(workflowDir.exists(), "project-local .andy/<taskId> must not survive a crash sweep")
+        } finally {
+            parent.deleteRecursively()
+            project.deleteRecursively()
+        }
+    }
 }

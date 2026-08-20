@@ -274,8 +274,22 @@ class DesktopProjectArtifactCatalogService(
         val path = absolutePath(entryId) ?: return@withContext null
         val file = File(path)
         if (!file.isFile) return@withContext null
-        val text = file.readText()
-        if (text.length <= maxChars) text else text.take(maxChars) + "\n…"
+        // Bound the read itself — large PDFs/archives must not be fully decoded just for a preview.
+        file.bufferedReader().use { reader ->
+            val buffer = StringBuilder(maxChars.coerceAtMost(64 * 1024))
+            val chunk = CharArray(8 * 1024)
+            var remaining = maxChars
+            var truncated = false
+            while (remaining > 0) {
+                val toRead = minOf(chunk.size, remaining)
+                val read = reader.read(chunk, 0, toRead)
+                if (read < 0) break
+                buffer.append(chunk, 0, read)
+                remaining -= read
+            }
+            if (remaining == 0 && reader.read() >= 0) truncated = true
+            if (buffer.isEmpty()) null else if (truncated) buffer.append("\n…").toString() else buffer.toString()
+        }
     }
 
     private suspend fun collectHits(): List<ProjectCatalogSourceHit> {

@@ -80,6 +80,13 @@ class DesktopIosLogcatService(
 
     private fun matchesIosLogFilter(entry: LogcatEntry, filter: LogcatFilter): Boolean {
         if (entry.level !in filter.levels) return false
+        val packageName = filter.packageName?.trim().orEmpty()
+        if (packageName.isNotEmpty()) {
+            val mentionsPackage =
+                entry.tag.contains(packageName, ignoreCase = true) ||
+                    entry.message.contains(packageName, ignoreCase = true)
+            if (!mentionsPackage) return false
+        }
         return filter.search.isBlank() ||
             entry.message.contains(filter.search, ignoreCase = true) ||
             entry.tag.contains(filter.search, ignoreCase = true)

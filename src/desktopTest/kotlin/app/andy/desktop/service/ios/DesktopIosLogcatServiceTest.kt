@@ -53,6 +53,25 @@ class DesktopIosLogcatServiceTest {
     }
 
     @Test
+    fun snapshotFiltersByPackageName() = runBlocking {
+        val mixed = listOf(
+            """{"timestamp":"t1","messageType":"Info","eventMessage":"App started","subsystem":"com.example.myapp","category":"lifecycle","processID":100,"threadID":1}""",
+            """{"timestamp":"t2","messageType":"Info","eventMessage":"Other process","subsystem":"com.other.app","category":"ui","processID":200,"threadID":1}""",
+        ).joinToString("\n")
+        val runner = CommandRunner { _, _ -> CommandResult.success(mixed) }
+        val service = DesktopIosLogcatService(runner)
+
+        val filtered = service.snapshot(
+            "udid",
+            LogcatFilter(packageName = "com.example.myapp"),
+            limit = 50,
+        )
+
+        assertEquals(1, filtered.size)
+        assertEquals("App started", filtered.single().message)
+    }
+
+    @Test
     fun snapshotTruncatesToLimit() = runBlocking {
         val runner = CommandRunner { _, _ -> CommandResult.success(ndjson) }
         val service = DesktopIosLogcatService(runner)
