@@ -146,6 +146,7 @@ import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
+import app.andy.ui.theme.Yellow
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
@@ -539,6 +540,11 @@ internal fun AgentTaskDetail(
                 },
                 onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
                 onDelete = { onDelete(task) },
+                onKeep = if (task.temporary) {
+                    { scope.launch { services.agentRuns.keepTemporaryChat(task.id) } }
+                } else {
+                    null
+                },
                 onCopyPrompt = { copyText(task.prompt) },
             )
         }
@@ -1321,6 +1327,8 @@ private fun AgentTaskHeader(
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    /** Promotes a temporary chat to a persisted one; null for chats that are already permanent. */
+    onKeep: (() -> Unit)? = null,
     onCopyPrompt: () -> Unit,
 ) {
     var localExpanded by remember(task.id) { mutableStateOf(false) }
@@ -1391,6 +1399,8 @@ private fun AgentTaskHeader(
                     }
                 }
             }
+            // The chat is unrecoverable once closed, so say so where it cannot be missed.
+            if (task.temporary) StatusTag("temporary", Yellow)
             StatusTag(statusLabel, statusColor)
         }
 
@@ -1415,7 +1425,8 @@ private fun AgentTaskHeader(
                 }
                 if (showDeleteDetailsActions) {
                     Spacer(Modifier.weight(1f))
-                    AgentHeaderAction("delete", TextSecondary, onDelete)
+                    onKeep?.let { keep -> AgentHeaderAction("keep chat", Green, keep) }
+                    AgentHeaderAction(if (task.temporary) "discard" else "delete", TextSecondary, onDelete)
                     AgentHeaderAction(
                         label = if (expanded) "hide details" else "details",
                         onClick = { setExpanded(!expanded) },

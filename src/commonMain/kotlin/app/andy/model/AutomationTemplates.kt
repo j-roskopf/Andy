@@ -41,7 +41,7 @@ val AutomationTemplates: List<AutomationTemplate> = listOf(
     AutomationTemplate(
         title = "Daily standup summary",
         prompt = """
-            Write a standup summary for this Andy project using recent chats, Kanban, git history, and any linked PRs.
+            Write a standup summary for this project using recent chats, Kanban, git history, and any linked PRs.
 
             Include:
             - What landed since yesterday

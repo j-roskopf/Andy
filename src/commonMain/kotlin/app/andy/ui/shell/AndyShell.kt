@@ -30,6 +30,7 @@ import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.IosTargetRegistry
 import app.andy.service.OpenAgentTaskRequest
+import app.andy.service.TargetCapabilities
 import app.andy.ui.actions.ActionsScreen
 import app.andy.ui.agents.AgentsScreen
 import app.andy.ui.apps.AppsScreen
@@ -126,8 +127,8 @@ internal fun AndyShell(
         }
     }
 
-    LaunchedEffect(state.isIosSelection, state.destination) {
-        if (state.isIosSelection && !state.destination.availableWithIosTarget()) {
+    LaunchedEffect(state.isIosSelection, state.destination, state.targetCapabilities) {
+        if (state.isIosSelection && !state.destination.availableWithIosTarget(state.targetCapabilities)) {
             state.navigateTo(AndyDestination.Live)
         }
     }
@@ -135,11 +136,9 @@ internal fun AndyShell(
     val visibleDestinations = remember(
         capabilities.destinations,
         state.workspaceState.disabledDestinations,
-        state.isIosSelection,
     ) {
         capabilities.destinations.filter { destination ->
-            (!destination.isToggleableInSidebar() || destination.name !in state.workspaceState.disabledDestinations) &&
-                !(state.isIosSelection && destination == AndyDestination.Controls)
+            !destination.isToggleableInSidebar() || destination.name !in state.workspaceState.disabledDestinations
         }
     }
     LaunchedEffect(state.destination, visibleDestinations) {
@@ -265,6 +264,7 @@ internal fun AndyShell(
                 destinations = visibleDestinations,
                 deviceCount = state.devices.size + state.iosTargets.size,
                 iosSelectionActive = state.isIosSelection,
+                iosCapabilities = state.targetCapabilities,
                 // Project chats are owned by Actions. Keep their unread state out of
                 // the standalone Agent destination.
                 hasUnreadAgentTasks = agentTasks.any { !it.archived && it.unread && it.projectId == null },
@@ -496,8 +496,13 @@ internal fun AndyShell(
                             transfer = state.transfer,
                             deviceLabels = state.workspaceState.deviceLabels,
                             onSetDeviceLabel = { serial, label -> state.setDeviceLabel(serial, label) },
+                            iosDevices = services.iosDevices,
                         )
-                        AndyDestination.Catalog -> CatalogScreen(services.avd)
+                        AndyDestination.Catalog -> CatalogScreen(
+                            avd = services.avd,
+                            iosDevices = services.iosDevices,
+                            iosMode = state.isIosSelection,
+                        )
                         AndyDestination.Live -> LiveScreen(
                             services = services,
                             serial = state.activeTargetId,
@@ -526,32 +531,34 @@ internal fun AndyShell(
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
-                            state.selectedSerial,
+                            state.activeTargetId,
                             state.workspaceState.appsListPaneWidth,
                             state.workspaceState.appsDetailsPaneHeight,
                             onPaneChange = { listWidth, detailsHeight -> state.updateWorkspace { it.copy(appsListPaneWidth = listWidth, appsDetailsPaneHeight = detailsHeight) } },
                         )
                         AndyDestination.Logcat -> LogcatScreen(
                             services = services,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             state = state.logcatState,
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
+                            iosMode = state.isIosSelection,
                         )
                         AndyDestination.Intents -> IntentsScreen(
                             services = services,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             workspaceState = state.workspaceState,
                             onUpdateWorkspace = { state.updateWorkspace(it) },
+                            urlSchemesOnly = state.isIosSelection && !state.targetCapabilities.androidIntentModes,
                         )
                         AndyDestination.Files -> FilesScreen(
                             files = services.files,
                             apps = services.apps,
                             sharedPrefs = services.sharedPrefs,
                             appDatabase = services.appDatabase,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             transfer = state.transfer,
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg ->
@@ -563,6 +570,7 @@ internal fun AndyShell(
                             onSelectedTabChange = { tab ->
                                 state.updateWorkspace { it.copy(filesTab = tab.name) }
                             },
+                            preferencesLabel = if (state.isIosSelection) "User Defaults" else null,
                         )
                         AndyDestination.Network -> NetworkScreen(
                             services = services,
@@ -594,17 +602,19 @@ internal fun AndyShell(
                         AndyDestination.Controls -> ControlsScreen(
                             devices = services.devices,
                             mirror = services.mirror,
-                            serial = state.selectedSerial,
+                            serial = state.activeTargetId,
                             device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                             avd = services.avd,
                             apps = services.apps,
                             hostFiles = services.hostFiles,
                             hingeAngle = state.foldableHingeAngle,
                             onHingeAngleChange = state::updateFoldableHingeAngle,
+                            iosMode = state.isIosSelection,
+                            iosDevices = services.iosDevices,
                         )
                         AndyDestination.Design -> DesignScreen(
                             services,
-                            state.selectedSerial,
+                            state.activeTargetId,
                             state.devices.firstOrNull { it.serial == state.selectedSerial },
                             state.workspaceState.designDevicePaneWidth,
                             onDevicePaneWidthChange = { width -> state.updateWorkspace { it.copy(designDevicePaneWidth = width) } },

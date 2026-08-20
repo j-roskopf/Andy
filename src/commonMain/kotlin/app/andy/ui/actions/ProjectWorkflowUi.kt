@@ -288,6 +288,7 @@ internal fun ProjectWorkflowDetail(
     agentTasks: List<AgentTask>,
     onNewBuildFromPlan: (ProjectPlanSnapshot) -> Unit,
     onOpenRun: (String) -> Unit,
+    onOpenArtifact: ((String) -> Unit)? = null,
     onEdit: (ProjectTask) -> Unit,
     onDelete: (ProjectTask) -> Unit,
     modifier: Modifier = Modifier,
@@ -342,10 +343,11 @@ internal fun ProjectWorkflowDetail(
                 onRefine = { instructions -> scope.launch { services.projectWorkflows.runSpec(task.id, instructions) } },
                 onEdit = { onEdit(task) },
                 canEdit = !task.isActive && !pairActive,
+                onOpenArtifact = onOpenArtifact,
             )
-            ProjectTaskKind.Build -> BuildDetail(services, workflow, task, agentTasks)
-            ProjectTaskKind.Review -> ReviewDetail(task, agentTasks)
-            ProjectTaskKind.Verification -> VerificationDetail(task)
+            ProjectTaskKind.Build -> BuildDetail(services, workflow, task, agentTasks, onOpenArtifact)
+            ProjectTaskKind.Review -> ReviewDetail(task, agentTasks, onOpenArtifact)
+            ProjectTaskKind.Verification -> VerificationDetail(task, onOpenArtifact)
         }
         if (task.instructions.isNotBlank() && task.kind == ProjectTaskKind.Spec) {
             DetailBlock("BRIEF", task.instructions)
@@ -397,6 +399,7 @@ private fun SpecDetail(
     onRefine: (String) -> Unit,
     onEdit: () -> Unit,
     canEdit: Boolean,
+    onOpenArtifact: ((String) -> Unit)? = null,
 ) {
     var selectedVersion by remember(task.id, task.planVersions.size) { mutableStateOf(task.planVersions.lastOrNull()?.version) }
     var planExpanded by remember(task.id, selectedVersion) { mutableStateOf(false) }
@@ -419,6 +422,11 @@ private fun SpecDetail(
             OutlinedButton(onClick = {
                 onNewBuildFromPlan(ProjectPlanSnapshot(plan.text, task.id, plan.version, "${task.title} · v${plan.version}"))
             }) { Text("New build from this plan") }
+            if (onOpenArtifact != null) {
+                OutlinedButton(onClick = {
+                    onOpenArtifact(app.andy.domain.workflowCatalogId(plan.runId, "plan.md"))
+                }) { Text("Open in Artifacts") }
+            }
         }
     }
     if (task.planVersions.isEmpty()) {
@@ -475,7 +483,13 @@ private fun SpecDetail(
 }
 
 @Composable
-private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, build: ProjectTask, runs: List<AgentTask>) {
+private fun BuildDetail(
+    services: AndyServices,
+    workflow: ProjectWorkflowState,
+    build: ProjectTask,
+    runs: List<AgentTask>,
+    @Suppress("UNUSED_PARAMETER") onOpenArtifact: ((String) -> Unit)? = null,
+) {
     val scope = rememberCoroutineScope()
     var planExpanded by remember(build.id, build.planSnapshot?.text) { mutableStateOf(false) }
     var followUpOpen by remember(build.id) { mutableStateOf(false) }
@@ -656,7 +670,11 @@ private fun BuildDetail(services: AndyServices, workflow: ProjectWorkflowState, 
 }
 
 @Composable
-private fun ReviewDetail(task: ProjectTask, runs: List<AgentTask>) {
+private fun ReviewDetail(
+    task: ProjectTask,
+    runs: List<AgentTask>,
+    onOpenArtifact: ((String) -> Unit)? = null,
+) {
     val attemptByRunId = remember(task.attempts) { task.attempts.associateBy { it.runId } }
     val showGeneration = remember(task.reviewVerdicts) {
         task.reviewVerdicts.map { it.reviewGeneration }.distinct().size > 1
@@ -671,6 +689,15 @@ private fun ReviewDetail(task: ProjectTask, runs: List<AgentTask>) {
                 "Correctness · plan alignment · maintainability · security · scope",
             )
             if (task.reviewInstructions.isNotBlank()) DetailBlock("CUSTOM REVIEW INSTRUCTIONS", task.reviewInstructions)
+            if (onOpenArtifact != null) {
+                val runId = task.reviewVerdicts.maxByOrNull { it.createdAtMillis }?.runId
+                    ?: task.attempts.maxByOrNull { it.createdAtMillis }?.runId
+                if (runId != null) {
+                    OutlinedButton(onClick = {
+                        onOpenArtifact(app.andy.domain.workflowCatalogId(runId, "review.json"))
+                    }) { Text("Open in Artifacts") }
+                }
+            }
             if (task.state == ProjectTaskState.Disabled) {
                 WorkflowNotice("Review is disabled. Prior findings and transcripts remain available for audit.", TextSecondary)
             }
@@ -734,11 +761,23 @@ internal fun reviewVerdictHeadline(
 }
 
 @Composable
-private fun VerificationDetail(task: ProjectTask) {
+private fun VerificationDetail(
+    task: ProjectTask,
+    onOpenArtifact: ((String) -> Unit)? = null,
+) {
     SelectionContainer {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (task.verificationInstructions.isNotBlank()) {
                 DetailBlock("VERIFICATION INSTRUCTIONS", task.verificationInstructions)
+            }
+            if (onOpenArtifact != null) {
+                val runId = task.verdicts.lastOrNull()?.runId
+                    ?: task.attempts.maxByOrNull { it.createdAtMillis }?.runId
+                if (runId != null) {
+                    OutlinedButton(onClick = {
+                        onOpenArtifact(app.andy.domain.workflowCatalogId(runId, "verification.json"))
+                    }) { Text("Open in Artifacts") }
+                }
             }
             task.verdicts.lastOrNull()?.let { verdict ->
                 WorkflowNotice(verdict.summary, if (verdict.status == ProjectVerificationStatus.Passed) Green else Red)

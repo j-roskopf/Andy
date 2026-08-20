@@ -25,6 +25,7 @@ import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OpenInvestigationRequest
+import app.andy.service.TargetCapabilities
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
@@ -58,6 +59,14 @@ internal class ShellState(
 
     val isIosSelection: Boolean
         get() = selectedIosUdid != null
+
+    /** Feature surface for the active target; drives sidebar gating and Live chrome. */
+    val targetCapabilities: TargetCapabilities
+        get() {
+            val udid = selectedIosUdid ?: return TargetCapabilities.Android
+            val target = iosTargets.firstOrNull { it.udid == udid } ?: return TargetCapabilities.Simulator
+            return TargetCapabilities.of(target)
+        }
 
     var workspaceState by mutableStateOf(WorkspaceState())
         private set

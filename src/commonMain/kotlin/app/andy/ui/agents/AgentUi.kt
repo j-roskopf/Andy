@@ -244,6 +244,17 @@ internal fun ChatSessionSidebarRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         AgentPillIcon(task.agent, Modifier.size(14.dp))
+        // Marked in every rail, not just the Agents Temporary section — a project chat list
+        // shows temporary chats inline, and closing one is unrecoverable.
+        if (task.temporary) {
+            Text(
+                "temp",
+                color = Yellow,
+                fontFamily = MonoFont,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
         Text(
             prompt,
             color = when {

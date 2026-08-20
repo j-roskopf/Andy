@@ -19,6 +19,9 @@ import app.andy.model.HierarchySource
 import app.andy.model.InvestigationCaptureMode
 import app.andy.model.InvestigationEventKind
 import app.andy.model.InvestigationEventSeverity
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
 import app.andy.model.LogcatEntry
 import app.andy.model.LogLevel
 import app.andy.model.NetworkExchange
@@ -33,6 +36,7 @@ import app.andy.service.CommandResult
 import app.andy.service.CrashInspectorService
 import app.andy.service.DeviceService
 import app.andy.service.EncodedVideoAccessUnit
+import app.andy.service.IosTargetRegistry
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
 import app.andy.service.MetricsService
@@ -686,6 +690,42 @@ class DesktopBugServiceTest {
         assertTrue(service.status.value.actionCount >= 1)
 
         service.stopCapture()
+    }
+
+    @Test
+    fun iosMirrorSessionStartsCaptureAndSaveBugFillsDeviceModelFromRegistry() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-ios-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val udid = "CA4B2892-6294-4CD4-AA5A-6031551226BA"
+        IosTargetRegistry.update(
+            listOf(
+                IosTarget(
+                    udid = udid,
+                    displayName = "iPhone 17 Pro",
+                    kind = IosTargetKind.Simulator,
+                    state = IosTargetState.Booted,
+                    model = "iPhone 17 Pro",
+                ),
+            ),
+        )
+        try {
+            // iOS mirror sessions have no AndroidDevice; syncCaptureToMirrorSession must still
+            // claim them (Phase 1.3) rather than filtering iOS serials out.
+            mirror.session.value = androidMirrorSession(udid)
+            withTimeout(15_000) {
+                service.status.first { it.active && it.deviceSerial == udid }
+            }
+
+            val report = service.saveBug(BugCaptureDraft("iOS bug", "notes"), device = null)
+
+            assertEquals(udid, report.deviceSerial)
+            assertEquals("iPhone 17 Pro", report.deviceModel)
+
+            service.stopCapture()
+        } finally {
+            IosTargetRegistry.update(emptyList())
+        }
     }
 
     @Test

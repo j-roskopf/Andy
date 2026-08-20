@@ -34,6 +34,10 @@ import app.andy.model.AgentTask
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.domain.splitPriorityChats
+import app.andy.domain.excludingTemporary
+import app.andy.domain.onlyTemporary
+import app.andy.domain.temporaryChatOrder
+import app.andy.domain.temporaryChatNeedsDiscardConfirm
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.FilterPill
@@ -71,8 +75,13 @@ private fun AgentCommandCenter(
     var query by remember { mutableStateOf("") }
     var activeOnly by remember { mutableStateOf(false) }
     var showArchived by remember { mutableStateOf(false) }
+    var showUnscopedArtifacts by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
+    var projects by remember { mutableStateOf<List<app.andy.model.ActionProject>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        projects = runCatching { services.actionConfig.load().projects }.getOrDefault(emptyList())
+    }
     // Keep the open chat mounted while Agents is retained-but-inactive. Forcing composing
     // tore down AgentTerminalSurface, released the tmux viewer, and caused a multi-flash
     // reattach when returning.
@@ -88,6 +97,10 @@ private fun AgentCommandCenter(
         }
     }
 
+    fun requestKeep(task: AgentTask) {
+        scope.launch { services.agentRuns.keepTemporaryChat(task.id) }
+    }
+
     fun requestDelete(task: AgentTask, force: Boolean = false) {
         if (force) {
             scope.launch {
@@ -95,6 +108,30 @@ private fun AgentCommandCenter(
                 services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
                 if (selectedTaskId == task.id) selectedTaskId = null
             }
+            return
+        }
+        // Discarding a temporary chat is unrecoverable by design — nothing was ever written —
+        // so it says what is being lost and offers the way out instead.
+        if (task.temporary) {
+            if (!temporaryChatNeedsDiscardConfirm(task)) {
+                requestDelete(task, force = true)
+                return
+            }
+            val worktreeNote = if (task.ownsWorktree && task.branchName != null) {
+                "\n\nIts worktree and branch \"${task.branchName}\" are deleted too."
+            } else {
+                ""
+            }
+            pendingConfirmation = PendingConfirmation(
+                title = "Discard temporary chat?",
+                message = "\"${task.title}\" was never saved, so this cannot be undone.$worktreeNote",
+                confirmLabel = "Discard",
+                neutralLabel = "Keep chat",
+                onNeutral = {
+                    pendingConfirmation = null
+                    requestKeep(task)
+                },
+            ) { requestDelete(task, force = true) }
             return
         }
         pendingConfirmation = PendingConfirmation(
@@ -135,9 +172,13 @@ private fun AgentCommandCenter(
             }
             .sortedWith(compareByDescending<AgentTask> { it.isActive }.thenByDescending { it.createdAtMillis })
     }
+    // Temporary chats get their own pinned section: they are never history, but they still need
+    // somewhere to click back to while they are alive.
+    val temporaryInbox = remember(inbox) { inbox.onlyTemporary().temporaryChatOrder() }
+    val persistentInbox = remember(inbox) { inbox.excludingTemporary() }
     val pinPriority = workspaceState.agentPinPriorityChats && !showArchived
-    val groupedInbox = remember(inbox, pinPriority) {
-        if (pinPriority) splitPriorityChats(inbox) else null
+    val groupedInbox = remember(persistentInbox, pinPriority) {
+        if (pinPriority) splitPriorityChats(persistentInbox) else null
     }
     val selected = tasks.firstOrNull { it.id == selectedTaskId && it.projectId == null && it.archived == showArchived }
         ?: inbox.firstOrNull()
@@ -176,7 +217,7 @@ private fun AgentCommandCenter(
                     else -> null
                 },
                 actions = {
-                    Button(onClick = { composing = true }, colors = primaryButtonColors()) {
+                    Button(onClick = { composing = true; showUnscopedArtifacts = false }, colors = primaryButtonColors()) {
                         Text("New", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
                 },
@@ -189,11 +230,25 @@ private fun AgentCommandCenter(
                 placeholder = { Text("Search", color = TextSecondary, fontFamily = MonoFont) },
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterPill("All", !activeOnly && !showArchived, Cyan) { activeOnly = false; showArchived = false }
-                FilterPill("Live", activeOnly, Green) { activeOnly = true; showArchived = false }
-                FilterPill("Archived", showArchived, TextSecondary) { showArchived = true; activeOnly = false }
+                FilterPill("All", !activeOnly && !showArchived && !showUnscopedArtifacts, Cyan) {
+                    activeOnly = false; showArchived = false; showUnscopedArtifacts = false
+                }
+                FilterPill("Live", activeOnly && !showUnscopedArtifacts, Green) {
+                    activeOnly = true; showArchived = false; showUnscopedArtifacts = false
+                }
+                FilterPill("Archived", showArchived && !showUnscopedArtifacts, TextSecondary) {
+                    showArchived = true; activeOnly = false; showUnscopedArtifacts = false
+                }
+                FilterPill("Unscoped artifacts", showUnscopedArtifacts, Cyan) {
+                    showUnscopedArtifacts = true; activeOnly = false; showArchived = false
+                }
             }
-            if (inbox.isEmpty()) {
+            if (showUnscopedArtifacts) {
+                WorkspaceEmptyCanvas(
+                    "Unscoped artifacts appear in the main pane",
+                    Modifier.weight(1f),
+                )
+            } else if (inbox.isEmpty()) {
                 WorkspaceEmptyCanvas(
                     if (query.isBlank()) {
                         if (showArchived) "No archived tasks" else "No tasks yet"
@@ -208,7 +263,25 @@ private fun AgentCommandCenter(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     val priority = groupedInbox?.priority.orEmpty()
-                    val rest = groupedInbox?.rest ?: inbox
+                    val rest = groupedInbox?.rest ?: persistentInbox
+                    if (temporaryInbox.isNotEmpty()) {
+                        item(key = "temporary-header", contentType = "section-label") {
+                            ChatInboxSectionLabel("Temporary")
+                        }
+                        items(temporaryInbox, key = { it.id }) { task ->
+                            AgentInboxRow(
+                                task = task,
+                                selected = !composing && task.id == selected?.id,
+                                onClick = { openInboxTask(task) },
+                                onMarkUnread = { services.agentRuns.markUnread(task.id) },
+                                // Archiving would imply a history a temporary chat does not have.
+                                onArchive = null,
+                                onDelete = ::requestDelete,
+                                deleteLabel = "Discard",
+                                onKeep = { requestKeep(task) },
+                            )
+                        }
+                    }
                     if (priority.isNotEmpty()) {
                         item(key = "priority-header", contentType = "section-label") {
                             ChatInboxSectionLabel("Priority")
@@ -255,40 +328,55 @@ private fun AgentCommandCenter(
         },
         main = {
             Box(Modifier.fillMaxSize()) {
-                RetainedDestination(active = composing) {
-                    AgentTaskComposerPane(
-                        services,
-                        statuses,
-                        null,
-                        onCancel = { composing = false },
-                        onSubmit = { draft ->
-                            scope.launch {
-                                val task = services.agentRuns.createAndStart(draft)
-                                selectedTaskId = task.id
-                                composing = false
-                            }
+                if (showUnscopedArtifacts) {
+                    app.andy.ui.artifacts.ProjectArtifactsScreen(
+                        services = services,
+                        projectId = null,
+                        projects = projects,
+                        onOpenChat = { taskId ->
+                            showUnscopedArtifacts = false
+                            selectedTaskId = taskId
+                            composing = false
+                            services.agentRuns.setChatViewing(taskId, viewing = true)
                         },
                         modifier = Modifier.fillMaxSize(),
-                        workspaceState = workspaceState,
-                        dictationActive = active && composing,
                     )
-                }
-                if (selected == null) {
-                    if (!composing) {
-                        WorkspaceEmptyCanvas("Select a task or start a new one")
-                    }
                 } else {
-                    // Keep the open transcript mounted under New Chat so follow-up drafts survive.
-                    RetainedDestination(active = !composing) {
-                        AgentTaskDetail(
+                    RetainedDestination(active = composing) {
+                        AgentTaskComposerPane(
                             services,
-                            selected,
-                            onDelete = ::requestDelete,
-                            transcriptScrollMemory = transcriptScrollMemory,
-                            workspaceState = workspaceState,
+                            statuses,
+                            null,
+                            onCancel = { composing = false },
+                            onSubmit = { draft ->
+                                scope.launch {
+                                    val task = services.agentRuns.createAndStart(draft)
+                                    selectedTaskId = task.id
+                                    composing = false
+                                }
+                            },
                             modifier = Modifier.fillMaxSize(),
-                            dictationActive = active && !composing,
+                            workspaceState = workspaceState,
+                            dictationActive = active && composing,
                         )
+                    }
+                    if (selected == null) {
+                        if (!composing) {
+                            WorkspaceEmptyCanvas("Select a task or start a new one")
+                        }
+                    } else {
+                        // Keep the open transcript mounted under New Chat so follow-up drafts survive.
+                        RetainedDestination(active = !composing) {
+                            AgentTaskDetail(
+                                services,
+                                selected,
+                                onDelete = ::requestDelete,
+                                transcriptScrollMemory = transcriptScrollMemory,
+                                workspaceState = workspaceState,
+                                modifier = Modifier.fillMaxSize(),
+                                dictationActive = active && !composing,
+                            )
+                        }
                     }
                 }
             }
@@ -320,9 +408,13 @@ private fun AgentInboxRow(
     selected: Boolean,
     onClick: () -> Unit,
     onMarkUnread: () -> Unit,
-    onArchive: () -> Unit,
+    /** Null for temporary chats, which have no history to archive. */
+    onArchive: (() -> Unit)?,
     archiveLabel: String = "Archive",
     onDelete: (AgentTask) -> Unit,
+    deleteLabel: String = "Delete",
+    /** Promotes a temporary chat to a persisted one. Null for chats that are already permanent. */
+    onKeep: (() -> Unit)? = null,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -363,16 +455,27 @@ private fun AgentInboxRow(
                 },
                 enabled = !task.unread,
             )
+            if (onArchive != null) {
+                DropdownMenuItem(
+                    text = { Text(archiveLabel, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp) },
+                    onClick = {
+                        menuExpanded = false
+                        onArchive()
+                    },
+                    enabled = archiveLabel == "Unarchive" || !task.isActive,
+                )
+            }
+            if (onKeep != null) {
+                DropdownMenuItem(
+                    text = { Text("Keep chat", color = Green, fontFamily = MonoFont, fontSize = 12.sp) },
+                    onClick = {
+                        menuExpanded = false
+                        onKeep()
+                    },
+                )
+            }
             DropdownMenuItem(
-                text = { Text(archiveLabel, color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp) },
-                onClick = {
-                    menuExpanded = false
-                    onArchive()
-                },
-                enabled = archiveLabel == "Unarchive" || !task.isActive,
-            )
-            DropdownMenuItem(
-                text = { Text("Delete", color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 12.sp) },
+                text = { Text(deleteLabel, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 12.sp) },
                 onClick = {
                     menuExpanded = false
                     onDelete(task)

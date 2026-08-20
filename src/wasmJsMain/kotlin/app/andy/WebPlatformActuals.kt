@@ -78,6 +78,8 @@ actual fun loadImageBitmap(path: String): ImageBitmap? = null
 
 actual fun loadImageBitmap(bytes: ByteArray): ImageBitmap? = null
 
+actual suspend fun fetchRemoteBytes(url: String): ByteArray? = null
+
 internal actual fun hostTimeZoneId(): String =
     jsHostTimeZoneId().toString().ifBlank { "UTC" }
 

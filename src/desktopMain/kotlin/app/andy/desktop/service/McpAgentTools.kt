@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.desktop.service.agents.AgentWorkflowArtifacts
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.appendAgentStatus
+import app.andy.domain.excludingTemporary
 import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentContextualProvenance
@@ -158,7 +159,9 @@ fun Server.registerAgentProjectTools(
         name = "chat.list",
         description = "List Andy agent chats/tasks with status and metadata",
     ) {
-        val tasks = agentRuns.tasks.value
+        // Temporary chats are desktop-session-local; another agent must not be able to
+        // enumerate or inspect one.
+        val tasks = agentRuns.tasks.value.excludingTemporary()
         val arr = buildJsonArray {
             tasks.forEach { task ->
                 add(
@@ -737,7 +740,7 @@ fun Server.registerAgentProjectTools(
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
         (agentRuns as? DesktopAgentRunService)?.reconcileStaleActiveTaskIfNeeded(id)
-        val task = agentRuns.tasks.value.firstOrNull { it.id == id }
+        val task = agentRuns.tasks.value.excludingTemporary().firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
                 put("ok", true)
@@ -946,7 +949,7 @@ fun Server.registerAgentProjectTools(
         required = listOf("taskId"),
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
-        val task = agentRuns.tasks.value.firstOrNull { it.id == id }
+        val task = agentRuns.tasks.value.excludingTemporary().firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
                 put("id", id)

@@ -41,6 +41,7 @@ import app.andy.service.AppService
 import app.andy.service.AvdService
 import app.andy.service.DeviceService
 import app.andy.service.HostFileService
+import app.andy.service.IosDeviceService
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
 import app.andy.ui.components.Button
@@ -71,7 +72,13 @@ internal fun ControlsScreen(
     hostFiles: HostFileService? = null,
     hingeAngle: Float = 180f,
     onHingeAngleChange: (Float) -> Unit = {},
+    iosMode: Boolean = false,
+    iosDevices: IosDeviceService? = null,
 ) {
+    if (iosMode) {
+        IosControlsScreen(serial = serial, iosDevices = iosDevices ?: return)
+        return
+    }
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("Ready") }
     var fontScale by remember { mutableStateOf("1.0") }

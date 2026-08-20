@@ -37,8 +37,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
@@ -48,6 +54,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -101,6 +109,7 @@ import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.ComposerChip
 import app.andy.ui.components.ComposerPlaceholderHint
 import app.andy.ui.components.ComposerToolbarRow
+import app.andy.ui.components.HoverTooltip
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
@@ -182,57 +191,63 @@ internal fun AgentTaskComposerPane(
         )
         return
     }
-    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .then(
-                    if (projectContext != null) {
-                        Modifier.padding(horizontal = AndySpace.Space4)
-                    } else {
-                        Modifier
-                    },
-                ),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            AgentMark(form.state.agent)
-            Spacer(Modifier.height(16.dp))
-            Text(
-                projectContext?.let { "What do you want to work on in ${it.name}?" }
-                    ?: "What can I help you with?",
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 18.sp,
-                textAlign = TextAlign.Center,
+    Box(modifier.fillMaxSize().background(AndyColors.ContentBg)) {
+        val backgroundUri = workspaceState.newChatBackgroundUri
+        if (backgroundUri.isNotBlank()) {
+            NewChatBackground(uri = backgroundUri, modifier = Modifier.fillMaxSize())
+        }
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .then(
+                        if (projectContext != null) {
+                            Modifier.padding(horizontal = AndySpace.Space4)
+                        } else {
+                            Modifier
+                        },
+                    ),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                AgentMark(form.state.agent)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    projectContext?.let { "What do you want to work on in ${it.name}?" }
+                        ?: "What can I help you with?",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 18.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Import thread from provider",
+                    color = TextSecondary,
+                    fontFamily = DisplayFont,
+                    fontSize = 13.sp,
+                    modifier = Modifier.clickable(role = Role.Button) { importingThread = true },
+                )
+            }
+            AgentCliIssueNotices(
+                statuses = cliStatuses,
+                onCopyRepairCommand = copyText,
+                onRefresh = { scope.launch { services.agentRuns.refreshCliStatuses() } },
             )
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "Import thread from provider",
-                color = TextSecondary,
-                fontFamily = DisplayFont,
-                fontSize = 13.sp,
-                modifier = Modifier.clickable(role = Role.Button) { importingThread = true },
+            AgentChatComposer(
+                form = form,
+                wrapComposerControls = wrapComposerControls,
+                onCancel = onCancel,
+                voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
+                dictationActive = dictationActive,
+                onSubmit = {
+                    onSubmit(form.buildDraft())
+                    form.clearPrompt()
+                },
             )
         }
-        AgentCliIssueNotices(
-            statuses = cliStatuses,
-            onCopyRepairCommand = copyText,
-            onRefresh = { scope.launch { services.agentRuns.refreshCliStatuses() } },
-        )
-        AgentChatComposer(
-            form = form,
-            wrapComposerControls = wrapComposerControls,
-            onCancel = onCancel,
-            voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
-            dictationActive = dictationActive,
-            onSubmit = {
-                onSubmit(form.buildDraft())
-                form.clearPrompt()
-            },
-        )
     }
 }
 
@@ -298,6 +313,11 @@ private class AgentTaskComposerFormState(
     var openClawNewSession by mutableStateOf(true)
     var budgetText by mutableStateOf("")
     var directoryIsGitRepo by mutableStateOf(false)
+    /**
+     * Ephemeral chat. Deliberately not part of [applyProviderDefaults]: a sticky value would
+     * make the next ordinary chat evaporate on close, and nothing was written to recover.
+     */
+    var temporary by mutableStateOf(false)
     var currentBranch by mutableStateOf<String?>(null)
     var baseWorktreeTaskId by mutableStateOf<String?>(null)
     var availableBases by mutableStateOf<List<WorktreeBaseOption>>(emptyList())
@@ -311,6 +331,9 @@ private class AgentTaskComposerFormState(
         promptValue = TextFieldValue("")
         imagePaths = emptyList()
         skillMenuDismissed = false
+        // Off for every new chat: carrying it over would silently make the next ordinary chat
+        // vanish on close, and nothing was persisted to get it back.
+        temporary = false
     }
 
     fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()) {
@@ -564,6 +587,7 @@ private class AgentTaskComposerForm(
             skills = selectedSkills,
             goal = goalCommand?.goal,
             maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
+            temporary = state.temporary,
         )
     }
 
@@ -671,16 +695,17 @@ private fun AgentChatComposer(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        if (state.directoryIsGitRepo) {
-            ComposerBranchWorktreeChip(
-                branch = state.currentBranch,
-                useWorktree = state.useWorktree,
-                onUseWorktreeChange = { state.useWorktree = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = AndySpace.Space4),
-            )
-        }
+        ComposerBranchWorktreeChip(
+            showGitControls = state.directoryIsGitRepo,
+            branch = state.currentBranch,
+            useWorktree = state.useWorktree,
+            onUseWorktreeChange = { state.useWorktree = it },
+            temporary = state.temporary,
+            onTemporaryChange = { state.temporary = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = AndySpace.Space4),
+        )
         ChatComposerFrame(
             modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
             highlighted = state.imageDragActive,
@@ -1056,11 +1081,19 @@ private fun AgentChatComposer(
     }
 }
 
+/**
+ * The row always renders so a temporary chat can be started anywhere — outside a git repo and
+ * in chats with no project context, which is exactly where a throwaway question tends to start.
+ * Only the branch label and worktree checkbox are gated on being in a repo.
+ */
 @Composable
 private fun ComposerBranchWorktreeChip(
+    showGitControls: Boolean,
     branch: String?,
     useWorktree: Boolean,
     onUseWorktreeChange: (Boolean) -> Unit,
+    temporary: Boolean,
+    onTemporaryChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val content = TextSecondary
@@ -1069,45 +1102,143 @@ private fun ComposerBranchWorktreeChip(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Row(
-            Modifier.weight(1f, fill = false),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Image(
-                painter = painterResource(Res.drawable.git_branch),
-                contentDescription = "git branch",
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                branch ?: "detached HEAD",
-                color = content,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
+        if (showGitControls) {
+            Row(
+                Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Image(
+                    painter = painterResource(Res.drawable.git_branch),
+                    contentDescription = "git branch",
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    branch ?: "detached HEAD",
+                    color = content,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+            Row(
+                Modifier.clickable(role = Role.Checkbox) { onUseWorktreeChange(!useWorktree) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                ComposerWorktreeCheckbox(checked = useWorktree, color = content)
+                Text(
+                    "worktree",
+                    color = content,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                )
+            }
         }
-        Row(
-            Modifier.clickable(role = Role.Checkbox) { onUseWorktreeChange(!useWorktree) },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ComposerTemporaryToggle(
+            temporary = temporary,
+            onTemporaryChange = onTemporaryChange,
+            offColor = content,
+        )
+    }
+}
+
+/**
+ * Icon-only toggle: tinted when on, neutral when off. It carries no label, so the state has to
+ * read from the tint alone.
+ *
+ * Drawn rather than resampled from the source PNG. That artwork is a 100px thin-stroke line icon,
+ * and at this size its dashed outline and interior lines land below one pixel and blur into a
+ * smudge. Stroke widths here are chosen in dp so they stay crisp at any scale factor, matching
+ * how [ComposerWorktreeCheckbox] beside it is drawn.
+ */
+@Composable
+private fun ComposerTemporaryToggle(
+    temporary: Boolean,
+    onTemporaryChange: (Boolean) -> Unit,
+    offColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val tint = if (temporary) Yellow else offColor.copy(alpha = 0.85f)
+    HoverTooltip(
+        text = if (temporary) {
+            "Temporary chat: on — discarded when closed"
+        } else {
+            "Temporary chat — never saved to history"
+        },
+        modifier = modifier,
+    ) {
+        Box(
+            Modifier
+                .size(AndyLayout.ControlHeightSm)
+                .clickable(role = Role.Checkbox) { onTemporaryChange(!temporary) }
+                .semantics {
+                    contentDescription = if (temporary) "temporary chat on" else "temporary chat off"
+                },
+            contentAlignment = Alignment.Center,
         ) {
-            ComposerWorktreeCheckbox(checked = useWorktree, color = content)
-            Text(
-                "worktree",
-                color = content,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 12.sp,
-                maxLines = 1,
-            )
+            Canvas(Modifier.size(TemporaryIconSize)) {
+                val stroke = 1.3.dp.toPx()
+                val inset = stroke / 2f
+                val bubbleHeight = size.height * 0.72f
+                // A rounded rectangle rather than an ellipse: its straight runs give the dashes
+                // somewhere to read as dashes instead of collapsing into a dotted ring.
+                val bubble = RoundRect(
+                    left = inset,
+                    top = inset,
+                    right = size.width - inset,
+                    bottom = bubbleHeight - inset,
+                    cornerRadius = CornerRadius(size.height * 0.30f),
+                )
+                // Dash lengths must come from dp too — a fixed pixel array turns into a solid
+                // outline at 2x and a dotted one at 1x.
+                drawPath(
+                    path = Path().apply { addRoundRect(bubble) },
+                    color = tint,
+                    style = Stroke(
+                        width = stroke,
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(2.6.dp.toPx(), 1.7.dp.toPx()),
+                            phase = 0f,
+                        ),
+                    ),
+                )
+                // Tail hangs below the bubble rather than crossing into it, and is filled rather
+                // than stroked — an outlined triangle this small collapses into a pinched hook.
+                drawPath(
+                    path = Path().apply {
+                        moveTo(size.width * 0.30f, bubbleHeight - stroke)
+                        lineTo(size.width * 0.25f, size.height - inset)
+                        lineTo(size.width * 0.50f, bubbleHeight - stroke)
+                        close()
+                    },
+                    color = tint,
+                )
+                // Two rows, not the source artwork's three: a third leaves well under a pixel of
+                // gap at this size and all three merge into a solid block.
+                listOf(0.34f to 0.48f, 0.62f to 0.32f).forEach { (y, widthFraction) ->
+                    val lineY = bubbleHeight * y
+                    val start = size.width * 0.26f
+                    drawLine(
+                        color = tint,
+                        start = Offset(start, lineY),
+                        end = Offset(start + size.width * widthFraction, lineY),
+                        strokeWidth = stroke,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
         }
     }
 }
+
+private val TemporaryIconSize = 17.dp
 
 @Composable
 private fun ComposerWorktreeCheckbox(

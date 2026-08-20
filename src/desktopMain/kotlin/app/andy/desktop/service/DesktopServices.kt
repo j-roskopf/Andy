@@ -21,11 +21,25 @@ import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.automations.DesktopAutomationService
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
+import app.andy.desktop.service.ios.DesktopIosAppDatabaseService
+import app.andy.desktop.service.ios.DesktopIosAppService
+import app.andy.desktop.service.ios.DesktopIosCrashInspectorService
 import app.andy.desktop.service.ios.DesktopIosDeviceService
+import app.andy.desktop.service.ios.DesktopIosFileService
+import app.andy.desktop.service.ios.DesktopIosIntentService
+import app.andy.desktop.service.ios.DesktopIosLogcatService
 import app.andy.desktop.service.ios.DesktopIosMirrorEngine
+import app.andy.desktop.service.ios.DesktopIosSharedPrefsService
 import app.andy.desktop.service.mirror.DesktopMirrorEngine
 import app.andy.desktop.service.mirror.DesktopPopOutMirrorPool
+import app.andy.service.RoutingAppDatabaseService
+import app.andy.service.RoutingAppService
+import app.andy.service.RoutingCrashInspectorService
+import app.andy.service.RoutingFileService
+import app.andy.service.RoutingIntentService
+import app.andy.service.RoutingLogcatService
 import app.andy.service.RoutingMirrorEngine
+import app.andy.service.RoutingSharedPrefsService
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import app.andy.desktop.service.proxy.DesktopProxyService
 import app.andy.desktop.service.dhu.DesktopDhuService
@@ -113,9 +127,9 @@ fun createDaemonRuntime(
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
-    val iosMirror = DesktopIosMirrorEngine(iosDevices)
+    val iosMirror = DesktopIosMirrorEngine(iosDevices, store)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
-    val logcat = DesktopLogcatService(runner, devices)
+    val logcat = RoutingLogcatService(DesktopLogcatService(runner, devices), DesktopIosLogcatService(runner))
     val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
         val ws = store.state.value
         (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
@@ -128,20 +142,20 @@ fun createDaemonRuntime(
         terminalAppearance = { store.state.value.toTerminalAppearance() },
     )
     val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = DesktopIntentService(runner, devices)
-    val apps = DesktopAppService(runner, devices)
-    val files = DesktopFileService(runner, devices)
+    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
+    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
+    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
     val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
-    val sharedPrefs = DesktopSharedPrefsService(runner, devices)
-    val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, devices), DesktopIosSharedPrefsService(runner))
+    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, devices), DesktopIosAppDatabaseService(runner))
     val dhu = DesktopDhuService(devices = devices, runner = runner)
     val metrics = DesktopMetricsService(runner, devices)
-    val crashInspector = DesktopCrashInspectorService(devices)
+    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(devices), DesktopIosCrashInspectorService(runner))
     val heapDump = DesktopHeapDumpService(runner, devices, files)
 
     val bugService = DesktopBugService(
@@ -242,6 +256,11 @@ fun createDaemonRuntime(
         viewHierarchy = viewHierarchy,
         bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        projectArtifacts = DesktopProjectArtifactCatalogService(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            agentRuns = agentRuns,
+            bugs = bugService,
+        ),
         recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,
@@ -361,14 +380,14 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
-    val iosMirror = DesktopIosMirrorEngine(iosDevices)
+    val iosMirror = DesktopIosMirrorEngine(iosDevices, store)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val popOutMirrors = DesktopPopOutMirrorPool(
         primary = mirror,
         newAndroid = { DesktopMirrorEngine(runner, devices) },
-        newIos = { DesktopIosMirrorEngine(iosDevices) },
+        newIos = { DesktopIosMirrorEngine(iosDevices, store) },
     )
-    val logcat = DesktopLogcatService(runner, devices)
+    val logcat = RoutingLogcatService(DesktopLogcatService(runner, devices), DesktopIosLogcatService(runner))
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
@@ -384,20 +403,20 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         terminalAppearance = { store.state.value.toTerminalAppearance() },
     )
     val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = DesktopIntentService(runner, devices)
-    val apps = DesktopAppService(runner, devices)
-    val files = DesktopFileService(runner, devices)
+    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
+    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
+    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
     val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
-    val sharedPrefs = DesktopSharedPrefsService(runner, devices)
-    val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, devices), DesktopIosSharedPrefsService(runner))
+    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, devices), DesktopIosAppDatabaseService(runner))
     val dhu = DesktopDhuService(devices = devices, runner = runner)
     val metrics = DesktopMetricsService(runner, devices)
-    val crashInspector = DesktopCrashInspectorService(devices)
+    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(devices), DesktopIosCrashInspectorService(runner))
     val heapDump = DesktopHeapDumpService(runner, devices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
@@ -516,6 +535,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         viewHierarchy = viewHierarchy,
         bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        projectArtifacts = DesktopProjectArtifactCatalogService(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            agentRuns = remoteAgents,
+            bugs = bugService,
+        ),
         recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,
@@ -562,14 +586,14 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val devices = DesktopDeviceService(runner, locator, store)
     val iosDevices = DesktopIosDeviceService(runner)
     val androidMirror = DesktopMirrorEngine(runner, devices)
-    val iosMirror = DesktopIosMirrorEngine(iosDevices)
+    val iosMirror = DesktopIosMirrorEngine(iosDevices, store)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val popOutMirrors = DesktopPopOutMirrorPool(
         primary = mirror,
         newAndroid = { DesktopMirrorEngine(runner, devices) },
-        newIos = { DesktopIosMirrorEngine(iosDevices) },
+        newIos = { DesktopIosMirrorEngine(iosDevices, store) },
     )
-    val logcat = DesktopLogcatService(runner, devices)
+    val logcat = RoutingLogcatService(DesktopLogcatService(runner, devices), DesktopIosLogcatService(runner))
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
@@ -586,20 +610,20 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     )
 
     val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = DesktopIntentService(runner, devices)
-    val apps = DesktopAppService(runner, devices)
-    val files = DesktopFileService(runner, devices)
+    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
+    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
+    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
     val viewHierarchy = DesktopViewHierarchyService(runner, devices)
     val tracing = DesktopTracingService(runner, devices, files)
     val traceViewer = DesktopTraceViewerService()
-    val sharedPrefs = DesktopSharedPrefsService(runner, devices)
-    val appDatabase = DesktopAppDatabaseService(runner, devices)
+    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, devices), DesktopIosSharedPrefsService(runner))
+    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, devices), DesktopIosAppDatabaseService(runner))
     val dhu = DesktopDhuService(devices = devices, runner = runner)
     val metrics = DesktopMetricsService(runner, devices)
-    val crashInspector = DesktopCrashInspectorService(devices)
+    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(devices), DesktopIosCrashInspectorService(runner))
     val heapDump = DesktopHeapDumpService(runner, devices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
@@ -729,6 +753,11 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         viewHierarchy = viewHierarchy,
         bugs = bugService,
         artifacts = DesktopArtifactService(runner, devices, mirror),
+        projectArtifacts = DesktopProjectArtifactCatalogService(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            agentRuns = agentRuns,
+            bugs = bugService,
+        ),
         recordingExport = recordingExportService,
         tracing = tracing,
         traceViewer = traceViewer,

@@ -1,5 +1,6 @@
 package app.andy.desktop.service.ios
 
+import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
 import app.andy.desktop.service.mirror.GpuMirrorJni
 import app.andy.desktop.service.mirror.GpuMirrorPipeline
@@ -33,12 +34,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 private const val NATIVE_HOST_WAIT_NANOS = 8_000_000_000L
 private const val NATIVE_HOST_WAIT_STEP_MILLIS = 16L
 
 class DesktopIosMirrorEngine(
     private val iosDevices: app.andy.service.IosDeviceService? = null,
+    /** Persists the resolved CMIO `uniqueID` per UDID so reconnects skip re-resolution (Phase 6.3). */
+    private val workspaceStore: DesktopWorkspaceStore? = null,
 ) : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
@@ -134,10 +138,17 @@ class DesktopIosMirrorEngine(
         status.value = "Starting iOS screen capture…"
         val size = when (target?.kind) {
             IosTargetKind.Physical -> {
+                // Prefer a uniqueID resolved on a previous successful connect: it survives simctl/
+                // devicectl not reporting coreDeviceIdentifier on every enumeration, and skips the
+                // native CoreMediaIO device-list scan that resolves it from scratch.
+                val cachedCmioId = workspaceStore?.state?.value?.iosCmioIds?.get(serial)
+                val preferredCoreDeviceIdentifier = target.coreDeviceIdentifier
+                    ?: IosTargetRegistry.target(serial)?.coreDeviceIdentifier
+                    ?: cachedCmioId
                 val captureSize = connectPhysicalDevice(
                     serial,
                     target.displayName.ifBlank { IosTargetRegistry.target(serial)?.displayName.orEmpty() },
-                    target.coreDeviceIdentifier ?: IosTargetRegistry.target(serial)?.coreDeviceIdentifier,
+                    preferredCoreDeviceIdentifier,
                 )
                 if (captureSize == null || captureSize[0] <= 0 || captureSize[1] <= 0) {
                     null
@@ -145,6 +156,9 @@ class DesktopIosMirrorEngine(
                     disconnectIosCapture(serial)
                     null
                 } else {
+                    preferredCoreDeviceIdentifier?.takeIf { it.isNotBlank() }?.let { resolvedId ->
+                        persistCmioId(serial, resolvedId)
+                    }
                     captureSize
                 }
             }
@@ -276,6 +290,18 @@ class DesktopIosMirrorEngine(
         NativeIosSimJni.resetInput()
         inputReadyJob?.cancel()
         inputReadyJob = scope.async { NativeIosSimJni.ensureInputReady() }
+    }
+
+    /** Fire-and-forget: never blocks/fails a mirror connect on workspace persistence. */
+    private fun persistCmioId(udid: String, coreDeviceIdentifier: String) {
+        val store = workspaceStore ?: return
+        scope.launch {
+            runCatching {
+                val current = store.state.value
+                if (current.iosCmioIds[udid] == coreDeviceIdentifier) return@runCatching
+                store.save(current.copy(iosCmioIds = current.iosCmioIds + (udid to coreDeviceIdentifier)))
+            }
+        }
     }
 
     private suspend fun connectPhysicalDevice(
@@ -519,10 +545,39 @@ class DesktopIosMirrorEngine(
         }
     }
 
-    override suspend fun screenshot(serial: String): ByteArray? {
-        return NativeMirrorJni.copyLatestFrameArgb()?.let { frame ->
-            // Bug capture uses MirrorFrame path elsewhere; returning null keeps parity with native metadata frames.
-            null
+    override suspend fun screenshot(serial: String): ByteArray? = withContext(Dispatchers.IO) {
+        // Prefer native-resolution simctl capture for booted simulators.
+        val target = IosTargetRegistry.target(serial)
+        if (target?.kind == IosTargetKind.Simulator && target.state == IosTargetState.Booted) {
+            val temp = File.createTempFile("andy-ios-shot", ".png")
+            try {
+                val exit = runCatching {
+                    ProcessBuilder("xcrun", "simctl", "io", serial, "screenshot", temp.absolutePath)
+                        .redirectErrorStream(true)
+                        .start()
+                        .waitFor()
+                }.getOrDefault(-1)
+                if (exit == 0 && temp.isFile && temp.length() > 0L) {
+                    return@withContext temp.readBytes()
+                }
+            } finally {
+                temp.delete()
+            }
         }
+        val frame = activeGpuPipeline()?.copyLatestFrameArgb()
+            ?: NativeMirrorJni.copyLatestFrameArgb()
+            ?: return@withContext null
+        if (frame.width <= 1 || frame.height <= 1 || frame.argb.isEmpty()) return@withContext null
+        encodeArgbPng(frame.width, frame.height, frame.argb)
     }
+}
+
+internal fun encodeArgbPng(width: Int, height: Int, argb: IntArray): ByteArray? {
+    return runCatching {
+        val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(0, 0, width, height, argb, 0, width)
+        val out = java.io.ByteArrayOutputStream()
+        javax.imageio.ImageIO.write(image, "png", out)
+        out.toByteArray()
+    }.getOrNull()
 }

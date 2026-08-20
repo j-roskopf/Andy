@@ -42,6 +42,59 @@ interface IosDeviceService {
     fun hideSimulatorApp(): Unit = Unit
     suspend fun iosSimAvailable(): Boolean
     suspend fun iosSimDiagnostic(): String
+
+    /** Runs `xcrun simctl <args>`. */
+    suspend fun simctl(args: List<String>): CommandResult =
+        CommandResult.failure("simctl is unavailable")
+
+    /** Device types from `simctl list devicetypes -j`. */
+    suspend fun listDeviceTypes(): List<IosDeviceType> = emptyList()
+
+    /** Runtimes from `simctl list runtimes -j`. */
+    suspend fun listRuntimes(): List<IosRuntime> = emptyList()
+
+    suspend fun createSimulator(name: String, deviceTypeId: String, runtimeId: String? = null): CommandResult =
+        CommandResult.failure("Simulator creation is unavailable")
+
+    suspend fun cloneSimulator(udid: String, newName: String): CommandResult =
+        CommandResult.failure("Simulator clone is unavailable")
+
+    suspend fun eraseSimulator(udid: String): CommandResult =
+        CommandResult.failure("Simulator erase is unavailable")
+
+    suspend fun renameSimulator(udid: String, newName: String): CommandResult =
+        CommandResult.failure("Simulator rename is unavailable")
+
+    suspend fun deleteSimulator(udid: String): CommandResult =
+        CommandResult.failure("Simulator delete is unavailable")
+
+    suspend fun deleteUnavailableSimulators(): CommandResult =
+        CommandResult.failure("simctl delete unavailable is not supported")
+
+    suspend fun deleteUnusedRuntimes(notUsedSinceDays: Int): CommandResult =
+        CommandResult.failure("simctl runtime delete is not supported")
+
+    /**
+     * Physical-device Developer Mode status from `devicectl device info details`.
+     * Null when the probe fails or the target is a simulator.
+     */
+    suspend fun developerModeStatus(udid: String): IosDeveloperModeStatus? = null
+
+    /**
+     * Native-resolution PNG via `simctl io <udid> screenshot`, for the screenshot studio and
+     * Dynamic Type sweep (Phase 4.2/4.3). Null when unsupported or capture failed.
+     */
+    suspend fun captureScreenshot(udid: String): ByteArray? = null
+
+    /**
+     * Sends a push notification payload via `simctl push <udid> <bundleId> <payload>` (Phase 4.4).
+     */
+    suspend fun push(udid: String, bundleId: String, payloadJson: String): CommandResult =
+        CommandResult.failure("simctl push is unavailable")
+
+    /** Downloads the latest iOS platform/runtime via `xcodebuild -downloadPlatform iOS` (Phase 5.1). */
+    suspend fun downloadPlatform(): CommandResult =
+        CommandResult.failure("Platform download is unavailable")
 }
 
 interface AvdService {
@@ -280,6 +333,9 @@ interface BugService {
     suspend fun bugDirectoryPath(id: String): String? = null
     /** Renames a saved bug/recording's title in place. */
     suspend fun renameBug(id: String, title: String): CommandResult = CommandResult.failure("Rename is not supported on this platform")
+    /** Stamps or clears project attribution on a saved bug/recording for the Artifacts catalog. */
+    suspend fun assignBugProject(id: String, projectId: String?): CommandResult =
+        CommandResult.failure("Assign project is not supported on this platform")
 }
 
 interface ArtifactService {
@@ -298,6 +354,26 @@ interface ArtifactService {
     /** Persists already-rendered (edited) PNG bytes via the platform's normal save flow. */
     suspend fun saveEditedScreenshot(pngBytes: ByteArray, suggestedName: String): CommandResult =
         CommandResult.failure("Screenshot editing is not supported on this platform")
+}
+
+/**
+ * Hybrid project Artifacts + Media catalog: indexes Andy-instrumented sources, supports
+ * direct upload + pin-to-durable copies. Human UI only in v1 (no MCP tools).
+ */
+interface ProjectArtifactCatalogService {
+    /** All catalog entries across projects and Unscoped; UI filters by [ProjectCatalogEntry.projectId]. */
+    val entries: StateFlow<List<app.andy.model.ProjectCatalogEntry>>
+    suspend fun refresh()
+    fun entriesFor(projectId: String?): List<app.andy.model.ProjectCatalogEntry>
+    suspend fun upload(projectId: String, paths: List<String>): CommandResult
+    suspend fun pin(entryId: String): CommandResult
+    suspend fun unpin(entryId: String): CommandResult
+    /** Unlink indexed rows; delete durable pins/uploads. Never cascade-deletes chats. */
+    suspend fun remove(entryId: String): CommandResult
+    suspend fun assignToProject(entryId: String, projectId: String): CommandResult
+    suspend fun reveal(entryId: String): CommandResult
+    suspend fun absolutePath(entryId: String): String?
+    suspend fun readTextPreview(entryId: String, maxChars: Int = 48_000): String?
 }
 
 /**
@@ -549,6 +625,11 @@ interface AgentRunService {
     /** Toggles Andy plan mode for follow-ups; syncs the live ACP session mode when supported. */
     fun updatePlanMode(taskId: String, planMode: Boolean)
     suspend fun delete(taskId: String, removeWorktree: Boolean, force: Boolean = false): WorktreeDeleteOutcome
+    /**
+     * Promotes a temporary chat to a normal persisted one, moving its artifacts out of the
+     * disposable directory. No-op for a chat that is already permanent.
+     */
+    suspend fun keepTemporaryChat(taskId: String) = Unit
     fun updateAutomationNotifySuppress(taskId: String, suppress: Boolean) = Unit
     suspend fun cleanupOwnedWorktree(taskId: String) = Unit
     /** Clears the unread indicator for a finished chat (e.g. when opened). */
@@ -948,6 +1029,7 @@ data class AndyServices(
     val viewHierarchy: ViewHierarchyService = UnavailableViewHierarchyService,
     val bugs: BugService,
     val artifacts: ArtifactService,
+    val projectArtifacts: ProjectArtifactCatalogService = UnavailableProjectArtifactCatalogService,
     val recordingExport: RecordingExportService = UnavailableRecordingExportService,
     val tracing: TracingService = UnavailableTracingService,
     val traceViewer: TraceViewerService = UnavailableTraceViewerService,

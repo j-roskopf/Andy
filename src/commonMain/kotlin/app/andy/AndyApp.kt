@@ -22,6 +22,7 @@ import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.OpenAgentTaskRequest
+import app.andy.service.TargetCapabilities
 import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
@@ -60,18 +61,13 @@ enum class AndyDestination(val label: String) {
 internal val AndyDestination.showsSideChat: Boolean
     get() = this == AndyDestination.Actions || this == AndyDestination.Agents
 
-/** Destinations that remain reachable while an iOS target is selected in the toolbar. */
-fun AndyDestination.availableWithIosTarget(): Boolean = when (this) {
-    AndyDestination.Live,
-    AndyDestination.Devices,
-    AndyDestination.Settings,
-    AndyDestination.Catalog,
-    AndyDestination.ComputerFiles,
-    AndyDestination.Agents,
-    AndyDestination.Actions,
-    -> true
-    else -> false
-}
+/**
+ * Destinations reachable while an iOS target is selected. Delegates to [TargetCapabilities]
+ * so each phase enables screens by declaring a capability rather than editing this `when`.
+ */
+fun AndyDestination.availableWithIosTarget(
+    capabilities: TargetCapabilities = TargetCapabilities.Simulator,
+): Boolean = capabilities.destinationAvailable(this)
 
 /** Settings is always reachable and never appears in the "customize sidebar" list. */
 fun AndyDestination.isToggleableInSidebar(): Boolean = this != AndyDestination.Settings

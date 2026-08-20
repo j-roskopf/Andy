@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,14 +42,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import app.andy.ui.components.ConfirmationDialog
+import app.andy.ui.components.LabeledField
 import app.andy.ui.components.PendingConfirmation
 import app.andy.model.AvdProfile
+import app.andy.model.IosDeviceType
+import app.andy.model.IosRuntime
 import app.andy.model.SystemImage
 import app.andy.model.SystemImageBadge
 import app.andy.model.VirtualDevice
 import app.andy.service.AvdService
+import app.andy.service.IosDeviceService
 import app.andy.ui.components.Button
+import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
@@ -61,6 +69,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -72,7 +81,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun CatalogScreen(avd: AvdService) {
+internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null, iosMode: Boolean = false) {
+    if (iosMode && iosDevices != null) {
+        IosCatalogScreen(iosDevices)
+        return
+    }
     val scope = rememberCoroutineScope()
     var images by remember { mutableStateOf<List<SystemImage>>(emptyList()) }
     var avds by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
@@ -322,6 +335,177 @@ private fun FilterCheckboxGroup(
             ) {
                 Checkbox(checked = option in selected, onCheckedChange = { checked -> onChange(if (checked) selected + option else selected - option) }, modifier = Modifier.size(28.dp))
                 Text(option, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun IosCatalogScreen(iosDevices: IosDeviceService) {
+    val scope = rememberCoroutineScope()
+    var deviceTypes by remember { mutableStateOf<List<IosDeviceType>>(emptyList()) }
+    var runtimes by remember { mutableStateOf<List<IosRuntime>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var status by remember { mutableStateOf("") }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var downloading by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        scope.launch {
+            loading = true
+            try {
+                deviceTypes = iosDevices.listDeviceTypes()
+                runtimes = iosDevices.listRuntimes()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                status = error.message ?: "Failed to load iOS catalog"
+            } finally {
+                loading = false
+            }
+        }
+    }
+    LaunchedEffect(Unit) { refresh() }
+
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Toolbar(
+            title = "iOS runtimes & device types",
+            subtitle = if (loading) "Loading…" else "${runtimes.count { it.isAvailable }} runtimes installed · ${deviceTypes.size} device types",
+            onPrimary = { refresh() },
+            primaryLabel = if (loading) "Loading" else "Refresh",
+            primaryEnabled = !loading,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    scope.launch {
+                        downloading = true
+                        status = "Downloading iOS platform… this can take several minutes"
+                        val result = iosDevices.downloadPlatform()
+                        status = if (result.isSuccess) result.stdout.ifBlank { "Platform download complete" } else result.stderr.ifBlank { result.stdout }
+                        downloading = false
+                        refresh()
+                    }
+                },
+                enabled = !downloading,
+                colors = primaryButtonColors(),
+            ) { Text(if (downloading) "Downloading…" else "Download iOS platform") }
+            OutlinedButton(onClick = { showCreateDialog = true }) { Text("Create simulator") }
+        }
+        if (status.isNotBlank()) {
+            Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Runtimes", color = TextPrimary, fontWeight = FontWeight.Bold)
+                TableHeader(listOf("Name" to 160.dp, "Version" to 90.dp, "State" to 100.dp, "Identifier" to 1.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(runtimes) { runtime ->
+                        TableRow {
+                            MonoCell(runtime.name, 160.dp, TextPrimary)
+                            MonoCell(runtime.version ?: "-", 90.dp, TextSecondary)
+                            MonoCell(if (runtime.isAvailable) "Installed" else "Unavailable", 100.dp, if (runtime.isAvailable) Green else TextSecondary)
+                            MonoCell(runtime.identifier, 1.dp, TextSecondary, Modifier.weight(1f))
+                        }
+                    }
+                    if (runtimes.isEmpty() && !loading) {
+                        item { Text("No runtimes found. Install Xcode or download a platform above.", color = TextSecondary, fontSize = 12.sp) }
+                    }
+                }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Device types", color = TextPrimary, fontWeight = FontWeight.Bold)
+                TableHeader(listOf("Name" to 160.dp, "Family" to 100.dp, "Identifier" to 1.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(deviceTypes.take(300)) { type ->
+                        TableRow {
+                            MonoCell(type.name, 160.dp, TextPrimary)
+                            MonoCell(type.productFamily ?: "-", 100.dp, TextSecondary)
+                            MonoCell(type.identifier, 1.dp, TextSecondary, Modifier.weight(1f))
+                        }
+                    }
+                    if (deviceTypes.isEmpty() && !loading) {
+                        item { Text("No device types found.", color = TextSecondary, fontSize = 12.sp) }
+                    }
+                }
+            }
+        }
+    }
+    if (showCreateDialog) {
+        CreateSimulatorDialog(
+            deviceTypes = deviceTypes,
+            runtimes = runtimes,
+            iosDevices = iosDevices,
+            onDismiss = { showCreateDialog = false },
+            onCreated = { message ->
+                status = message
+                showCreateDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+internal fun CreateSimulatorDialog(
+    deviceTypes: List<IosDeviceType>,
+    runtimes: List<IosRuntime>,
+    iosDevices: IosDeviceService,
+    onDismiss: () -> Unit,
+    onCreated: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("Andy iPhone") }
+    var selectedType by remember { mutableStateOf(deviceTypes.firstOrNull()) }
+    var selectedRuntime by remember { mutableStateOf(runtimes.firstOrNull { it.isAvailable }) }
+    var status by remember { mutableStateOf("") }
+    var creating by remember { mutableStateOf(false) }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        PanelCard(
+            modifier = Modifier.width(480.dp),
+            contentPadding = PaddingValues(AndySpace.Space7),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space5),
+        ) {
+            Text("Create iOS simulator", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            LabeledField("Name", name, { name = it }, Modifier.fillMaxWidth())
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Device type", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                LazyColumn(Modifier.heightIn(max = 160.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    items(deviceTypes) { type ->
+                        FilterPill(type.name, type == selectedType, Rust) { selectedType = type }
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Runtime", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                LazyColumn(Modifier.heightIn(max = 160.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    items(runtimes.filter { it.isAvailable }) { runtime ->
+                        FilterPill(runtime.name, runtime == selectedRuntime, Rust) { selectedRuntime = runtime }
+                    }
+                }
+            }
+            if (status.isNotBlank()) {
+                Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+                Button(
+                    onClick = {
+                        val type = selectedType ?: return@Button
+                        scope.launch {
+                            creating = true
+                            val result = iosDevices.createSimulator(name, type.identifier, selectedRuntime?.identifier)
+                            creating = false
+                            if (result.isSuccess) {
+                                onCreated("Created $name".let { result.stdout.ifBlank { it } })
+                            } else {
+                                status = result.stderr.ifBlank { result.stdout }
+                            }
+                        }
+                    },
+                    enabled = !creating && selectedType != null && name.isNotBlank(),
+                    colors = primaryButtonColors(),
+                ) { Text(if (creating) "Creating…" else "Create") }
             }
         }
     }

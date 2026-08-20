@@ -564,6 +564,12 @@ data class AgentTask(
      * survive a restart — null simply omits the hint until the next materialization.
      */
     val evidenceLocalPathsHint: String? = null,
+    /**
+     * Ephemeral chat: never written to the agent store, artifacts live in a disposable temp
+     * directory, and it is hidden from every surface outside this desktop session. Fixed at
+     * creation — "keep chat" promotes by clearing this, nothing ever sets it.
+     */
+    val temporary: Boolean = false,
 ) {
     /** True only before launch — both [status] and [startedAtMillis] are still unset. */
     val isQueued: Boolean get() = status == null && startedAtMillis == null
@@ -713,6 +719,8 @@ data class AgentTaskDraft(
     val automationId: String? = null,
     val automationNotifyFailedOnly: Boolean = false,
     val automationSuppressOsNotify: Boolean = false,
+    /** Launch as an ephemeral chat. See [AgentTask.temporary]. */
+    val temporary: Boolean = false,
 )
 
 /** A lightweight candidate for the composer's "base on" picker. */

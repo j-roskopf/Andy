@@ -297,9 +297,22 @@ const val RAW_SCROLLBACK_MAX_BYTES: Int = 16 * 1024 * 1024
  * leaves a transcript that can still be derived afterwards.
  */
 class RawScrollbackFile(
-    private val file: File,
+    file: File,
     private val maxBytes: Int = RAW_SCROLLBACK_MAX_BYTES,
 ) {
+    @Volatile
+    private var file: File = file
+
+    /**
+     * Follow this run's raw file to [newFile] after it was moved on disk, keeping the write
+     * offsets — the bytes are the same, only the path changed. Used when a temporary chat is
+     * promoted mid-run and its artifacts move out of the disposable directory; resetting the
+     * offsets instead would re-append everything the tee still holds.
+     */
+    fun retarget(newFile: File) {
+        file = newFile
+    }
+
     private var lastOffset = 0L
     private var lastEpoch = 0L
     private var lastColumns = 0

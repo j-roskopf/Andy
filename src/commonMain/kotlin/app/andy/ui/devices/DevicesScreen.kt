@@ -68,6 +68,8 @@ import app.andy.model.VirtualDevice
 import app.andy.model.VirtualDeviceType
 import app.andy.service.AndyServices
 import app.andy.service.AvdService
+import app.andy.service.CommandResult
+import app.andy.service.IosDeviceService
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
@@ -128,6 +130,7 @@ internal fun DevicesScreen(
     transfer: DeviceTransferCoordinator? = null,
     deviceLabels: Map<String, String> = emptyMap(),
     onSetDeviceLabel: (String, String) -> Unit = { _, _ -> },
+    iosDevices: IosDeviceService? = null,
 ) {
     val scope = rememberCoroutineScope()
     val state = remember(services.avd) { DevicesScreenState(services.avd) }
@@ -172,7 +175,9 @@ internal fun DevicesScreen(
         matchesQuery && target.matchesFilter(state.deviceFilter)
     }
     val iosSimulators = filteredIosTargets.filter { it.kind == IosTargetKind.Simulator }
-    val iosPhysicalDevices = filteredIosTargets.filter { it.kind == IosTargetKind.Physical }
+    val iosPhysicalDevices = filteredIosTargets.filter {
+        it.kind == IosTargetKind.Physical && it.state != IosTargetState.Unavailable
+    }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         val deviceSummary = when {
@@ -283,6 +288,10 @@ internal fun DevicesScreen(
                 onShutdown = onShutdownIosSimulator,
                 onOpenInSimulatorApp = onOpenIosInSimulatorApp,
                 onLive = onLive,
+                iosDevices = iosDevices,
+                state = state,
+                scope = scope,
+                onRefresh = onRefresh,
             )
             else -> AndroidDevicesTab(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -731,12 +740,26 @@ private fun IosDevicesTab(
     onShutdown: (IosTarget) -> Unit,
     onOpenInSimulatorApp: (IosTarget) -> Unit,
     onLive: (String) -> Unit,
+    iosDevices: IosDeviceService? = null,
+    state: DevicesScreenState? = null,
+    scope: CoroutineScope? = null,
+    onRefresh: () -> Unit = {},
 ) {
     val connectedTargets = buildList {
         addAll(physicalDevices)
         addAll(simulators.filter { it.state == IosTargetState.Booted })
     }
     val stoppedSimulators = simulators.filter { it.state != IosTargetState.Booted }
+    var reclaiming by remember { mutableStateOf(false) }
+
+    fun runIosAction(label: String, block: suspend () -> CommandResult) {
+        val runScope = scope ?: return
+        runScope.launch {
+            val result = block()
+            state?.iosStatus = if (result.isSuccess) result.stdout.ifBlank { label } else result.stderr.ifBlank { result.stdout }.ifBlank { "$label failed" }
+            onRefresh()
+        }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -759,6 +782,20 @@ private fun IosDevicesTab(
                     onShutdown = { onShutdown(target) },
                     onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
                     onLive = { onLive(target.udid) },
+                    iosDevices = iosDevices,
+                    state = state,
+                    onClone = { state?.iosCloneSource = target },
+                    onRename = { state?.iosRenameSource = target },
+                    onErase = {
+                        state?.pendingConfirmation = PendingConfirmation("Erase ${target.displayName}?", "This resets the simulator to a factory state.") {
+                            runIosAction("Erase") { iosDevices?.eraseSimulator(target.udid) ?: CommandResult.failure("iOS device service unavailable") }
+                        }
+                    },
+                    onDelete = {
+                        state?.pendingConfirmation = PendingConfirmation("Delete ${target.displayName}?", "This permanently removes the simulator and its files from disk.") {
+                            runIosAction("Delete") { iosDevices?.deleteSimulator(target.udid) ?: CommandResult.failure("iOS device service unavailable") }
+                        }
+                    },
                 )
             }
         }
@@ -785,6 +822,9 @@ private fun IosDevicesTab(
                 }
             }
         }
+        if (state != null && state.iosStatus.isNotBlank()) {
+            item { Text(state.iosStatus, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+        }
         if (stoppedSimulators.isEmpty()) {
             item {
                 Text(
@@ -806,10 +846,136 @@ private fun IosDevicesTab(
                     onShutdown = { onShutdown(target) },
                     onOpenInSimulatorApp = { onOpenInSimulatorApp(target) },
                     onLive = { onLive(target.udid) },
+                    iosDevices = iosDevices,
+                    state = state,
+                    onClone = { state?.iosCloneSource = target },
+                    onRename = { state?.iosRenameSource = target },
+                    onErase = {
+                        state?.pendingConfirmation = PendingConfirmation("Erase ${target.displayName}?", "This resets the simulator to a factory state.") {
+                            runIosAction("Erase") { iosDevices?.eraseSimulator(target.udid) ?: CommandResult.failure("iOS device service unavailable") }
+                        }
+                    },
+                    onDelete = {
+                        state?.pendingConfirmation = PendingConfirmation("Delete ${target.displayName}?", "This permanently removes the simulator and its files from disk.") {
+                            runIosAction("Delete") { iosDevices?.deleteSimulator(target.udid) ?: CommandResult.failure("iOS device service unavailable") }
+                        }
+                    },
                 )
             }
         }
+        if (iosDevices != null) {
+            item {
+                PanelCard(modifier = Modifier.padding(top = 8.dp)) {
+                    Text("Disk reclaim", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Simulator runtimes can eat tens of GB. Clean up unavailable simulators or runtimes you haven't booted recently.",
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                reclaiming = true
+                                runIosAction("Delete unavailable simulators") {
+                                    val result = iosDevices.deleteUnavailableSimulators()
+                                    reclaiming = false
+                                    result
+                                }
+                            },
+                            enabled = !reclaiming,
+                        ) { Text("Delete unavailable simulators") }
+                        OutlinedButton(
+                            onClick = {
+                                reclaiming = true
+                                runIosAction("Delete unused runtimes (30+ days)") {
+                                    val result = iosDevices.deleteUnusedRuntimes(30)
+                                    reclaiming = false
+                                    result
+                                }
+                            },
+                            enabled = !reclaiming,
+                        ) { Text("Delete unused runtimes (30+ days)") }
+                    }
+                }
+            }
+        }
     }
+    state?.iosCloneSource?.let { source ->
+        CloneIosDialog(
+            source = source,
+            onDismiss = { state.iosCloneSource = null },
+            onClone = { newName ->
+                state.iosCloneSource = null
+                runIosAction("Clone") { iosDevices?.cloneSimulator(source.udid, newName) ?: CommandResult.failure("iOS device service unavailable") }
+            },
+        )
+    }
+    state?.iosRenameSource?.let { source ->
+        RenameIosDialog(
+            source = source,
+            onDismiss = { state.iosRenameSource = null },
+            onRename = { newName ->
+                state.iosRenameSource = null
+                runIosAction("Rename") { iosDevices?.renameSimulator(source.udid, newName) ?: CommandResult.failure("iOS device service unavailable") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun IosActionsMenu(
+    enabled: Boolean,
+    onClone: () -> Unit,
+    onRename: () -> Unit,
+    onErase: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.width(42.dp), contentPadding = PaddingValues(0.dp)) {
+            Text("...")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = PanelSoft) {
+            DropdownMenuItem(text = { Text("Clone", color = TextPrimary) }, onClick = { expanded = false; onClone() })
+            DropdownMenuItem(text = { Text("Rename", color = TextPrimary) }, onClick = { expanded = false; onRename() })
+            DropdownMenuItem(text = { Text("Erase", color = TextPrimary) }, onClick = { expanded = false; onErase() })
+            DropdownMenuItem(text = { Text("Delete", color = Red) }, onClick = { expanded = false; onDelete() })
+        }
+    }
+}
+
+@Composable
+private fun CloneIosDialog(source: IosTarget, onDismiss: () -> Unit, onClone: (String) -> Unit) {
+    var name by remember(source.udid) { mutableStateOf("${source.displayName} Copy") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Clone ${source.displayName}", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            LabeledField("New name", name, { name = it }, Modifier.fillMaxWidth())
+        },
+        confirmButton = {
+            Button(onClick = { onClone(name) }, enabled = name.isNotBlank(), colors = primaryButtonColors()) { Text("Clone") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun RenameIosDialog(source: IosTarget, onDismiss: () -> Unit, onRename: (String) -> Unit) {
+    var name by remember(source.udid) { mutableStateOf(source.displayName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = { Text("Rename ${source.displayName}", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            LabeledField("New name", name, { name = it }, Modifier.fillMaxWidth())
+        },
+        confirmButton = {
+            Button(onClick = { onRename(name) }, enabled = name.isNotBlank(), colors = primaryButtonColors()) { Text("Rename") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -820,6 +986,12 @@ private fun IosConnectedTargetRow(
     onShutdown: () -> Unit,
     onOpenInSimulatorApp: () -> Unit,
     onLive: () -> Unit,
+    iosDevices: IosDeviceService? = null,
+    state: DevicesScreenState? = null,
+    onClone: () -> Unit = {},
+    onRename: () -> Unit = {},
+    onErase: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     val booted = target.state == IosTargetState.Booted
     val liveReady = target.isLiveReady
@@ -848,6 +1020,9 @@ private fun IosConnectedTargetRow(
                     }
                 }
             }
+            if (iosDevices != null) {
+                IosActionsMenu(enabled = !starting, onClone = onClone, onRename = onRename, onErase = onErase, onDelete = onDelete)
+            }
         } else if (target.isMirrorable) {
             OutlinedButton(onClick = onLive) { Text("Live") }
         } else if (target.transport != IosTransport.Usb) {
@@ -864,6 +1039,12 @@ private fun IosSimulatorRow(
     onShutdown: () -> Unit,
     onOpenInSimulatorApp: () -> Unit,
     onLive: () -> Unit,
+    iosDevices: IosDeviceService? = null,
+    state: DevicesScreenState? = null,
+    onClone: () -> Unit = {},
+    onRename: () -> Unit = {},
+    onErase: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     val booted = target.state == IosTargetState.Booted
     val statusLabel = iosTargetStatusLabel(target)
@@ -886,6 +1067,9 @@ private fun IosSimulatorRow(
                     Text(if (starting) "Booting" else "Boot")
                 }
             }
+        }
+        if (iosDevices != null) {
+            IosActionsMenu(enabled = !starting, onClone = onClone, onRename = onRename, onErase = onErase, onDelete = onDelete)
         }
     }
 }

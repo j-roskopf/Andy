@@ -77,6 +77,11 @@ internal actual fun ConfirmationDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
                     OutlinedButton(onClick = onDismiss) { Text("Cancel") }
+                    val neutralLabel = confirmation.neutralLabel
+                    val onNeutral = confirmation.onNeutral
+                    if (neutralLabel != null && onNeutral != null) {
+                        OutlinedButton(onClick = onNeutral) { Text(neutralLabel) }
+                    }
                     Button(
                         onClick = onConfirm,
                         colors = ButtonDefaults.buttonColors(containerColor = Red),

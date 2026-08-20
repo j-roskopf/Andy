@@ -67,6 +67,11 @@ data class WorkspaceState(
     val vapidPrivateKey: String = "",
     val tintId: String = "andy-blue",
     val surfaceModeId: String = "tinted",
+    /**
+     * Optional wallpaper for the empty new-chat composer. Local filesystem path or
+     * `http(s):` URL; empty means the default content background only.
+     */
+    val newChatBackgroundUri: String = "",
     val editorSyntaxThemeId: String = EditorSyntaxTheme.Andy.id,
     /** Terminal theme id (`one-dark`, `nord`, …). Legacy Andy hex themes coerce to One Dark. */
     val terminalThemeId: String = TerminalThemePreset.Default.id,
@@ -144,4 +149,10 @@ data class WorkspaceState(
     val ollamaBearerToken: String = "",
     val lmStudioBaseUrl: String = DefaultLmStudioBaseUrl,
     val lmStudioBearerToken: String = "",
+    /**
+     * Physical iOS CMIO `uniqueID` keyed by device UDID, remembered across reconnects so the
+     * native screen-capture lookup can skip re-resolving it from the CoreMediaIO device list
+     * (Phase 6.3). Populated after a successful physical mirror connect.
+     */
+    val iosCmioIds: Map<String, String> = emptyMap(),
 )

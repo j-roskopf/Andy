@@ -250,7 +250,7 @@ internal fun foldableStreamMatchesPosture(
     return kotlin.math.abs(streamAspect - expectedAspect) < 0.06f
 }
 
-/** Minimum pane width to show the hardware toolbar plus a height-fitted mirror. */
+/** Minimum pane width to show the side toolbar plus a height-fitted mirror. */
 internal fun liveDevicePaneFittedWidth(
     maxPaneHeight: Dp,
     device: AndroidDevice?,
@@ -263,6 +263,7 @@ internal fun liveDevicePaneFittedWidth(
     captureHint: MirrorSourceSize? = null,
     foldableProfile: FoldableDisplayProfile? = null,
     foldableHingeAngle: Float = 180f,
+    showSideToolbar: Boolean = showHardwareControls,
 ): Dp {
     val source = liveMirrorSourceSize(
         device = device,
@@ -275,8 +276,8 @@ internal fun liveDevicePaneFittedWidth(
     val aspect = source.width.toFloat() / source.height.toFloat()
     val horizontalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
     val verticalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
-    val toolbarWidth = if (showHardwareControls) 68.dp else 0.dp
-    val toolbarGap = if (showHardwareControls) 10.dp else 0.dp
+    val toolbarWidth = if (showSideToolbar) 68.dp else 0.dp
+    val toolbarGap = if (showSideToolbar) 10.dp else 0.dp
     val headerBlock = if (showDeviceHeader) 42.dp else 0.dp
     val navHeight = if (showChromeControls) 60.dp else 0.dp
     val mirrorViewportHeight = (maxPaneHeight - verticalChrome - headerBlock - navHeight).coerceAtLeast(1.dp)
@@ -320,6 +321,8 @@ internal fun LiveDevicePane(
     showChromeControls: Boolean = true,
     showAndroidNavButtons: Boolean = true,
     showHardwareControls: Boolean = showChromeControls,
+    /** Capture / Bug / Record toolbar when Android hardware controls are hidden (iOS). */
+    showCaptureControls: Boolean = false,
     showClipTextControl: Boolean = false,
     showContainerChrome: Boolean = true,
     deviceBorderWidth: Dp = 5.dp,
@@ -389,6 +392,20 @@ internal fun LiveDevicePane(
                 recordingDuration = recordingDuration,
                 showRecord = showRecord,
                 onClipText = onClipText,
+                showPopOut = showPopOut,
+                onPopOut = onPopOut,
+            )
+        } else if (showCaptureControls) {
+            LiveCaptureToolbar(
+                enabled = serial != null,
+                onCaptureScreenshot = onCaptureScreenshot,
+                onBugReport = onBugReport,
+                onRecord = onRecord,
+                recordLabel = recordLabel,
+                recordEnabled = recordEnabled,
+                recordingDuration = recordingDuration,
+                showRecord = showRecord,
+                onClipText = onClipText.takeIf { showClipTextControl },
                 showPopOut = showPopOut,
                 onPopOut = onPopOut,
             )
@@ -793,6 +810,51 @@ internal fun CompactHardwareButton(label: String, serial: String?, onClick: () -
         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+internal fun LiveCaptureToolbar(
+    enabled: Boolean,
+    onCaptureScreenshot: () -> Unit,
+    onBugReport: () -> Unit,
+    onRecord: () -> Unit,
+    recordLabel: String,
+    recordEnabled: Boolean,
+    recordingDuration: String?,
+    showRecord: Boolean,
+    onClipText: (() -> Unit)? = null,
+    showPopOut: Boolean = false,
+    onPopOut: () -> Unit = {},
+) {
+    Box(
+        Modifier.width(68.dp).fillMaxHeight(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(58.dp)
+                .clip(RoundedCornerShape(AndyRadius.Sheet))
+                .background(AndyColors.SurfaceRaised)
+                .padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
+            ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
+            if (showRecord) {
+                ToolbarButton(HardwareIcon.Record, recordLabel, enabled && recordEnabled, onRecord)
+                recordingDuration?.let { duration ->
+                    Text(duration, color = Red, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                }
+            }
+            if (onClipText != null) {
+                ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
+            }
+            if (showPopOut) {
+                ToolbarButton(HardwareIcon.PopOut, "Pop out", enabled, onPopOut)
+            }
+        }
     }
 }
 

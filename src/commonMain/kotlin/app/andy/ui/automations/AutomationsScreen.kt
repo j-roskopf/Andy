@@ -62,6 +62,7 @@ import app.andy.model.clockToHour24
 import app.andy.model.groupedByModelFamily
 import app.andy.model.hour24ToClock
 import app.andy.model.resolveAutomationTimeZoneId
+import app.andy.domain.excludingTemporary
 import app.andy.service.AndyServices
 import app.andy.ui.agents.AgentPillIcon
 import app.andy.ui.components.AndyCheckbox
@@ -90,7 +91,8 @@ internal fun AutomationsScreen(
     modifier: Modifier = Modifier,
 ) {
     val automations by services.automations.automations.collectAsState()
-    val tasks by services.agentRuns.tasks.collectAsState()
+    val allTasks by services.agentRuns.tasks.collectAsState()
+    val tasks = allTasks.excludingTemporary()
     val defaults by services.agentRuns.providerDefaults.collectAsState()
     val lastUsed by services.agentRuns.lastUsedAgent.collectAsState()
     val providerModels by services.agentRuns.providerModels.collectAsState()
