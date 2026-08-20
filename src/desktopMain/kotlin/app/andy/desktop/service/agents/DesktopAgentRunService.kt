@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.domain.excludingTemporary
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentContextualProvenance
@@ -220,6 +221,8 @@ class DesktopAgentRunService(
     private val loadedSlashCommandScopes = ConcurrentHashMap.newKeySet<SlashCommandScope>()
     private val slashCommandRefreshJobs = ConcurrentHashMap<SlashCommandScope, Job>()
 
+    private val tempArtifacts = TemporaryChatArtifacts()
+
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
@@ -310,6 +313,9 @@ class DesktopAgentRunService(
             repairCompletedSpecWorkflowStates()
             reconcileStuckWorkflowArtifacts()
             ready.complete(Unit)
+            // A crash skips the shutdown hook, so a previous session's disposable directory can
+            // survive. Only stale roots are swept, so a second running instance is untouched.
+            withContext(Dispatchers.IO) { runCatching { TemporaryChatArtifacts.sweepOrphans() } }
             refreshCliStatuses()
             refreshSlashCommandsForReadyProviders()
             watchLocalModelSettings()
@@ -336,11 +342,18 @@ class DesktopAgentRunService(
     /** Cumulative scrollback file for finished-chat replay (may not exist yet). */
     internal fun scrollbackFile(taskId: String): File = resolvedScrollbackFile(taskId)
 
-    private fun resolvedContentDir(taskId: String): File =
-        store.resolvedContentDirBlocking(
+    /**
+     * A temporary chat's artifacts live in a disposable directory instead of the agent store,
+     * so nothing it writes outlives the chat. Retention never sees them either — it sweeps the
+     * agents directory, which a temp chat never touches.
+     */
+    private fun resolvedContentDir(taskId: String): File {
+        if (currentTask(taskId)?.temporary == true) return tempArtifacts.dirFor(taskId)
+        return store.resolvedContentDirBlocking(
             taskId,
             compressed = currentTask(taskId)?.transcriptCompressed == true || store.archiveFile(taskId).isFile,
         )
+    }
 
     private fun resolvedScrollbackFile(taskId: String): File =
         File(resolvedContentDir(taskId), "scrollback.ansi")
@@ -1103,6 +1116,7 @@ class DesktopAgentRunService(
                 errorMessage = "Cursor chat $importedVendorSession was not found under ~/.cursor/chats. Chat ids are stored per workspace folder — paste a CLI chat id from this machine.",
                 vendorSessionId = importedVendorSession,
                 lane = AgentLaneKind.Terminal,
+                temporary = draft.temporary,
                 createdAtMillis = now,
                 finishedAtMillis = now,
             )
@@ -1148,6 +1162,7 @@ class DesktopAgentRunService(
                 status = AgentStatus.Error,
                 errorMessage = message,
                 lane = draft.lane ?: preferredLane(draft.runtimeKind()),
+                temporary = draft.temporary,
                 createdAtMillis = now,
                 finishedAtMillis = now,
             )
@@ -1216,6 +1231,7 @@ class DesktopAgentRunService(
                 errorMessage = "existing worktree path is missing or not a directory",
                 vendorSessionId = null,
                 lane = draft.lane ?: preferredLane(draft.runtimeKind()),
+                temporary = draft.temporary,
                 createdAtMillis = now,
                 finishedAtMillis = now,
             )
@@ -1274,6 +1290,7 @@ class DesktopAgentRunService(
                 importedVendorSession != null -> AgentLaneKind.Terminal
                 else -> draft.lane ?: preferredLane(draft.runtimeKind())
             },
+            temporary = draft.temporary,
             createdAtMillis = now,
         )
 
@@ -3034,9 +3051,10 @@ class DesktopAgentRunService(
     }
 
     private fun persistSync() {
+        val persistable = _tasks.value.excludingTemporary()
         store.saveSync(
             AgentStoreState(
-                tasks = _tasks.value,
+                tasks = persistable,
                 binaryOverrides = binaryOverrides,
                 providerDefaults = _providerDefaults.value,
                 quotaAccess = _quotaAccess.value,
@@ -3045,8 +3063,17 @@ class DesktopAgentRunService(
                 projectWorkflows = _projects.value,
                 legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
             ),
+            allowEmptyTaskList = allowEmptyPersist(persistable),
         )
     }
+
+    /**
+     * The store refuses an empty task list unless told otherwise, so a save that is empty only
+     * because every remaining chat is temporary would silently drop the deletion of the last
+     * real chat. Temp-only is a legitimately empty store.
+     */
+    private fun allowEmptyPersist(persistable: List<AgentTask>): Boolean =
+        persistable.isEmpty() && _tasks.value.isNotEmpty()
 
     private fun waitForUserInput(
         taskId: String,
@@ -3188,6 +3215,7 @@ class DesktopAgentRunService(
             }
         }
         store.deleteTaskArtifacts(taskId)
+        if (task.temporary) discardTemporaryArtifacts(task)
         task.workflowTaskId?.let { projectTaskId -> detachDeletedWorkflowRun(projectTaskId, taskId) }
         if (removeWorktree && task.ownsWorktree && worktreePath != null) {
             task.originDir?.let { originDir ->
@@ -3196,6 +3224,53 @@ class DesktopAgentRunService(
         }
         persist(allowEmptyTaskList = true)
         return WorktreeDeleteOutcome.Deleted
+    }
+
+    /**
+     * Everything a temporary chat wrote, in both places it can write.
+     *
+     * The disposable directory holds scrollback and transcript. The workflow artifact folder is
+     * the exception to "nothing on disk": `.andy/<taskId>/` lives inside the project because its
+     * path is handed to the agent in prompt text, so it cannot be silently redirected. It is
+     * removed here instead, at the same moment as everything else.
+     */
+    private suspend fun discardTemporaryArtifacts(task: AgentTask) = withContext(Dispatchers.IO) {
+        tempArtifacts.discard(task.id)
+        runCatching { AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).deleteRecursively() }
+        Unit
+    }
+
+    /**
+     * Turns a temporary chat into a normal persisted one, keeping its history and its live run.
+     *
+     * The artifacts are moved rather than copied so a single directory stays authoritative, and
+     * the move runs under the terminal's scrollback lock so an in-flight run cannot append
+     * between the move and the retarget.
+     */
+    override suspend fun keepTemporaryChat(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (!task.temporary) return
+        withContext(Dispatchers.IO) {
+            terminals.relocateArtifacts(taskId) {
+                val from = tempArtifacts.release(taskId)
+                val to = store.taskDir(taskId)
+                if (from != null && from.isDirectory) {
+                    to.parentFile?.mkdirs()
+                    // Rename is atomic within a filesystem, but the temp dir often sits on
+                    // another volume — fall back to a copy rather than losing the transcript.
+                    if (!from.renameTo(to)) {
+                        runCatching { from.copyRecursively(to, overwrite = true) }
+                        runCatching { from.deleteRecursively() }
+                    }
+                } else {
+                    to.mkdirs()
+                }
+                // Clearing the flag inside the move is what makes resolvedContentDir start
+                // answering with the store directory, which relocateArtifacts then reads back.
+                updateTask(taskId) { it.copy(temporary = false) }
+            }
+        }
+        persist()
     }
 
     override fun updateAutomationNotifySuppress(taskId: String, suppress: Boolean) {
@@ -3748,6 +3823,7 @@ class DesktopAgentRunService(
     /** Persist state and tear down owned tmux sessions on JVM exit or explicit close. */
     fun shutdownForProcessExit() {
         runCatching { snapshotActiveTasksBeforeShutdown() }
+        runCatching { discardTemporaryChatsForProcessExit() }
         _tasks.value.filter { it.lane == AgentLaneKind.Acp && acpManager.isAlive(it.id) }.forEach { task ->
             acpManager.stop(task.id)
         }
@@ -3761,6 +3837,33 @@ class DesktopAgentRunService(
         )
         handles.clear()
         jobs.forEach { it?.cancel() }
+    }
+
+    /**
+     * Tears temporary chats down on quit, synchronously and unconditionally.
+     *
+     * `keepAgentSessionsOnShutdown` is deliberately ignored: a kept session would come back
+     * after the restart with no chat pointing at it, since the chat itself was never persisted.
+     * An orphaned agent process is a worse outcome than losing a resume.
+     */
+    private fun discardTemporaryChatsForProcessExit() {
+        val temporary = _tasks.value.filter { it.temporary }
+        if (temporary.isEmpty()) return
+        for (task in temporary) {
+            handles.remove(task.id)?.job?.cancel()
+            if (ownsAgentSessions) runCatching { terminals.stop(task.id) }
+            if (task.lane == AgentLaneKind.Acp) runCatching { acpManager.stop(task.id) }
+            if (task.ownsWorktree) {
+                val originDir = task.originDir
+                val worktreePath = task.worktreePath
+                if (originDir != null && worktreePath != null) {
+                    runCatching { worktrees.remove(originDir, worktreePath, task.branchName) }
+                }
+            }
+            runCatching { AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).deleteRecursively() }
+        }
+        _tasks.update { list -> list.filterNot { it.temporary } }
+        tempArtifacts.discardAll()
     }
 
     private fun projectTask(taskId: String): ProjectTask? =
@@ -5390,9 +5493,10 @@ class DesktopAgentRunService(
 
     private suspend fun persist(allowEmptyTaskList: Boolean = false) {
         persistMutex.withLock {
+            val persistable = _tasks.value.excludingTemporary()
             store.save(
                 AgentStoreState(
-                    tasks = _tasks.value,
+                    tasks = persistable,
                     binaryOverrides = binaryOverrides,
                     providerDefaults = _providerDefaults.value,
                     quotaAccess = _quotaAccess.value,
@@ -5401,7 +5505,7 @@ class DesktopAgentRunService(
                     projectWorkflows = _projects.value,
                     legacyTranscriptChatsArchived = legacyTranscriptChatsArchived,
                 ),
-                allowEmptyTaskList = allowEmptyTaskList,
+                allowEmptyTaskList = allowEmptyTaskList || allowEmptyPersist(persistable),
             )
         }
     }

@@ -90,6 +90,16 @@ class DesktopWorkspaceStoreTest {
         file.writeText(file.readText().replace("surfaceModeId=light", "surfaceModeId=not-a-mode"))
         assertEquals("tinted", DesktopWorkspaceStore(file).load().surfaceModeId)
 
+        DesktopWorkspaceStore(file).save(
+            saved.copy(newChatBackgroundUri = "/Users/me/Pictures/chat-bg.png"),
+        )
+        assertEquals(
+            "/Users/me/Pictures/chat-bg.png",
+            DesktopWorkspaceStore(file).load().newChatBackgroundUri,
+        )
+        DesktopWorkspaceStore(file).save(saved.copy(newChatBackgroundUri = ""))
+        assertEquals("", DesktopWorkspaceStore(file).load().newChatBackgroundUri)
+
         DesktopWorkspaceStore(file).save(saved.copy(editorSyntaxThemeId = "monokai"))
         assertEquals("monokai", DesktopWorkspaceStore(file).load().editorSyntaxThemeId)
 

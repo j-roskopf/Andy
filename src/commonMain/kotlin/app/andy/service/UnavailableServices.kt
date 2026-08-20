@@ -161,6 +161,20 @@ object UnavailableArtifactService : ArtifactService {
     override suspend fun saveBugReport(serial: String, suggestedName: String) = unavailable()
 }
 
+object UnavailableProjectArtifactCatalogService : ProjectArtifactCatalogService {
+    override val entries = MutableStateFlow<List<ProjectCatalogEntry>>(emptyList())
+    override suspend fun refresh() = Unit
+    override fun entriesFor(projectId: String?) = emptyList<ProjectCatalogEntry>()
+    override suspend fun upload(projectId: String, paths: List<String>) = unavailable()
+    override suspend fun pin(entryId: String) = unavailable()
+    override suspend fun unpin(entryId: String) = unavailable()
+    override suspend fun remove(entryId: String) = unavailable()
+    override suspend fun assignToProject(entryId: String, projectId: String) = unavailable()
+    override suspend fun reveal(entryId: String) = unavailable()
+    override suspend fun absolutePath(entryId: String) = null
+    override suspend fun readTextPreview(entryId: String, maxChars: Int) = null
+}
+
 object UnavailableRecordingExportService : RecordingExportService {
     override suspend fun export(request: RecordingExportRequest, localPath: String) =
         Result.failure<ExportedClip>(Exception(BrowserUnavailable))

@@ -136,7 +136,11 @@ internal fun TopChrome(
                     .clickable(onClick = ::closeFlyout),
             ) {
                 Text(
-                    destination.label,
+                    if (selectedIosTarget != null && destination == AndyDestination.Logcat) {
+                        "Logs"
+                    } else {
+                        destination.label
+                    },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,

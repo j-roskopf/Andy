@@ -78,8 +78,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
+import app.andy.filterSupportedImagePaths
 import app.andy.isToggleableInSidebar
 import app.andy.loadImageBitmap
+import app.andy.pickFiles
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
@@ -623,6 +625,7 @@ private fun AppearancePanel(
             }
         }
     }
+    NewChatBackgroundSettings(workspace, update)
     SettingsGroup(
         title = "Code editor theme",
         description = "Syntax highlighting for Computer Files. Andy is the built-in scheme; the rest are RSyntaxTextArea presets.",
@@ -649,6 +652,52 @@ private fun AppearancePanel(
         )
     }
     TerminalAppearancePanel(workspace, update)
+}
+
+@Composable
+private fun NewChatBackgroundSettings(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    SettingsGroup(
+        title = "New chat background",
+        description = "Optional wallpaper for the empty new-chat screen. Soft-fades into the content background at the edges. Accepts a local path or http(s) URL.",
+    ) {
+        TextField(
+            workspace.newChatBackgroundUri,
+            { value -> update { it.copy(newChatBackgroundUri = value) } },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            colors = fieldColors(),
+            placeholder = { Text("/path/to/image.png or https://…", color = TextSecondary) },
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        val picked = pickFiles(allowMultiple = false)
+                            .filterSupportedImagePaths()
+                            .firstOrNull()
+                        if (picked != null) {
+                            update { it.copy(newChatBackgroundUri = picked) }
+                        }
+                    }
+                },
+            ) {
+                Text("Browse")
+            }
+            if (workspace.newChatBackgroundUri.isNotBlank()) {
+                OutlinedButton(onClick = { update { it.copy(newChatBackgroundUri = "") } }) {
+                    Text("Clear")
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

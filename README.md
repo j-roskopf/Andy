@@ -16,10 +16,23 @@ the recommended experience and includes the full feature set. A smaller subset
 of Andy is also available on the web at
 [andy.joetr.com](https://andy.joetr.com).
 
-**Basic iOS Simulator support** is available on macOS: discover simulators,
-boot and shut them down, open Simulator.app, and stream a live mirror with
-touch input. Android remains the primary platform; iOS coverage is intentionally
-limited today.
+**iOS support** is available on macOS and covers most day-to-day Simulator
+workflows: create/boot/clone/erase/rename/delete simulators, stream a live
+mirror with touch input, browse apps and their sandboxed files/Prefs/SQLite
+databases, tail `simctl log stream`, drive URL-scheme intents, capture bugs,
+and reach Simulator-only controls (appearance, Dynamic Type incl. a sweep
+board, status bar studio + screenshot, location, a privacy grant/revoke/reset
+matrix, clipboard, and a push-notification workbench). Crash reports
+(`.ips`) are listed from `~/Library/Logs/DiagnosticReports` with best-effort
+`atos` symbolication when a matching `.dSYM` can be found via Spotlight.
+
+**Physical iOS devices are view-only.** Andy can mirror a physical iPhone/iPad
+over USB once you trust the computer on-device — no Developer Mode required
+for that. Everything else (touch input, Apps, Files, Logcat, Controls) needs
+Developer Mode enabled on the device (Settings → Privacy & Security →
+Developer Mode, then restart); Andy shows a banner on Live explaining this
+when it detects a physical target. Android remains the primary platform, and
+on-device Accessibility inspection for iOS is not implemented yet.
 
 In my own words as the author: I find myself in Android Studio less these days, but still want some of the tooling offered in Android Studio in a lower performance overhead option. 
 
@@ -334,7 +347,7 @@ Open a new terminal after install if `cargo` is still not found.
 ## Runtime Requirements
 
 - Android SDK platform tools for device and emulator access.
-- Xcode command-line tools (`xcrun simctl`) on macOS for basic iOS Simulator discovery, boot/shutdown, and Live mirror.
+- Xcode command-line tools (`xcrun simctl`, `xcrun devicectl`, `xcodebuild`) on macOS for iOS Simulator management, catalog/platform downloads, physical-device status, Live mirror, and crash symbolication (`atos`).
 - Network capture uses Andy's pinned mitmproxy runtime at `~/.andy/proxy/venv`
   (provisioned automatically; needs Python 3.12+). Optional fallback:
   `brew install mitmproxy`.

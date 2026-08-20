@@ -58,6 +58,7 @@ class DesktopWorkspaceStore(
             vapidPrivateKey = props.getProperty("vapidPrivateKey").orEmpty(),
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
             surfaceModeId = AndySurfaceMode.fromId(props.getProperty("surfaceModeId").orEmpty()).id,
+            newChatBackgroundUri = props.getProperty("newChatBackgroundUri").orEmpty(),
             editorSyntaxThemeId = EditorSyntaxTheme.fromId(props.getProperty("editorSyntaxThemeId").orEmpty()).id,
             // Legacy Andy hex theme ids coerce to BossTerm built-ins; hex fields are ignored at runtime.
             terminalThemeId = TerminalThemePreset.fromId(
@@ -165,6 +166,7 @@ class DesktopWorkspaceStore(
             ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
             lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
             lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
+            iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
         )
     }.also { mutableState.value = it }
 
@@ -204,6 +206,7 @@ class DesktopWorkspaceStore(
             setProperty("vapidPrivateKey", vapidPrivate)
             setProperty("tintId", state.tintId)
             setProperty("surfaceModeId", state.surfaceModeId)
+            setProperty("newChatBackgroundUri", state.newChatBackgroundUri)
             setProperty("editorSyntaxThemeId", state.editorSyntaxThemeId)
             setProperty("terminalThemeId", state.terminalThemeId)
             setProperty("terminalForegroundHex", state.terminalForegroundHex)
@@ -288,6 +291,7 @@ class DesktopWorkspaceStore(
             setProperty("ollamaBearerToken", state.ollamaBearerToken)
             setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
             setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
+            saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         mutableState.value = state

@@ -75,6 +75,7 @@ import app.andy.model.ActionProject
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentStatus
+import app.andy.domain.excludingTemporary
 import app.andy.model.AgentTask
 import app.andy.model.ContextualActionKind
 import app.andy.service.AndyServices
@@ -142,7 +143,8 @@ internal fun KanbanBoardScreen(
 
     val boards by services.kanban.boards.collectAsState()
     val board = boards[project.id] ?: KanbanBoard()
-    val agentTasks by services.agentRuns.tasks.collectAsState()
+    val allAgentTasks by services.agentRuns.tasks.collectAsState()
+    val agentTasks = allAgentTasks.excludingTemporary()
     val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
     var dragState by remember { mutableStateOf<KanbanDragState?>(null) }
     var laneBounds by remember { mutableStateOf<Map<String, Rect>>(emptyMap()) }

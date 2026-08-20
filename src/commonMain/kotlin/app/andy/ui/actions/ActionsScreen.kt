@@ -94,6 +94,7 @@ import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.automations.AutomationsScreen
+import app.andy.ui.artifacts.ProjectArtifactsScreen
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentLaneKind
@@ -180,6 +181,7 @@ private val ProjectChatSort =
 private enum class ProjectCanvas(val label: String) {
     Chat("Chat"),
     Tasks("Tasks"),
+    Artifacts("Artifacts"),
     Automations("Automations"),
     Kanban("Kanban"),
     Runbook("Runbook"),
@@ -225,6 +227,7 @@ private fun ProjectCockpit(
                 ?: ProjectCanvas.Chat,
         )
     }
+    var selectedArtifactId by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
@@ -721,6 +724,10 @@ private fun ProjectCockpit(
                                             canvas = ProjectCanvas.Chat
                                             services.agentRuns.setChatViewing(runId, viewing = true)
                                         },
+                                        onOpenArtifact = { artifactId ->
+                                            selectedArtifactId = artifactId
+                                            canvas = ProjectCanvas.Artifacts
+                                        },
                                         onEdit = { task ->
                                             ensureWorkflowProjectLoaded()
                                             if (task.kind == ProjectTaskKind.Spec) {
@@ -742,6 +749,20 @@ private fun ProjectCockpit(
                                         modifier = Modifier.weight(1f).fillMaxHeight(),
                                     )
                                 }
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Artifacts) {
+                                ProjectArtifactsScreen(
+                                    services = services,
+                                    projectId = current.id,
+                                    projects = config.projects,
+                                    initialSelectedId = selectedArtifactId,
+                                    onOpenChat = { taskId ->
+                                        selectedTaskId = taskId
+                                        canvas = ProjectCanvas.Chat
+                                        services.agentRuns.setChatViewing(taskId, viewing = true)
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                             RetainedDestination(active = canvas == ProjectCanvas.Automations) {
                                 AutomationsScreen(

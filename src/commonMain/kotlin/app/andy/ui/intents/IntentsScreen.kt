@@ -46,16 +46,23 @@ internal fun IntentsScreen(
     serial: String?,
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    urlSchemesOnly: Boolean = false,
 ) {
     val intentService = services.intents
     val scope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf(IntentMode.DeepLink) }
-    var action by remember { mutableStateOf("android.intent.action.VIEW") }
+    var mode by remember { mutableStateOf(if (urlSchemesOnly) IntentMode.DeepLink else IntentMode.DeepLink) }
+    var action by remember { mutableStateOf(if (urlSchemesOnly) "" else "android.intent.action.VIEW") }
     var component by remember { mutableStateOf("") }
-    var dataUri by remember { mutableStateOf("app://url") }
+    var dataUri by remember { mutableStateOf(if (urlSchemesOnly) "https://example.com" else "app://url") }
     var result by remember { mutableStateOf("") }
     val draft = IntentDraft(mode = mode, action = action, component = component, dataUri = dataUri)
-    val command = intentService.buildCommand(draft).joinToString(" ")
+    val command = when {
+        urlSchemesOnly -> listOf("xcrun", "simctl", "openurl", serial ?: "<udid>", dataUri.ifBlank { action })
+            .joinToString(" ")
+        intentService is app.andy.service.RoutingIntentService ->
+            intentService.buildCommand(serial, draft).joinToString(" ")
+        else -> intentService.buildCommand(draft).joinToString(" ")
+    }
     fun applyDraft(item: IntentDraft) {
         mode = item.mode
         action = item.action
@@ -64,17 +71,21 @@ internal fun IntentsScreen(
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PanelCard {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                IntentMode.entries.forEach { item -> FilterPill(item.name, item == mode, Rust) { mode = item } }
+            if (!urlSchemesOnly) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IntentMode.entries.forEach { item -> FilterPill(item.name, item == mode, Rust) { mode = item } }
+                }
+                FormRow("Action") { TextField(action, { action = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
+                FormRow("Component") { TextField(component, { component = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
+            } else {
+                Text("URL scheme", color = TextPrimary, fontWeight = FontWeight.Bold)
             }
-            FormRow("Action") { TextField(action, { action = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
-            FormRow("Component") { TextField(component, { component = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
-            FormRow("Data URI") { TextField(dataUri, { dataUri = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
+            FormRow(if (urlSchemesOnly) "URL" else "Data URI") { TextField(dataUri, { dataUri = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("$ $command", color = Green, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
                 Button(onClick = {
                     if (serial != null) scope.launch {
-                        services.bugs.recordAction("intent", "Send ${mode.name}", command)
+                        services.bugs.recordAction("intent", if (urlSchemesOnly) "Open URL" else "Send ${mode.name}", command)
                         val sendResult = intentService.send(serial, draft)
                         result = if (sendResult.isSuccess) sendResult.stdout.ifBlank { "Sent" } else sendResult.stderr
                         if (sendResult.isSuccess) {
@@ -86,7 +97,7 @@ internal fun IntentsScreen(
                             }
                         }
                     }
-                }) { Text("Send") }
+                }) { Text(if (urlSchemesOnly) "Open" else "Send") }
             }
         }
         if (workspaceState.savedIntents.isNotEmpty()) {
@@ -122,7 +133,7 @@ internal fun IntentsScreen(
         }
         PanelCard {
             Text("Result", color = TextPrimary, fontWeight = FontWeight.Bold)
-            Text(result.ifBlank { "No intent sent yet." }, color = TextSecondary, fontFamily = FontFamily.Monospace)
+            Text(result.ifBlank { if (urlSchemesOnly) "No URL opened yet." else "No intent sent yet." }, color = TextSecondary, fontFamily = FontFamily.Monospace)
         }
     }
 }

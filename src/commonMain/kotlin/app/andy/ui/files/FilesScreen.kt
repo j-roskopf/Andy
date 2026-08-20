@@ -79,10 +79,12 @@ internal fun FilesScreen(
     onSelectedPackageChange: (String?) -> Unit,
     selectedTab: FilesTab,
     onSelectedTabChange: (FilesTab) -> Unit,
+    preferencesLabel: String? = null,
 ) {
+    val prefsTabLabel = preferencesLabel ?: "Shared Preferences"
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TabBar(
-            tabs = listOf("Files", "Shared Preferences", "Database"),
+            tabs = listOf("Files", prefsTabLabel, "Database"),
             selectedIndex = FilesTab.entries.indexOf(selectedTab).coerceAtLeast(0),
             onSelect = { onSelectedTabChange(FilesTab.entries[it]) },
         )

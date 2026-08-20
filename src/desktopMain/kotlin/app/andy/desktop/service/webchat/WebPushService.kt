@@ -1,5 +1,6 @@
 package app.andy.desktop.service.webchat
 
+import app.andy.domain.excludingTemporary
 import app.andy.model.WorkspaceState
 import app.andy.service.WorkspaceStore
 import java.security.KeyPair
@@ -71,7 +72,9 @@ class WebPushService(
         scope.launch {
             agentRuns.tasks
                 .map { tasks ->
-                    tasks.mapNotNull { task ->
+                    // Never push a temporary chat to a remote device: it exists only for this
+                    // desktop session and the phone has nothing to open when the tap arrives.
+                    tasks.excludingTemporary().mapNotNull { task ->
                         val request = task.userInputRequest ?: return@mapNotNull null
                         Triple(task.id, task.title, request.id)
                     }

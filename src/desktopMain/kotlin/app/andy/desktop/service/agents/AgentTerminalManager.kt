@@ -89,7 +89,8 @@ class AgentTerminalManager(
         val artifacts: AgentWorkflowArtifacts,
         val statusTracker: AgentStatusTracker,
         val artifactDir: File,
-        val scrollbackPath: File,
+        /** Mutable so promoting a temporary chat can follow its artifacts to their new home. */
+        @Volatile var scrollbackPath: File,
         val scrollback: ScrollbackAccumulator,
         /** Append-only raw PTY mirror; the transcript is derived from it on demand. */
         val rawScrollback: RawScrollbackFile,
@@ -285,6 +286,30 @@ class AgentTerminalManager(
     }
 
     fun scrollbackPath(taskId: String): File = scrollbackFile(taskId)
+
+    /**
+     * Move a live session's artifacts and repoint it at their new home, atomically.
+     *
+     * Promoting a temporary chat relocates its files while the agent is still writing. [move]
+     * runs under the same lock as the flush loop, so no append can land between the move and the
+     * retarget — and it must leave [scrollbackFile] resolving to the new location before it
+     * returns. Without this the run would keep appending to the old path and the kept chat would
+     * have a transcript frozen at the moment of promotion.
+     */
+    fun relocateArtifacts(taskId: String, move: () -> Unit) {
+        val handle = handles[taskId]
+        if (handle == null) {
+            move()
+            return
+        }
+        synchronized(handle.scrollbackLock) {
+            move()
+            handle.scrollbackPath = scrollbackFile(taskId)
+            handle.rawScrollback.retarget(rawScrollbackFile(taskId))
+        }
+        derivedRawCache.remove(taskId)
+        repairedAnsiCache.remove(taskId)
+    }
 
     /** Raw PTY mirror, sibling of `scrollback.ansi`. See [RawScrollbackFile]. */
     private fun rawScrollbackFile(taskId: String): File =

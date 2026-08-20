@@ -92,6 +92,7 @@ internal fun LogcatScreen(
     onSelectedPackageChange: (String?) -> Unit,
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    iosMode: Boolean = false,
 ) {
     val logcatTab = LogcatTab.entries.firstOrNull { it.name == workspaceState.logcatTab } ?: LogcatTab.Stream
 
@@ -116,6 +117,7 @@ internal fun LogcatScreen(
                     modifier = Modifier.fillMaxSize().weight(1f),
                     compact = false,
                     state = state,
+                    iosMode = iosMode,
                 )
             }
             LogcatTab.Crashes -> {
@@ -139,7 +141,8 @@ internal fun LogcatPanel(
     modifier: Modifier = Modifier,
     compact: Boolean,
     embedded: Boolean = false,
-    state: LogcatState = remember { LogcatState() }
+    state: LogcatState = remember { LogcatState() },
+    iosMode: Boolean = false,
 ) {
     var streamJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
@@ -218,7 +221,14 @@ internal fun LogcatPanel(
                 TextField(
                     value = state.search,
                     onValueChange = { state.search = it },
-                    placeholder = { Text("filter or package:com.example", color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    placeholder = {
+                        Text(
+                            if (iosMode) "subsystem:category or message" else "filter or package:com.example",
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     singleLine = true,
                     modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace),
@@ -354,7 +364,7 @@ internal fun LogcatPanel(
                 }
             }
         }
-        LogcatEntryList(state.entries, compact, Modifier.fillMaxSize())
+        LogcatEntryList(state.entries, compact, Modifier.fillMaxSize(), iosMode = iosMode)
     }
     if (embedded) {
         Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -368,7 +378,7 @@ internal fun LogcatPanel(
 }
 
 @Composable
-internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modifier: Modifier = Modifier) {
+internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modifier: Modifier = Modifier, iosMode: Boolean = false) {
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     var stickToBottom by remember { mutableStateOf(true) }
     var timeWidth by remember { mutableStateOf(152f) }
@@ -404,6 +414,7 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
                 onTimeWidth = { timeWidth = it.coerceIn(70f, 240f) },
                 onLevelWidth = { levelWidth = it.coerceIn(24f, 90f) },
                 onTagWidth = { tagWidth = it.coerceIn(80f, 420f) },
+                iosMode = iosMode,
             )
         }
         Box(Modifier.fillMaxSize()) {
@@ -473,11 +484,12 @@ internal fun ResizableLogcatHeader(
     onTimeWidth: (Float) -> Unit,
     onLevelWidth: (Float) -> Unit,
     onTagWidth: (Float) -> Unit,
+    iosMode: Boolean = false,
 ) {
     DataTableHeader {
         HeaderCell("line", timeWidth.dp, onWidthChange = onTimeWidth)
         HeaderCell("lv", levelWidth.dp, showLeadingDivider = true, onWidthChange = onLevelWidth)
-        HeaderCell("tag", tagWidth.dp, showLeadingDivider = true, onWidthChange = onTagWidth)
+        HeaderCell(if (iosMode) "subsystem:category" else "tag", tagWidth.dp, showLeadingDivider = true, onWidthChange = onTagWidth)
         HeaderTrailingLabel(
             "msg",
             modifier = Modifier.weight(1f).padding(end = 4.dp),

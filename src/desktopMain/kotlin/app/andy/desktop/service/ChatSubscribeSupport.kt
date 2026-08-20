@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.domain.excludingTemporary
 import app.andy.model.AgentEvent
 import app.andy.model.AgentStatus
 import app.andy.service.AgentRunService
@@ -297,7 +298,8 @@ internal suspend fun runChatSubscribe(
     agentRuns: AgentRunService,
     taskId: String,
 ): CallToolResult {
-    val taskExists = agentRuns.tasks.value.any { it.id == taskId }
+    // A temporary chat is invisible to MCP, so it reads as "no longer exists" here too.
+    val taskExists = agentRuns.tasks.value.excludingTemporary().any { it.id == taskId }
     if (!taskExists && agentRuns.events(taskId).value.isEmpty()) {
         return CallToolResult(
             content = listOf(TextContent(text = "Error: chat no longer exists: $taskId")),
@@ -372,7 +374,7 @@ internal suspend fun runChatSubscribe(
             val collectorJob = launch {
                 val eventsFlow = agentRuns.events(taskId)
                 val taskFlow = agentRuns.tasks
-                    .map { list -> list.firstOrNull { it.id == taskId } }
+                    .map { list -> list.excludingTemporary().firstOrNull { it.id == taskId } }
                     .distinctUntilChanged()
                 combine(eventsFlow, taskFlow) { snapshot, task -> snapshot to task }
                     .collect { (snapshot, task) ->

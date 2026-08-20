@@ -40,6 +40,7 @@ import app.andy.model.BugCaptureDraft
 import app.andy.model.BugReport
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
+import app.andy.model.IosDeveloperModeStatus
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
@@ -53,6 +54,7 @@ import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
+import app.andy.service.TargetCapabilities
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.transfer.LocalDropKind
 import app.andy.transfer.classifyLocalPaths
@@ -206,6 +208,10 @@ internal fun LiveScreen(
     onFoldableHingeAngleChange: (Float) -> Unit = {},
 ) {
     val isIosTarget = iosTarget != null
+    val caps = when {
+        iosTarget != null -> TargetCapabilities.of(iosTarget)
+        else -> TargetCapabilities.Android
+    }
     val mirrorReady = when {
         isIosTarget -> iosTarget.isLiveReady
         else -> serial != null && device?.state == DeviceConnectionState.Online
@@ -215,6 +221,14 @@ internal fun LiveScreen(
     val mirroredInExternalApp =
         mirroredElsewhere && iosTarget?.kind == IosTargetKind.Simulator
     val scope = rememberCoroutineScope()
+    var developerModeStatus by remember(iosTarget?.udid) { mutableStateOf<IosDeveloperModeStatus?>(null) }
+    LaunchedEffect(iosTarget?.udid, caps.requiresDeveloperMode) {
+        if (iosTarget?.kind != IosTargetKind.Physical) {
+            developerModeStatus = null
+            return@LaunchedEffect
+        }
+        developerModeStatus = runCatching { services.iosDevices.developerModeStatus(iosTarget.udid) }.getOrNull()
+    }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
     val isWeb = services.capabilities.platform == AndyPlatform.Web
@@ -259,7 +273,7 @@ internal fun LiveScreen(
     val dhuReadiness by services.dhu.readiness.collectAsState()
     val dhuSession by services.dhu.session.collectAsState()
     val dhuConsole by services.dhu.console.collectAsState()
-    val showAndroidAuto = !isIosTarget && !isWeb && serial != null && device != null
+    val showAndroidAuto = caps.androidAuto && !isWeb && serial != null && device != null
     val androidAutoReadyHint = remember(dhuReadiness, dhuSession) {
         when {
             !dhuReadiness.ready && dhuReadiness.checks.isNotEmpty() ->
@@ -306,11 +320,15 @@ internal fun LiveScreen(
     LaunchedEffect(transfer.status) {
         if (transfer.status.isNotBlank()) liveActionStatus = transfer.status
     }
-    // Keying on the device keeps a mid-countdown disconnect from starting a recording:
+    // Keying on the target keeps a mid-countdown disconnect from starting a recording:
     // the old coroutine is cancelled and the new one bails out below.
-    LaunchedEffect(recordingRequestId, serial, device?.state) {
+    LaunchedEffect(recordingRequestId, serial, device?.state, iosTarget?.udid, mirrorReady) {
         if (recordingRequestId == 0) return@LaunchedEffect
-        if (serial == null || device?.state != DeviceConnectionState.Online) return@LaunchedEffect
+        val targetReady = when {
+            iosTarget != null -> mirrorReady
+            else -> serial != null && device?.state == DeviceConnectionState.Online
+        }
+        if (!targetReady || serial == null) return@LaunchedEffect
         if (recordingState !is LiveRecordingState.Countdown) return@LaunchedEffect
         for (seconds in 3 downTo 1) {
             recordingState = LiveRecordingState.Countdown(seconds)
@@ -445,14 +463,8 @@ internal fun LiveScreen(
             services.dhu.refreshReadiness(serial)
         }
     }
-    val iosInputEnabled = isIosTarget && when (iosTarget.kind) {
-        // Physical devices have no HID path. Sims accept input as soon as Live attaches — don't
-        // gate on frame presentation or registry Booted state (Devices → Live can race that).
-        IosTargetKind.Physical -> false
-        IosTargetKind.Simulator -> true
-    }
-    val showLogcat = !isIosTarget
-    val showMirrorStreamControls = !isIosTarget
+    val showLogcat = caps.logs
+    val showMirrorStreamControls = caps.mirrorStreamControls
     val iosSinglePane = isIosTarget
     var virtualDevices by remember { mutableStateOf<List<VirtualDevice>>(emptyList()) }
     LaunchedEffect(device?.kind, device?.displayName) {
@@ -462,7 +474,7 @@ internal fun LiveScreen(
             emptyList()
         }
     }
-    val foldable = !isIosTarget && isFoldableEmulator(device, virtualDevices)
+    val foldable = caps.foldable && isFoldableEmulator(device, virtualDevices)
     val foldableProfile = remember(foldable, device?.displayName, virtualDevices) {
         if (!foldable) return@remember null
         val avdName = device?.displayName?.trim().orEmpty()
@@ -510,6 +522,9 @@ internal fun LiveScreen(
         }
     }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    if (iosTarget?.kind == IosTargetKind.Physical) {
+        PhysicalIosDeveloperModeBanner(developerModeStatus)
+    }
     Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(0.dp)) {
         MirrorFrameContent(services.mirror, serial) { frameFlow, frame ->
             val dialogsOpen = bugDialogVisible || clipDialogVisible || completedRecording != null || screenshotEditorBytes != null
@@ -523,13 +538,14 @@ internal fun LiveScreen(
                     maxPaneHeight = maxHeight,
                     device = device,
                     frame = frame,
-                    showHardwareControls = !isIosTarget,
+                    showHardwareControls = caps.hardwareButtons,
                     showDeviceHeader = serial != null,
-                    showChromeControls = !isIosTarget,
+                    showChromeControls = caps.chromeControls,
                     session = mirrorSession,
                     captureHint = foldableCaptureHint,
                     foldableProfile = foldableProfile,
                     foldableHingeAngle = foldableHingeAngle,
+                    showSideToolbar = caps.hardwareButtons || isIosTarget,
                 )
                 minDevicePaneWidth = fittedDevicePaneWidth.value
                 // While a foldable open/close hint is active, follow the fitted outer/inner
@@ -562,10 +578,11 @@ internal fun LiveScreen(
                                 mirrorSession?.failureReason != null -> mirrorSession?.failureReason.orEmpty()
                                 else -> connectResult
                             },
-                            showAndroidNavButtons = !isIosTarget,
-                            showHardwareControls = !isIosTarget,
-                            showClipTextControl = !isIosTarget || iosInputEnabled,
-                            passThroughInput = !isIosTarget || iosInputEnabled,
+                            showAndroidNavButtons = caps.navButtons,
+                            showHardwareControls = caps.hardwareButtons,
+                            showCaptureControls = isIosTarget,
+                            showClipTextControl = caps.input,
+                            passThroughInput = caps.input,
                             modifier = Modifier.fillMaxSize().onExternalFileDrop(enabled = serial != null) { handleApkDrop(it) },
                             onPower = { sendHardware(MirrorInput.Power) },
                             onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
@@ -787,6 +804,39 @@ internal fun LiveScreen(
             },
         )
     }
+    }
+}
+
+/**
+ * Physical iOS honesty banner (Phase 6.1): mirroring only needs USB + "Trust This Computer",
+ * but everything else here (input, logs, files, apps) needs Developer Mode enabled on-device.
+ */
+@Composable
+private fun PhysicalIosDeveloperModeBanner(status: IosDeveloperModeStatus?) {
+    val enabled = status?.enabled == true
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(if (enabled) AndyColors.Neutral800 else Yellow.copy(alpha = 0.12f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = when {
+                enabled -> "Developer Mode enabled — full tooling available."
+                else ->
+                    "Live mirroring only needs USB + \"Trust This Computer\". Input is view-only on " +
+                        "physical devices; Apps/Files/Logs/Controls need Developer Mode: " +
+                        "Settings → Privacy & Security → Developer Mode, then restart the device."
+            },
+            color = if (enabled) Green else Yellow,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(1f),
+        )
+        status?.message?.takeIf { it.isNotBlank() }?.let {
+            Text(it, color = TextSecondary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+        }
     }
 }
 

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.AndyDestination
 import app.andy.availableWithIosTarget
+import app.andy.service.TargetCapabilities
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.andy_robot
 import app.andy.model.SdkDiscovery
@@ -79,6 +80,7 @@ internal fun Sidebar(
     destinations: List<AndyDestination>,
     deviceCount: Int,
     iosSelectionActive: Boolean = false,
+    iosCapabilities: TargetCapabilities = TargetCapabilities.Simulator,
     hasUnreadAgentTasks: Boolean,
     hasUnreadProjectAgentTasks: Boolean,
     hasActiveProjectAgentTasks: Boolean,
@@ -178,7 +180,7 @@ internal fun Sidebar(
             // expanding the selected Settings (and other) rows into oversized pills.
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
             destinations.forEach { item ->
-                val disabledForIos = iosSelectionActive && !item.availableWithIosTarget()
+                val disabledForIos = iosSelectionActive && !item.availableWithIosTarget(iosCapabilities)
                 val active = item == current
                 Box(
                     Modifier.fillMaxWidth()
@@ -220,7 +222,7 @@ internal fun Sidebar(
                     if (labelAlpha > 0.01f) {
                         Spacer(Modifier.width(labelGap))
                         Text(
-                            item.label,
+                            if (iosSelectionActive && item == AndyDestination.Logcat) "Logs" else item.label,
                             color = (if (active) TextPrimary else TextSecondary)
                                 .copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
                             fontFamily = DisplayFont,

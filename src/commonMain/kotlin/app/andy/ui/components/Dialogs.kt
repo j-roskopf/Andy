@@ -13,6 +13,12 @@ internal data class PendingConfirmation(
     val confirmLabel: String = "Confirm",
     /** Invoked when the user cancels / closes the dialog without confirming. */
     val onCancel: (() -> Unit)? = null,
+    /**
+     * Optional third choice offered beside confirm and cancel, for a destructive prompt that
+     * has a non-destructive way out — "Keep chat" when discarding a temporary chat.
+     */
+    val neutralLabel: String? = null,
+    val onNeutral: (() -> Unit)? = null,
     val onConfirm: () -> Unit,
 )
 

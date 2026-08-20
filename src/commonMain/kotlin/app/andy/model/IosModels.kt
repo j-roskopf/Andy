@@ -25,6 +25,8 @@ data class IosTarget(
     val transport: IosTransport = IosTransport.Unknown,
     /** CoreDevice identifier from devicectl; AVCapture may use this instead of the hardware UDID. */
     val coreDeviceIdentifier: String? = null,
+    /** Persisted CMIO uniqueID for physical screen capture reconnect. */
+    val cmioUniqueId: String? = null,
 ) {
     val isMirrorable: Boolean
         get() = when (kind) {
@@ -42,6 +44,26 @@ data class IosTarget(
     val supportsInput: Boolean
         get() = kind == IosTargetKind.Simulator && state == IosTargetState.Booted
 }
+
+data class IosDeviceType(
+    val identifier: String,
+    val name: String,
+    val productFamily: String? = null,
+)
+
+data class IosRuntime(
+    val identifier: String,
+    val name: String,
+    val version: String? = null,
+    val isAvailable: Boolean = true,
+    val buildVersion: String? = null,
+)
+
+data class IosDeveloperModeStatus(
+    val enabled: Boolean,
+    val ddiServicesAvailable: Boolean,
+    val message: String,
+)
 
 /** Converts device-pixel coordinates from the mirror surface into normalized 0..1 touch space. */
 fun iosNormalizedTouchCoordinates(

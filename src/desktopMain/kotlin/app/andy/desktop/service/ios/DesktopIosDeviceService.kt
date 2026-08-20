@@ -2,6 +2,9 @@ package app.andy.desktop.service.ios
 
 import app.andy.desktop.parser.IosParsers
 import app.andy.desktop.service.CommandRunner
+import app.andy.model.IosDeveloperModeStatus
+import app.andy.model.IosDeviceType
+import app.andy.model.IosRuntime
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetState
 import app.andy.service.CommandResult
@@ -114,6 +117,105 @@ class DesktopIosDeviceService(
     override suspend fun iosSimAvailable(): Boolean = NativeIosSimJni.isAvailable()
 
     override suspend fun iosSimDiagnostic(): String = NativeIosSimJni.diagnostic()
+
+    override suspend fun simctl(args: List<String>): CommandResult =
+        runner.run(listOf("xcrun", "simctl") + args, timeoutSeconds = 60)
+
+    override suspend fun listDeviceTypes(): List<IosDeviceType> {
+        val result = runner.run(listOf("xcrun", "simctl", "list", "devicetypes", "-j"))
+        return if (result.isSuccess) IosParsers.parseDeviceTypes(result.stdout) else emptyList()
+    }
+
+    override suspend fun listRuntimes(): List<IosRuntime> {
+        val result = runner.run(listOf("xcrun", "simctl", "list", "runtimes", "-j"))
+        return if (result.isSuccess) IosParsers.parseRuntimes(result.stdout) else emptyList()
+    }
+
+    override suspend fun createSimulator(name: String, deviceTypeId: String, runtimeId: String?): CommandResult {
+        val command = buildList {
+            add("xcrun"); add("simctl"); add("create"); add(name); add(deviceTypeId)
+            if (runtimeId != null) add(runtimeId)
+        }
+        val result = runner.run(command, timeoutSeconds = 120)
+        return if (result.isSuccess) CommandResult.success(result.stdout.trim()) else result
+    }
+
+    override suspend fun cloneSimulator(udid: String, newName: String): CommandResult {
+        val result = runner.run(listOf("xcrun", "simctl", "clone", udid, newName), timeoutSeconds = 120)
+        return if (result.isSuccess) CommandResult.success(result.stdout.trim().ifBlank { "Cloned $udid as $newName" }) else result
+    }
+
+    override suspend fun eraseSimulator(udid: String): CommandResult {
+        val result = runner.run(listOf("xcrun", "simctl", "erase", udid), timeoutSeconds = 120)
+        return if (result.isSuccess) CommandResult.success("Erased $udid") else result
+    }
+
+    override suspend fun renameSimulator(udid: String, newName: String): CommandResult {
+        val result = runner.run(listOf("xcrun", "simctl", "rename", udid, newName))
+        return if (result.isSuccess) CommandResult.success("Renamed $udid to $newName") else result
+    }
+
+    override suspend fun deleteSimulator(udid: String): CommandResult {
+        val result = runner.run(listOf("xcrun", "simctl", "delete", udid))
+        return if (result.isSuccess) CommandResult.success("Deleted $udid") else result
+    }
+
+    override suspend fun deleteUnavailableSimulators(): CommandResult {
+        val result = runner.run(listOf("xcrun", "simctl", "delete", "unavailable"))
+        return if (result.isSuccess) CommandResult.success("Deleted unavailable simulators") else result
+    }
+
+    override suspend fun deleteUnusedRuntimes(notUsedSinceDays: Int): CommandResult {
+        val result = runner.run(
+            listOf("xcrun", "simctl", "runtime", "delete", "--notUsedSinceDays", notUsedSinceDays.toString()),
+            timeoutSeconds = 180,
+        )
+        return if (result.isSuccess) CommandResult.success("Deleted runtimes unused for $notUsedSinceDays+ days") else result
+    }
+
+    override suspend fun captureScreenshot(udid: String): ByteArray? {
+        val temp = File.createTempFile("andy-ios-studio-shot", ".png")
+        return try {
+            val result = runner.run(listOf("xcrun", "simctl", "io", udid, "screenshot", temp.absolutePath), timeoutSeconds = 30)
+            if (result.isSuccess && temp.isFile && temp.length() > 0L) temp.readBytes() else null
+        } catch (_: Exception) {
+            null
+        } finally {
+            temp.delete()
+        }
+    }
+
+    override suspend fun push(udid: String, bundleId: String, payloadJson: String): CommandResult {
+        val temp = File.createTempFile("andy-ios-push", ".apns")
+        return try {
+            temp.writeText(payloadJson)
+            runner.run(listOf("xcrun", "simctl", "push", udid, bundleId, temp.absolutePath), timeoutSeconds = 30)
+        } catch (e: Exception) {
+            CommandResult.failure(e.message ?: "Push failed")
+        } finally {
+            temp.delete()
+        }
+    }
+
+    override suspend fun downloadPlatform(): CommandResult =
+        runner.run(listOf("xcodebuild", "-downloadPlatform", "iOS"), timeoutSeconds = 3600)
+
+    override suspend fun developerModeStatus(udid: String): IosDeveloperModeStatus? {
+        val temp = File.createTempFile("andy-devicectl-info", ".json")
+        return try {
+            val result = runner.run(
+                listOf("xcrun", "devicectl", "device", "info", "details", "--device", udid, "--json-output", temp.absolutePath),
+                timeoutSeconds = 30,
+            )
+            if (!result.isSuccess) return null
+            val output = temp.readText()
+            if (output.isBlank()) null else IosParsers.parseDeveloperModeStatus(output)
+        } catch (_: Exception) {
+            null
+        } finally {
+            temp.delete()
+        }
+    }
 }
 
 internal fun refreshedIosTargets(service: IosDeviceService): List<IosTarget> {

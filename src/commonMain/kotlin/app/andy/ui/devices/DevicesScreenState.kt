@@ -21,4 +21,7 @@ internal class DevicesScreenState(
     var wifiStatus by mutableStateOf("")
     var pendingConfirmation by mutableStateOf<PendingConfirmation?>(null)
     var cloneSource by mutableStateOf<VirtualDevice?>(null)
+    var iosStatus by mutableStateOf("")
+    var iosCloneSource by mutableStateOf<app.andy.model.IosTarget?>(null)
+    var iosRenameSource by mutableStateOf<app.andy.model.IosTarget?>(null)
 }

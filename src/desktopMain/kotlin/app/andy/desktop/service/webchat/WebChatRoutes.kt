@@ -1,6 +1,7 @@
 package app.andy.desktop.service.webchat
 
 import app.andy.desktop.service.firstChangedEventIndex
+import app.andy.domain.excludingTemporary
 import app.andy.desktop.service.toWire
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
@@ -92,7 +93,8 @@ internal fun Application.installWebChatRoutes(
                         """{"error":"agent services unavailable"}""",
                         status = HttpStatusCode.ServiceUnavailable,
                     )
-                val chats = agents.tasks.value
+                // Temporary chats never leave this desktop session — see excludingTemporary.
+                val chats = agents.tasks.value.excludingTemporary()
                     .filter { it.lane == AgentLaneKind.Acp && !it.archived }
                     .sortedByDescending { it.createdAtMillis }
                 call.respondText(buildJsonArray { chats.forEach { add(it.toChatJson()) } }.toString(), ContentType.Application.Json)
@@ -178,7 +180,7 @@ internal fun Application.installWebChatRoutes(
                         """{"error":"agent services unavailable"}""",
                         status = HttpStatusCode.ServiceUnavailable,
                     )
-                val dirs = agents.tasks.value
+                val dirs = agents.tasks.value.excludingTemporary()
                     .asSequence()
                     .flatMap { listOfNotNull(it.cwd?.takeIf { p -> p.isNotBlank() }, it.originDir?.takeIf { p -> p.isNotBlank() }) }
                     .distinct()
@@ -194,7 +196,7 @@ internal fun Application.installWebChatRoutes(
                         status = HttpStatusCode.ServiceUnavailable,
                     )
                 val id = call.parameters["id"].orEmpty()
-                val task = agents.tasks.value.firstOrNull { it.id == id }
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
                     ?: return@get call.respondText(
                         """{"error":"chat not found"}""",
                         status = HttpStatusCode.NotFound,
@@ -220,7 +222,7 @@ internal fun Application.installWebChatRoutes(
                         "agent services unavailable",
                     )
                 val id = call.parameters["id"].orEmpty()
-                val task = agents.tasks.value.firstOrNull { it.id == id }
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
                     ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
                 if (task.lane != AgentLaneKind.Acp) {
                     return@post call.respondJsonError(
@@ -257,7 +259,7 @@ internal fun Application.installWebChatRoutes(
                         "agent services unavailable",
                     )
                 val id = call.parameters["id"].orEmpty()
-                val task = agents.tasks.value.firstOrNull { it.id == id }
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
                     ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
                 if (task.lane != AgentLaneKind.Acp) {
                     return@post call.respondJsonError(
@@ -494,7 +496,7 @@ internal fun Application.installWebChatRoutes(
                 return@webSocket
             }
             val id = call.parameters["id"].orEmpty()
-            val task = agents.tasks.value.firstOrNull { it.id == id }
+            val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
             if (task == null) {
                 close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "chat not found"))
                 return@webSocket
@@ -522,7 +524,7 @@ internal fun Application.installWebChatRoutes(
                     if (error != null) put("error", error)
                     if (terminalStatus != null) put("terminalStatus", terminalStatus)
                     // Include pending user-input so the client can render approve/deny UI.
-                    agents.tasks.value.firstOrNull { it.id == id }?.userInputRequest?.let { request ->
+                    agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }?.userInputRequest?.let { request ->
                         putJsonObject("userInputRequest") {
                             put("id", request.id)
                             put("origin", request.origin.name)
@@ -556,7 +558,7 @@ internal fun Application.installWebChatRoutes(
             try {
                 val eventsFlow = agents.events(id)
                 val taskFlow = agents.tasks
-                    .map { list -> list.firstOrNull { it.id == id } }
+                    .map { list -> list.excludingTemporary().firstOrNull { it.id == id } }
                     .distinctUntilChanged()
                 // Keep the socket open after Done/Error so follow-up replies can stream
                 // without a reconnect. Only close when the chat is deleted/gone.

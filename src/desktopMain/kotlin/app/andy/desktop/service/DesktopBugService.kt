@@ -20,6 +20,7 @@ import app.andy.model.InvestigationReportSchemaVersion
 import app.andy.model.InvestigationTimeline
 import app.andy.model.InvestigationTimelineSchemaVersion
 import app.andy.model.LogLevel
+import app.andy.model.ProjectIdentity
 import app.andy.service.AccessibilityService
 import app.andy.service.ActionConfigStore
 import app.andy.service.AppService
@@ -131,14 +132,15 @@ class DesktopBugService(
     }
 
     private suspend fun syncCaptureToMirrorSession(serial: String?) {
-        val androidSerial = serial?.takeUnless { IosTargetRegistry.isIosTarget(it) }
         when {
-            androidSerial != null -> {
-                lastAndroidMirrorSerial = androidSerial
-                val device = devices?.listDevices()?.firstOrNull { it.serial == androidSerial }
-                startCapture(androidSerial, device, auto = true)
+            // iOS targets have no AndroidDevice; startCapture already handles a null device
+            // (metadata is backfilled from IosTargetRegistry when the capture is saved).
+            serial != null -> {
+                lastAndroidMirrorSerial = serial
+                val device = devices?.listDevices()?.firstOrNull { it.serial == serial }
+                startCapture(serial, device, auto = true)
             }
-            // Only tear down when a visible Android mirror actually went away. Ignoring the idle
+            // Only tear down when a visible mirror actually went away. Ignoring the idle
             // initial emission avoids racing MCP/manual startCapture, and an explicitly started
             // capture outlives visibility because its owner is waiting on the result.
             lastAndroidMirrorSerial != null -> {
@@ -283,8 +285,8 @@ class DesktopBugService(
         if (synchronized(lock) { captureSerial } == null) {
             // Recording can start from an idle window — a hidden Live, or an MCP client that goes
             // straight to record. Claim the warm session so the recording owns it from here on.
-            val live = mirror.session.value?.serial?.takeUnless { IosTargetRegistry.isIosTarget(it) }
-            val serial = checkNotNull(live) { "Connect to a device before recording." }
+            // iOS live serials are allowed here too; startCapture tolerates a null AndroidDevice.
+            val serial = checkNotNull(mirror.session.value?.serial) { "Connect to a device before recording." }
             startCapture(serial, devices?.listDevices()?.firstOrNull { it.serial == serial }, auto = false)
         }
         val serial = synchronized(lock) {
@@ -622,12 +624,17 @@ class DesktopBugService(
         val appIdentity = runCatching { resolveAppIdentity(apps, snapshot.serial) }.getOrNull()
         val projectIdentity = runCatching { resolveProjectIdentity(workspaceStore, actionConfig) }.getOrNull()
         val captureMode = if (snapshot.recordingActive) InvestigationCaptureMode.Recording else InvestigationCaptureMode.Rolling
+        // Android devices carry their own model/display name; iOS targets have no AndroidDevice,
+        // so fall back to whatever IosTargetRegistry last discovered for this serial.
+        val deviceModel = snapshot.device?.model
+            ?: snapshot.device?.displayName
+            ?: IosTargetRegistry.target(snapshot.serial)?.let { it.model ?: it.displayName }
         val report = BugReport(
             id = reportId,
             title = title,
             notes = draft.notes.trim(),
             deviceSerial = snapshot.serial,
-            deviceModel = snapshot.device?.model ?: snapshot.device?.displayName,
+            deviceModel = deviceModel,
             apiLevel = snapshot.device?.apiLevel,
             abi = snapshot.device?.abi,
             resolution = snapshot.device?.screenSize,
@@ -807,6 +814,26 @@ class DesktopBugService(
             metadataFile.writeText(BugJson.writeReport(report.copy(title = trimmed)))
             CommandResult.success(trimmed)
         }.getOrElse { CommandResult.failure(it.message ?: "Rename failed") }
+    }
+
+    override suspend fun assignBugProject(id: String, projectId: String?): CommandResult = withContext(Dispatchers.IO) {
+        val reportDir = File(bugsDir, id)
+        val report = readReport(reportDir) ?: return@withContext CommandResult.failure("Report not found: $id")
+        val metadataFile = File(reportDir, "metadata.json")
+        val nextIdentity = when {
+            projectId.isNullOrBlank() -> null
+            else -> ProjectIdentity(
+                projectId = projectId,
+                contextDir = report.projectIdentity?.contextDir,
+                gitHead = report.projectIdentity?.gitHead,
+                gitBranch = report.projectIdentity?.gitBranch,
+                gitDirty = report.projectIdentity?.gitDirty,
+            )
+        }
+        runCatching {
+            metadataFile.writeText(BugJson.writeReport(report.copy(projectIdentity = nextIdentity)))
+            CommandResult.success(projectId ?: "")
+        }.getOrElse { CommandResult.failure(it.message ?: "Assign project failed") }
     }
 
     override fun playbackFrames(id: String, startFrameIndex: Int): Flow<MirrorFrame> = flow {
