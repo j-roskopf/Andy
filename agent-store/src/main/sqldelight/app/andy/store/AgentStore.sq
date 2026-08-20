@@ -41,6 +41,13 @@ CREATE TABLE kanban_board (
   payload TEXT NOT NULL
 );
 
+CREATE TABLE automation (
+  id TEXT NOT NULL PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  updated_at_millis INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+
 getMeta:
 SELECT value FROM store_meta WHERE key = ?;
 
@@ -116,3 +123,16 @@ DELETE FROM kanban_board WHERE project_id = ?;
 
 deleteAllKanbanBoards:
 DELETE FROM kanban_board;
+
+selectAllAutomations:
+SELECT id, project_id, updated_at_millis, payload FROM automation ORDER BY updated_at_millis DESC;
+
+upsertAutomation:
+INSERT OR REPLACE INTO automation(id, project_id, updated_at_millis, payload)
+VALUES (?, ?, ?, ?);
+
+deleteAutomation:
+DELETE FROM automation WHERE id = ?;
+
+deleteAllAutomations:
+DELETE FROM automation;

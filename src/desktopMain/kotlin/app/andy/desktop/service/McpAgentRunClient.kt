@@ -37,6 +37,8 @@ import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.Automation
+import app.andy.model.AutomationDraft
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
@@ -47,6 +49,7 @@ import app.andy.model.ProjectSpecDraft
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
 import app.andy.service.AgentRunService
+import app.andy.service.AutomationService
 import app.andy.service.CommandResult
 import app.andy.service.ProjectWorkflowService
 import app.andy.terminal.TmuxAndy
@@ -98,7 +101,7 @@ class McpAgentRunClient(
     private val scope: CoroutineScope,
     private val socketPath: File,
     private val cliLocator: AgentCliLocator = AgentCliLocator(),
-) : AgentRunService, ProjectWorkflowService {
+) : AgentRunService, ProjectWorkflowService, AutomationService {
     private val json = Json { ignoreUnknownKeys = true }
     private val idSeq = AtomicLong(1)
     private val localWorktrees = WorktreeManager()
@@ -158,6 +161,8 @@ class McpAgentRunClient(
 
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
+    private val _automations = MutableStateFlow<List<Automation>>(emptyList())
+    override val automations: StateFlow<List<Automation>> = _automations.asStateFlow()
 
     private data class SkillScope(val agent: AgentKind, val directory: String?)
     private data class KnownSkillScope(val directory: String?)
@@ -192,6 +197,7 @@ class McpAgentRunClient(
         scope.launch {
             while (isActive) {
                 runCatching { refreshTasks() }
+                runCatching { refreshAutomations() }
                 delay(2_000)
             }
         }
@@ -255,6 +261,14 @@ class McpAgentRunClient(
         locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
     }
 
+    private suspend fun refreshAutomations() {
+        val raw = runCatching { callTool("automation.list", emptyMap()) }.getOrNull() ?: return
+        val parsed = runCatching {
+            json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(Automation.serializer()), raw)
+        }.getOrNull() ?: return
+        _automations.value = parsed
+    }
+
     private fun parseListedTask(obj: JsonObject): AgentTask? {
         val id = obj.string("id") ?: return null
         val agentName = obj.string("agent") ?: return null
@@ -308,6 +322,9 @@ class McpAgentRunClient(
             parentWorktreeTaskId = obj.string("parentWorktreeTaskId")?.takeIf { it.isNotBlank() },
             parentChatTaskId = obj.string("parentChatTaskId")?.takeIf { it.isNotBlank() },
             attachAndyMcp = obj.bool("attachAndyMcp"),
+            automationId = obj.string("automationId")?.takeIf { it.isNotBlank() },
+            automationNotifyFailedOnly = obj.bool("automationNotifyFailedOnly"),
+            automationSuppressOsNotify = obj.bool("automationSuppressOsNotify"),
         )
     }
 
@@ -686,6 +703,9 @@ class McpAgentRunClient(
                 }
                 draft.provenance?.let { put("provenance", it.toJsonObject()) }
                 draft.lane?.let { put("lane", JsonPrimitive(it.name)) }
+                draft.vendorSessionId?.takeIf { it.isNotBlank() }?.let {
+                    put("vendorSessionId", JsonPrimitive(it))
+                }
             },
         )
         refreshTasks()
@@ -1172,6 +1192,90 @@ class McpAgentRunClient(
     override suspend fun startRecoveryReview(buildTaskId: String): String? = null
     override suspend fun deleteTask(taskId: String, cascade: Boolean) = Unit
     override suspend fun deleteProject(projectId: String) = Unit
+
+    override suspend fun create(draft: AutomationDraft, arm: Boolean): Automation {
+        val raw = callTool("automation.create", draft.toMcpArgs())
+        val created = json.decodeFromString(Automation.serializer(), raw)
+        if (arm) resume(created.id)
+        refreshAutomations()
+        return _automations.value.firstOrNull { it.id == created.id } ?: created
+    }
+
+    override suspend fun update(id: String, draft: AutomationDraft): Automation {
+        val raw = callTool("automation.update", draft.toMcpArgs() + ("id" to JsonPrimitive(id)))
+        refreshAutomations()
+        return runCatching { json.decodeFromString(Automation.serializer(), raw) }.getOrNull()
+            ?: _automations.value.firstOrNull { it.id == id }
+            ?: error("Automation $id not found")
+    }
+
+    override suspend fun pause(id: String, reason: String?) {
+        callTool("automation.pause", mapOf("id" to JsonPrimitive(id)))
+        refreshAutomations()
+    }
+
+    override suspend fun resume(id: String) {
+        callTool("automation.resume", mapOf("id" to JsonPrimitive(id)))
+        refreshAutomations()
+    }
+
+    override suspend fun delete(id: String) {
+        callTool("automation.delete", mapOf("id" to JsonPrimitive(id)))
+        refreshAutomations()
+    }
+
+    override suspend fun runNow(id: String): Automation {
+        val raw = callTool("automation.run", mapOf("id" to JsonPrimitive(id)))
+        refreshAutomations()
+        return runCatching { json.decodeFromString(Automation.serializer(), raw) }.getOrNull()
+            ?: _automations.value.firstOrNull { it.id == id }
+            ?: error("Automation $id not found")
+    }
+}
+
+private fun AutomationDraft.toMcpArgs(): Map<String, JsonPrimitive> = buildMap {
+    put("title", JsonPrimitive(title))
+    put("prompt", JsonPrimitive(prompt))
+    put("projectId", JsonPrimitive(projectId))
+    put("mode", JsonPrimitive(mode.name))
+    put("timeZone", JsonPrimitive(timeZone))
+    put("runHour", JsonPrimitive(runHour))
+    put("runMinute", JsonPrimitive(runMinute))
+    put("stopWhen", JsonPrimitive(stopWhen))
+    put("failurePolicy", JsonPrimitive(failurePolicy.name))
+    put("maxIterations", JsonPrimitive(maxIterations.name))
+    put("notify", JsonPrimitive(notify.name))
+    put("useWorktree", JsonPrimitive(useWorktree))
+    put("cleanupWorktree", JsonPrimitive(cleanupWorktree))
+    heartbeatTaskId?.let { put("heartbeatTaskId", JsonPrimitive(it)) }
+    put("agent", JsonPrimitive(launch.agent))
+    launch.model?.let { put("model", JsonPrimitive(it)) }
+    launch.reasoningEffort?.let { put("reasoningEffort", JsonPrimitive(it)) }
+    put("autonomy", JsonPrimitive(launch.autonomy))
+    launch.directory?.let { put("directory", JsonPrimitive(it)) }
+    when (val item = schedule) {
+        app.andy.model.AutomationSchedule.Manual -> put("schedule", JsonPrimitive("manual"))
+        is app.andy.model.AutomationSchedule.Once -> {
+            put("schedule", JsonPrimitive("once"))
+            put("onceAtMillis", JsonPrimitive(item.atMillis))
+        }
+        app.andy.model.AutomationSchedule.Hourly -> put("schedule", JsonPrimitive("hourly"))
+        app.andy.model.AutomationSchedule.Daily -> put("schedule", JsonPrimitive("daily"))
+        app.andy.model.AutomationSchedule.Weekdays -> put("schedule", JsonPrimitive("weekdays"))
+        is app.andy.model.AutomationSchedule.Weekly -> {
+            put("schedule", JsonPrimitive("weekly"))
+            put("weeklyDayOfWeek", JsonPrimitive(item.dayOfWeek))
+        }
+        is app.andy.model.AutomationSchedule.Interval -> {
+            put("schedule", JsonPrimitive("interval"))
+            put("intervalEvery", JsonPrimitive(item.every))
+            put("intervalUnit", JsonPrimitive(item.unit.name))
+        }
+        is app.andy.model.AutomationSchedule.Cron -> {
+            put("schedule", JsonPrimitive("cron"))
+            put("cron", JsonPrimitive(item.expression))
+        }
+    }
 }
 
 /** GUI-only fallback when a newer build knows about a provider the running `andyd` does not. */

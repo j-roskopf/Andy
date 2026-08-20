@@ -45,7 +45,10 @@ import app.andy.model.isLocalModelBackend
 import app.andy.service.AndyServices
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ComposerCustomModelId
+import app.andy.ui.agents.ComposerModelSelection
 import app.andy.ui.agents.ComposerProfileChips
+import app.andy.ui.agents.composerModelSelection
+import app.andy.ui.agents.composerModelSelectionAfterCatalogUpdate
 import app.andy.ui.components.ChatComposerFrame
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ComposerPlaceholderHint
@@ -138,22 +141,30 @@ private fun SideChatStarter(
         if (!agentChosen) agent = sideChatAgent(parent.agent, cliStatuses)
     }
     LaunchedEffect(agent, providerDefaults, providerModels) {
-        if (seededForAgent == agent) return@LaunchedEffect
         val defaults = providerDefaults[agent]
-        val savedModel = defaults?.model?.takeUnless { agent == AgentKind.Pi && '/' !in it }
-        val catalogModel = AgentModelCatalog.option(agent, savedModel, providerModels)
-        modelId = when {
-            savedModel == null -> null
-            catalogModel != null -> catalogModel.id
-            else -> ComposerCustomModelId
+        if (seededForAgent != agent) {
+            val selection = composerModelSelection(agent, defaults?.model, providerModels)
+            modelId = selection.modelId
+            customModel = selection.customModel
+            reasoningEffort = defaults?.reasoningEffort
+            localRuntime = when {
+                !agent.isLocalModelBackend -> null
+                else -> localRuntime ?: defaults?.localRuntime ?: LocalAgentRuntime.OpenCode
+            }
+            seededForAgent = agent
+        } else {
+            val next = composerModelSelectionAfterCatalogUpdate(
+                ComposerModelSelection(modelId, customModel),
+                agent,
+                defaults?.model,
+                providerModels,
+            )
+            if (next.modelId != modelId || next.customModel != customModel) {
+                modelId = next.modelId
+                customModel = next.customModel
+                reasoningEffort = defaults?.reasoningEffort
+            }
         }
-        customModel = if (catalogModel == null) savedModel.orEmpty() else ""
-        reasoningEffort = defaults?.reasoningEffort
-        localRuntime = when {
-            !agent.isLocalModelBackend -> null
-            else -> localRuntime ?: defaults?.localRuntime ?: LocalAgentRuntime.OpenCode
-        }
-        seededForAgent = agent
     }
 
     val modelOptions = AgentModelCatalog.options(agent, providerModels)

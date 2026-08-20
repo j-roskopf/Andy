@@ -78,6 +78,7 @@ class DesktopMcpServerService(
     private var unixSocketServer: McpUnixSocketServer? = null
     private var agentRuns: AgentRunService? = null
     private var projectWorkflows: ProjectWorkflowService? = null
+    private var automations: AutomationService? = null
 
     /**
      * Test-only: force Network Access peer classification (e.g. `"203.0.113.10"`)
@@ -86,9 +87,14 @@ class DesktopMcpServerService(
     internal var authPeerAddressOverride: String? = null
 
     /** Wire agent/project services so MCP tools can control chats (daemon / embedded). */
-    fun bindAgentServices(agents: AgentRunService, projects: ProjectWorkflowService) {
+    fun bindAgentServices(
+        agents: AgentRunService,
+        projects: ProjectWorkflowService,
+        automations: AutomationService = UnavailableAutomationService,
+    ) {
         agentRuns = agents
         projectWorkflows = projects
+        this.automations = automations
         webPush.startWatching(agents)
     }
 
@@ -329,6 +335,7 @@ class DesktopMcpServerService(
                 agents,
                 projects,
                 callerTaskId = callerTaskId?.takeIf { it.isNotBlank() },
+                automations = automations ?: UnavailableAutomationService,
             )
         }
         return mcpServer

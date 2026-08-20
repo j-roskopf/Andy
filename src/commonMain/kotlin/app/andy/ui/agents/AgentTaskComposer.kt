@@ -81,6 +81,7 @@ import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
+import app.andy.model.withImportedVendorSession
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorkspaceState
 import app.andy.model.composerCommandName
@@ -144,6 +145,10 @@ internal fun AgentTaskComposerPane(
     val form = rememberAgentTaskComposerForm(services, cliStatuses, projectContext)
     val copyText = rememberCopyText()
     val scope = rememberCoroutineScope()
+    var importingThread by remember { mutableStateOf(false) }
+    LaunchedEffect(dictationActive) {
+        if (!dictationActive) importingThread = false
+    }
     CollectChatComposerInbox(active = dictationActive) { item ->
         val (text, images) = applyChatComposerAttachment(form.state.promptValue, form.state.imagePaths, item)
         form.state.promptValue = text
@@ -156,6 +161,26 @@ internal fun AgentTaskComposerPane(
                 TextRange(initialPrompt.length),
             )
         }
+    }
+    if (importingThread) {
+        ImportThreadFromProviderPane(
+            initialAgent = form.state.agent,
+            cliStatuses = cliStatuses,
+            onBack = { importingThread = false },
+            onCancel = {
+                importingThread = false
+                onCancel?.invoke()
+            },
+            onImport = { agent, sessionId ->
+                form.state.agent = agent
+                if (!agent.isLocalModelBackend) form.state.localRuntime = null
+                importingThread = false
+                onSubmit(form.buildDraft().withImportedVendorSession(sessionId))
+                form.clearPrompt()
+            },
+            modifier = modifier,
+        )
+        return
     }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(
@@ -182,6 +207,14 @@ internal fun AgentTaskComposerPane(
                 fontWeight = FontWeight.Medium,
                 fontSize = 18.sp,
                 textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Import thread from provider",
+                color = TextSecondary,
+                fontFamily = DisplayFont,
+                fontSize = 13.sp,
+                modifier = Modifier.clickable(role = Role.Button) { importingThread = true },
             )
         }
         AgentCliIssueNotices(
@@ -272,7 +305,7 @@ private class AgentTaskComposerFormState(
     var defaultsSeededForAgent: AgentKind? = null
 
     val prompt: String get() = promptValue.text
-    val usesCustomModel: Boolean get() = modelId == CUSTOM_MODEL_ID
+    val usesCustomModel: Boolean get() = modelId == ComposerCustomModelId
 
     fun clearPrompt() {
         promptValue = TextFieldValue("")
@@ -282,14 +315,9 @@ private class AgentTaskComposerFormState(
 
     fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()) {
         // Pi model ids are always provider/model; drop sticky bare provider names from bad probes.
-        val savedModel = defaults?.model?.takeUnless { agent == AgentKind.Pi && '/' !in it }
-        val catalogModel = AgentModelCatalog.option(agent, savedModel, discovered)
-        modelId = when {
-            savedModel == null -> null
-            catalogModel != null -> catalogModel.id
-            else -> CUSTOM_MODEL_ID
-        }
-        customModel = if (catalogModel == null) savedModel.orEmpty() else ""
+        val selection = composerModelSelection(agent, defaults?.model, discovered)
+        modelId = selection.modelId
+        customModel = selection.customModel
         reasoningEffort = defaults?.reasoningEffort
         fastMode = defaults?.fastMode == true
         openClawNewSession = defaults?.openClawNewSession ?: true
@@ -410,9 +438,23 @@ private fun rememberAgentTaskComposerForm(
     // Do not re-apply merely because we navigated back to an existing draft.
     LaunchedEffect(state, state.agent, providerDefaults[state.agent], providerModels) {
         val agent = state.agent
+        val defaults = providerDefaults[agent]
         if (state.defaultsSeededForAgent != agent) {
-            state.applyProviderDefaults(providerDefaults[agent], agent, providerModels)
+            state.applyProviderDefaults(defaults, agent, providerModels)
             state.defaultsSeededForAgent = agent
+        } else {
+            val next = composerModelSelectionAfterCatalogUpdate(
+                ComposerModelSelection(state.modelId, state.customModel),
+                agent,
+                defaults?.model,
+                providerModels,
+            )
+            if (next.modelId != state.modelId || next.customModel != state.customModel) {
+                state.modelId = next.modelId
+                state.customModel = next.customModel
+                state.reasoningEffort = defaults?.reasoningEffort
+                state.fastMode = defaults?.fastMode == true
+            }
         }
     }
 
@@ -903,7 +945,7 @@ private fun AgentChatComposer(
                             DropdownMenuItem(
                                 text = { Text("custom", color = TextPrimary) },
                                 onClick = {
-                                    state.modelId = CUSTOM_MODEL_ID
+                                    state.modelId = ComposerCustomModelId
                                     modelMenuExpanded = false
                                 },
                             )
@@ -1096,8 +1138,6 @@ private fun ComposerWorktreeCheckbox(
         }
     }
 }
-
-private const val CUSTOM_MODEL_ID = "__custom__"
 
 /** User-invocable orchestration skills that require Andy MCP attach on new-task submit. */
 internal fun isOrchestrationSkillName(name: String): Boolean =

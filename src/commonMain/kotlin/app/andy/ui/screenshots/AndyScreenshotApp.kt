@@ -42,6 +42,7 @@ internal enum class AndyScreenshotScenario(
     ProjectsScratchpad("desktop-projects-scratchpad.png", AndyDestination.Actions),
     ProjectsScratchpadEditor("desktop-projects-scratchpad-editor.png", AndyDestination.Actions),
     ProjectsKanbanBoard("desktop-projects-kanban-board.png", AndyDestination.Actions),
+    ProjectsAutomations("desktop-projects-automations.png", AndyDestination.Actions),
     AgentsCompletedDiff("desktop-agents-completed-diff.png", AndyDestination.Agents),
     SnapshotsPopulated("desktop-snapshots-populated.png", AndyDestination.Snapshots),
     ControlsHardware("desktop-controls-hardware.png", AndyDestination.Controls),
@@ -92,6 +93,7 @@ internal fun AndyScreenshotApp(
                 AndyScreenshotScenario.ProjectsScratchpad,
                 AndyScreenshotScenario.ProjectsScratchpadEditor,
                 -> "scratchpad"
+                AndyScreenshotScenario.ProjectsAutomations -> "automations"
                 else -> null
             },
         )

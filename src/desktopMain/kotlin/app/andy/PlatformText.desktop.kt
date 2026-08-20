@@ -8,6 +8,8 @@ import java.util.Locale
 private val displayDateTimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a", Locale.getDefault())
 
+internal actual fun hostTimeZoneId(): String = ZoneId.systemDefault().id
+
 internal actual fun formatDisplayDateTime(epochMillis: Long): String {
     if (epochMillis <= 0L) return "-"
     return displayDateTimeFormatter.format(

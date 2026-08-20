@@ -422,6 +422,7 @@ class CursorInteractiveAdapterTest {
         )
         assertNotNull(argv)
         assertTrue("--resume" in argv!! && "chat-9" in argv)
+        assertTrue("--workspace" in argv && "/tmp/repo" in argv)
         assertEquals("hello again", argv.last())
     }
 

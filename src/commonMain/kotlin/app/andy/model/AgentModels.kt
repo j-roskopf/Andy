@@ -247,6 +247,7 @@ object AgentModelCatalog {
             AgentModelOption("claude-opus-4-8", "Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
             AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
+            AgentModelOption("cursor-grok-4.6", "Grok 4.6", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
             AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
         AgentKind.Antigravity -> listOf(
@@ -351,6 +352,7 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
     "Opus 4.8", "claude-opus-4-8" -> "claude-opus-4-8"
     "GPT-5.6 Sol", "gpt-5.6-sol" -> "gpt-5.6-sol"
     "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
+    "Grok 4.6", "cursor-grok-4.6" -> "cursor-grok-4.6"
     "Grok 4.5", "cursor-grok-4.5" -> "cursor-grok-4.5"
     else -> stripProviderModelVariant(selected).baseId
 }
@@ -550,6 +552,12 @@ data class AgentTask(
     val contextBundleIds: List<String> = emptyList(),
     /** Where this task's contextual action was triggered from, if launched from one. */
     val provenance: AgentContextualProvenance? = null,
+    /** Automation that spawned or follows this chat, if any. */
+    val automationId: String? = null,
+    /** When true, OS/sound notifications skip Done (Failed runs only). */
+    val automationNotifyFailedOnly: Boolean = false,
+    /** When true, skip OS/sound notifications (Stop when evaluator follow-up). */
+    val automationSuppressOsNotify: Boolean = false,
     /**
      * Desktop-only: prompt text pointing at [contextBundleIds] after they were copied into this
      * task's local evidence directory. Recomputed at each launch/resume, so it does not need to
@@ -697,6 +705,14 @@ data class AgentTaskDraft(
     val provenance: AgentContextualProvenance? = null,
     /** Optional explicit lane override used by tests and rollout controls. */
     val lane: AgentLaneKind? = null,
+    /**
+     * Vendor thread/session id to resume instead of starting a fresh conversation.
+     * When set, [createAndStart] launches the provider's resume command.
+     */
+    val vendorSessionId: String? = null,
+    val automationId: String? = null,
+    val automationNotifyFailedOnly: Boolean = false,
+    val automationSuppressOsNotify: Boolean = false,
 )
 
 /** A lightweight candidate for the composer's "base on" picker. */
@@ -1010,6 +1026,7 @@ fun localPathFileName(path: String): String =
 /** Derives a list title when the composer leaves [AgentTaskDraft.title] blank. */
 fun AgentTaskDraft.fallbackTitle(): String = when {
     prompt.isNotBlank() -> prompt.replace('\n', ' ').trim()
+    !vendorSessionId.isNullOrBlank() -> agent.importedThreadTitle()
     imagePaths.isNotEmpty() -> {
         val first = localPathFileName(imagePaths.first())
         if (imagePaths.size == 1) first else "$first (+${imagePaths.size - 1})"
@@ -1247,6 +1264,47 @@ sealed interface AgentEvent {
 
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */
     data class Raw(override val atMillis: Long, val line: String) : AgentEvent
+}
+
+/**
+ * Wall time from the current turn's user message (or [startedAtMillis]) to [finishedAtMillis].
+ */
+fun turnWorkedDurationMs(
+    events: List<AgentEvent>,
+    startedAtMillis: Long?,
+    finishedAtMillis: Long?,
+): Long? {
+    val end = finishedAtMillis ?: return null
+    val lastResultIndex = events.indexOfLast { it is AgentEvent.TaskResult }
+    val lastUser = events.withIndex().lastOrNull { (index, event) ->
+        event is AgentEvent.UserMessage && index > lastResultIndex
+    }?.value?.atMillis
+    val start = lastUser ?: startedAtMillis ?: return null
+    return (end - start).coerceAtLeast(0L)
+}
+
+/** Completion row to append after a finished turn. Null when one is already the last event. */
+fun turnCompletionResult(
+    events: List<AgentEvent>,
+    startedAtMillis: Long?,
+    finishedAtMillis: Long,
+    success: Boolean,
+    costUsd: Double? = null,
+    costIsEstimated: Boolean = false,
+    inputTokens: Long? = null,
+    outputTokens: Long? = null,
+): AgentEvent.TaskResult? {
+    if (events.lastOrNull() is AgentEvent.TaskResult) return null
+    return AgentEvent.TaskResult(
+        atMillis = finishedAtMillis,
+        success = success,
+        finalText = null,
+        costUsd = costUsd,
+        costIsEstimated = costIsEstimated,
+        inputTokens = inputTokens,
+        outputTokens = outputTokens,
+        durationMs = turnWorkedDurationMs(events, startedAtMillis, finishedAtMillis),
+    )
 }
 
 enum class AgentToolKind {

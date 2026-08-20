@@ -55,7 +55,7 @@ class AgentTranscriptUiTest {
             onNodeWithTag("user-message-bubble").assertIsDisplayed()
             assertTrue(onAllNodesWithTag("agent-message-bubble").fetchSemanticsNodes().isEmpty())
             onNodeWithText("user prompt").assertIsDisplayed()
-            onNodeWithText("Worked for 2m 05s").assertIsDisplayed()
+            onNodeWithText("Worked for 2:05").assertIsDisplayed()
             onNodeWithText("completed response").assertIsDisplayed()
         }
 

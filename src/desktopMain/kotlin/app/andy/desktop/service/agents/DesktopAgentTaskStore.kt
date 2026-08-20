@@ -158,6 +158,15 @@ class DesktopAgentTaskStore(
 
     fun deleteKanbanBoard(projectId: String) = sqlite.deleteKanbanBoard(projectId)
 
+    fun loadAllAutomations(): List<app.andy.model.Automation> = sqlite.loadAllAutomations()
+
+    fun saveAutomation(automation: app.andy.model.Automation) {
+        databaseFile.parentFile?.mkdirs()
+        sqlite.saveAutomation(automation)
+    }
+
+    fun deleteAutomation(id: String) = sqlite.deleteAutomation(id)
+
     suspend fun deleteTaskArtifacts(taskId: String): Unit = withContext(Dispatchers.IO) {
         taskDir(taskId).deleteRecursively()
     }
@@ -313,6 +322,9 @@ internal data class AgentTaskDto(
     val completedResultText: String = "",
     val contextBundleIds: List<String> = emptyList(),
     val provenance: AgentContextualProvenanceDto? = null,
+    val automationId: String = "",
+    val automationNotifyFailedOnly: Boolean = false,
+    val automationSuppressOsNotify: Boolean = false,
 )
 
 @Serializable
@@ -697,6 +709,9 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         transcriptCompressed = transcriptCompressed,
         contextBundleIds = contextBundleIds,
         provenance = provenance?.toModel(),
+        automationId = automationId.takeIf { it.isNotBlank() },
+        automationNotifyFailedOnly = automationNotifyFailedOnly,
+        automationSuppressOsNotify = automationSuppressOsNotify,
     )
     return recoverInterruptedTaskStatus(task, scrollbackFile(id))
 }
@@ -805,6 +820,9 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             transcriptCompressed = task.transcriptCompressed,
             contextBundleIds = task.contextBundleIds,
             provenance = task.provenance?.toDto(),
+            automationId = task.automationId.orEmpty(),
+            automationNotifyFailedOnly = task.automationNotifyFailedOnly,
+            automationSuppressOsNotify = task.automationSuppressOsNotify,
         )
     },
     projectWorkflows = projectWorkflows.values.map { it.toDto() },

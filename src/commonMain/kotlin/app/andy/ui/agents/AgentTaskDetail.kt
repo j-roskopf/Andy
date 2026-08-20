@@ -12,6 +12,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,6 +49,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -80,6 +84,7 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.IMPLEMENT_PLAN_PROMPT
 import app.andy.model.AgentEvent
+import app.andy.model.turnWorkedDurationMs
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentNativeSlashCommand
@@ -270,6 +275,20 @@ internal fun AgentTaskDetail(
         supportsResume
     } else {
         supportsResume && showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
+    }
+    val turnElapsedEnd = rememberElapsedEndMillis(task.id, task.finishedAtMillis, task)
+    val showCompletedTurnChrome = showsCompletedTurnChrome(task)
+    val workedForLabel = remember(
+        transcriptEvents,
+        task.startedAtMillis,
+        turnElapsedEnd,
+        task.status,
+        showCompletedTurnChrome,
+    ) {
+        if (!showCompletedTurnChrome) return@remember null
+        val durationMs = turnWorkedDurationMs(transcriptEvents, task.startedAtMillis, turnElapsedEnd)
+            ?: return@remember null
+        workedHeadline(durationMs, success = task.status != AgentStatus.Error)
     }
     val followUp = followUpValue.text
     val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
@@ -491,7 +510,7 @@ internal fun AgentTaskDetail(
 
     CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
     Box(modifier.onGloballyPositioned { detailRootCoordinates = it }) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxSize().clipToBounds(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -586,7 +605,8 @@ internal fun AgentTaskDetail(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .heightIn(min = 280.dp)
+                .heightIn(min = if (!acpTask && changedFilesExpanded) 96.dp else 280.dp)
+                .clipToBounds()
                 .onGloballyPositioned { transcriptCoordinates = it },
         ) {
             val terminalModifier = remember { Modifier.fillMaxSize() }
@@ -642,6 +662,7 @@ internal fun AgentTaskDetail(
                                         viewMode = diffViewMode,
                                         onViewModeChange = { diffViewMode = it },
                                         onToggleFile = { path -> toggleFileDiff(path) },
+                                        fileListMaxHeight = null,
                                     )
                                 }
                             },
@@ -682,14 +703,17 @@ internal fun AgentTaskDetail(
                     taskId = task.id,
                     sessionActive = terminalSessionActive,
                     onImagesStaged = onImagesStaged,
+                    maskBottomChrome = showCompletedTurnChrome && !terminalSessionActive,
                     modifier = terminalModifier,
                 )
             }
         }
-        if (!acpTask) {
-            changeSummary?.takeIf { it.files.isNotEmpty() && !terminalSessionActive }?.let { summary ->
+        if (!acpTask && showCompletedTurnChrome) {
+            val summary = changeSummary?.takeIf { it.files.isNotEmpty() }
+            if (workedForLabel != null || summary != null) {
                 AgentChangeSummaryCard(
                     summary = summary,
+                    workedHeadline = workedForLabel,
                     filesExpanded = changedFilesExpanded,
                     onFilesExpandedChange = { changedFilesExpanded = it },
                     showAllFiles = showAllChangedFiles,
@@ -1585,9 +1609,10 @@ private fun String.removeSelectedSkill(skill: AgentSkill): String =
         .replace(Regex(" {2,}"), " ")
         .trim()
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AgentChangeSummaryCard(
-    summary: AgentChangeSummary,
+    summary: AgentChangeSummary?,
     filesExpanded: Boolean,
     onFilesExpandedChange: (Boolean) -> Unit,
     showAllFiles: Boolean,
@@ -1598,48 +1623,71 @@ private fun AgentChangeSummaryCard(
     viewMode: DiffViewMode,
     onViewModeChange: (DiffViewMode) -> Unit,
     onToggleFile: (String) -> Unit,
+    workedHeadline: String? = null,
+    /** Cap + scroll the expanded list so it cannot overflow a terminal canvas. Null lets a transcript scroll instead. */
+    fileListMaxHeight: Dp? = 220.dp,
 ) {
-    val displayedFiles = if (showAllFiles) summary.files else summary.files.take(3)
-    val remaining = summary.files.size - displayedFiles.size
-    Column(
+    val files = summary?.files.orEmpty()
+    val displayedFiles = if (showAllFiles) files else files.take(3)
+    val remaining = files.size - displayedFiles.size
+    val expandable = files.isNotEmpty()
+    PanelCard(
         modifier = Modifier.fillMaxWidth(),
+        background = AndyColors.SurfaceRaised,
+        contentPadding = PaddingValues(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        Row(
+        FlowRow(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = AndySpace.Space4)
-                .pointerHoverIcon(PointerIcon.Hand)
-                .clickable { onFilesExpandedChange(!filesExpanded) },
-            verticalAlignment = Alignment.CenterVertically,
+                .then(
+                    if (expandable) {
+                        Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { onFilesExpandedChange(!filesExpanded) }
+                    } else {
+                        Modifier
+                    },
+                ),
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(
-                if (filesExpanded) "v" else ">",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                modifier = Modifier.width(10.dp),
-            )
-            Column(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
+            if (expandable) {
                 Text(
-                    "Edited ${summary.files.size} ${if (summary.files.size == 1) "file" else "files"}",
+                    if (filesExpanded) "v" else ">",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    modifier = Modifier.width(10.dp),
+                )
+            }
+            workedHeadline?.let { headline ->
+                Text(
+                    headline,
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 12.sp,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
-                    Text("+${summary.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
-                    Text("-${summary.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
-                }
+            }
+            if (files.isNotEmpty() && summary != null) {
+                Text(
+                    "Edited ${files.size} ${if (files.size == 1) "file" else "files"}",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 12.sp,
+                )
+                Text("+${summary.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
+                Text("-${summary.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
             }
         }
-        if (filesExpanded) {
+        if (expandable && filesExpanded) {
+            val listModifier = Modifier
+                .fillMaxWidth()
+                .then(if (fileListMaxHeight != null) Modifier.heightIn(max = fileListMaxHeight) else Modifier)
+                .then(if (fileListMaxHeight != null) Modifier.verticalScroll(rememberScrollState()) else Modifier)
+                .padding(start = 12.dp)
             Column(
-                Modifier.fillMaxWidth().padding(start = 22.dp),
+                listModifier,
                 verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
                 displayedFiles.forEach { file ->

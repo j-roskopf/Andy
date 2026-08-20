@@ -3,6 +3,7 @@ package app.andy.ui.agents
 import app.andy.model.AgentEvent
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentToolKind
+import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.latestPlanHasPendingEntries
@@ -708,5 +709,39 @@ class AgentTranscriptTest {
         val displayed = transcriptDisplayEvents(events)
         assertEquals(1, displayed.size)
         assertIs<AgentEvent.ToolCall>(displayed.single())
+    }
+
+    @Test
+    fun resourceExhaustedErrorsAreHiddenFromTranscriptDisplay() {
+        val events = listOf(
+            AgentEvent.ToolCall(atMillis = 1, toolName = "read", summary = "gradle"),
+            AgentEvent.AssistantText(
+                atMillis = 2,
+                text = "Error: RetriableError: [resource_exhausted] Error",
+            ),
+            AgentEvent.TaskError(
+                atMillis = 3,
+                message = "RetriableError: [resource_exhausted] Error",
+            ),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        assertIs<AgentEvent.ToolCall>(displayed.single())
+    }
+
+    @Test
+    fun silentContinuePromptsAreHiddenFromTranscriptDisplay() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "ship it"),
+            AgentEvent.AssistantText(atMillis = 2, text = "Error: RetriableError: [resource_exhausted] Error"),
+            AgentEvent.UserMessage(atMillis = 3, text = CONNECTION_STALL_RETRY_PROMPT),
+            AgentEvent.AssistantText(atMillis = 4, text = "Picking up again."),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(2, displayed.size)
+        assertEquals("ship it", (displayed[0] as AgentEvent.UserMessage).text)
+        assertEquals("Picking up again.", (displayed[1] as AgentEvent.AssistantText).text)
     }
 }

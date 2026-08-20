@@ -285,6 +285,32 @@ internal fun formatElapsed(startMillis: Long?, endMillis: Long?, nowMillis: Long
     }
 }
 
+/** Compact clock used in the post-turn "Worked for X:XX" line. */
+internal fun formatWorkedClock(durationMs: Long): String {
+    val totalSeconds = durationMs.coerceAtLeast(0L) / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "$hours:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+    } else {
+        "$minutes:${seconds.toString().padStart(2, '0')}"
+    }
+}
+
+internal fun workedHeadline(durationMs: Long, success: Boolean): String {
+    val clock = formatWorkedClock(durationMs)
+    return if (success) "Worked for $clock" else "Failed after $clock"
+}
+
+/** True when Andy should show post-turn chrome (duration / edited-files) instead of a live timer. */
+internal fun showsCompletedTurnChrome(task: AgentTask): Boolean {
+    if (isElapsedLive(task) || isChatLaunching(task) || isChatRelaunching(task)) return false
+    return task.status == AgentStatus.Done ||
+        task.status == AgentStatus.Error ||
+        task.finishedAtMillis != null
+}
+
 /**
  * True when the chat pane should host the live, typeable CLI rather than a read-only
  * scrollback replay.
@@ -293,8 +319,11 @@ internal fun formatElapsed(startMillis: Long?, endMillis: Long?, nowMillis: Long
  * tmux/PTY session for this chat ([terminalLive]). A finished turn keeps the CLI
  * typeable at its prompt; read-only replay is only for chats with no live session.
  */
-internal fun isChatTerminalInteractive(task: AgentTask, terminalLive: Boolean): Boolean =
-    task.isActive || isChatLaunching(task) || isChatRelaunching(task) || terminalLive
+internal fun isChatTerminalInteractive(task: AgentTask, terminalLive: Boolean): Boolean {
+    // Stop must leave the waiting overlay even if tmux/PTY teardown is still in flight.
+    if (task.stoppedByUser && !task.isActive) return false
+    return task.isActive || isChatLaunching(task) || isChatRelaunching(task) || terminalLive
+}
 
 /** Queued for launch, or relaunching for a resume/retry — the terminal is on its way. */
 internal fun isChatLaunching(task: AgentTask): Boolean =

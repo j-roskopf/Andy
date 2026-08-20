@@ -56,6 +56,8 @@ class DesktopAgentAttentionCoordinator(
             val becameConfident = task.statusConfident && !prior.confident
             if (kind == null || (!statusChanged && !becameConfident) || !task.statusConfident) return@forEach
             if (kind == AgentAttentionKind.Done && task.queuedFollowUps.isNotEmpty()) return@forEach
+            if (task.automationSuppressOsNotify) return@forEach
+            if (task.automationNotifyFailedOnly && kind == AgentAttentionKind.Done) return@forEach
             val prefs = workspace()
             if (prefs.agentNotificationTiming == AgentNotificationTiming.BackgroundOnly && isForeground()) return@forEach
             if (!AgentNotificationDedup.tryMarkNotified(task.id, kind.name)) return@forEach

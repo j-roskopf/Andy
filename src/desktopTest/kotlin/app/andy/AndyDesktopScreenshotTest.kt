@@ -128,6 +128,10 @@ class AndyDesktopScreenshotTest {
     fun desktopProjectKanbanBoard() = capture(listOf(AndyScreenshotScenario.ProjectsKanbanBoard))
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopProjectAutomations() = capture(listOf(AndyScreenshotScenario.ProjectsAutomations))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     private fun capture(scenarios: List<AndyScreenshotScenario>) {
         assumeTrue(
             "Desktop screenshot baselines are macOS-only; record/verify on macOS",
@@ -200,6 +204,13 @@ class AndyDesktopScreenshotTest {
                         AndyScreenshotScenario.ProjectsKanbanBoard -> {
                             onNodeWithText("Kanban").performClick()
                             waitForIdle()
+                        }
+                        AndyScreenshotScenario.ProjectsAutomations -> {
+                            waitUntil(timeoutMillis = 15_000) {
+                                onAllNodesWithText("No automations yet")
+                                    .fetchSemanticsNodes()
+                                    .isNotEmpty()
+                            }
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {
                             // Quick-start cards fill the left pane; scroll so the seeded

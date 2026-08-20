@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -22,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -55,6 +58,7 @@ actual fun AgentTerminalSurface(
     taskId: String,
     sessionActive: Boolean,
     onImagesStaged: (List<String>) -> Unit,
+    maskBottomChrome: Boolean,
     modifier: Modifier,
 ) {
     val agentRuns = when (val runs = services.agentRuns) {
@@ -208,6 +212,7 @@ actual fun AgentTerminalSurface(
 
     Box(
         modifier = modifier
+            .clipToBounds()
             .background(terminalPanelBackground)
             .then(dragBorderModifier),
     ) {
@@ -290,6 +295,15 @@ actual fun AgentTerminalSurface(
                         modifier = Modifier.padding(bottom = 12.dp),
                     )
                 }
+            }
+            if (maskBottomChrome && (history != null || rust != null)) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .background(terminalPanelBackground),
+                )
             }
         }
     }

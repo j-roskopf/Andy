@@ -54,6 +54,7 @@ class AgentUiTest {
         val finished = task(AgentStatus.Done).copy(finishedAtMillis = 5L)
         assertFalse(isChatTerminalInteractive(finished, terminalLive = false))
         assertFalse(isChatTerminalInteractive(finished.copy(stoppedByUser = true), terminalLive = false))
+        assertFalse(isChatTerminalInteractive(finished.copy(stoppedByUser = true), terminalLive = true))
         assertFalse(isChatTerminalInteractive(finished.copy(resumable = true), terminalLive = false))
         assertFalse(
             isChatTerminalInteractive(
@@ -201,5 +202,22 @@ class AgentUiTest {
         assertTrue(isSessionWorking(task()))
         assertFalse(isSessionWorking(task(AgentStatus.Done)))
         assertFalse(isSessionWorking(task(AgentStatus.Blocked)))
+    }
+
+    @Test
+    fun formatWorkedClockUsesMinuteSecondClock() {
+        assertEquals("0:09", formatWorkedClock(9_000))
+        assertEquals("2:05", formatWorkedClock(125_000))
+        assertEquals("1:02:03", formatWorkedClock(3_723_000))
+        assertEquals("Worked for 2:05", workedHeadline(125_000, success = true))
+        assertEquals("Failed after 0:09", workedHeadline(9_000, success = false))
+    }
+
+    @Test
+    fun completedTurnChromeShowsAfterWorkingEnds() {
+        assertFalse(showsCompletedTurnChrome(task(AgentStatus.Working)))
+        assertTrue(showsCompletedTurnChrome(task(AgentStatus.Done).copy(finishedAtMillis = 5L)))
+        assertTrue(showsCompletedTurnChrome(task(AgentStatus.Error).copy(finishedAtMillis = 5L)))
+        assertFalse(showsCompletedTurnChrome(task().copy(status = null, startedAtMillis = null, finishedAtMillis = null)))
     }
 }

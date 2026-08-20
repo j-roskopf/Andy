@@ -78,6 +78,12 @@ actual fun loadImageBitmap(path: String): ImageBitmap? = null
 
 actual fun loadImageBitmap(bytes: ByteArray): ImageBitmap? = null
 
+internal actual fun hostTimeZoneId(): String =
+    jsHostTimeZoneId().toString().ifBlank { "UTC" }
+
+private fun jsHostTimeZoneId(): JsString =
+    js("Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'")
+
 internal actual fun formatDisplayDateTime(epochMillis: Long): String {
     if (epochMillis <= 0L) return "-"
     return formatJsDisplayDateTime(epochMillis.toDouble()).toString()

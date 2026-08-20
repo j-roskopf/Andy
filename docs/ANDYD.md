@@ -309,6 +309,9 @@ In addition to the existing device tools:
 - `chat.status` / `chat.attach_command` / `chat.reattach`
 - `project.list`
 - `workflow.run_spec` / `workflow.start_build`
+- `automation.list` / `automation.get` / `automation.create` / `automation.update` / `automation.pause` / `automation.resume` / `automation.delete` / `automation.run`
+
+`automation.create` starts **paused**; `automation.resume` arms the schedule. Fires run while `andyd` is up.
 
 ## Terminal modes
 
