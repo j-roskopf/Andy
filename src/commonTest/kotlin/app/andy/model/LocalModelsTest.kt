@@ -122,4 +122,20 @@ class LocalModelsTest {
         val openCodeRow = AgentPickerOption(AgentKind.Ollama, LocalAgentRuntime.OpenCode)
         assertFalse(openCodeRow.comboReady(statuses, mapOf(AgentKind.Ollama to true)))
     }
+
+    @Test
+    fun noAvailableProviderAfterDiscoveryKeepsNewChatBlocked() {
+        val unavailable = AgentKind.entries.map { AgentCliStatus(kind = it) }
+
+        assertFalse(hasAvailableAgentProvider(unavailable, emptyMap()))
+        assertTrue(hasAvailableAgentProvider(emptyList(), emptyMap()))
+        assertTrue(
+            hasAvailableAgentProvider(
+                unavailable.map { status ->
+                    if (status.kind == AgentKind.Codex) status.copy(binaryPath = "/usr/local/bin/codex") else status
+                },
+                emptyMap(),
+            ),
+        )
+    }
 }

@@ -129,6 +129,12 @@ fun AgentPickerOption.comboReady(
     return status?.ready == true || cliStatuses.isEmpty()
 }
 
+/** Whether discovery has found at least one provider the new-chat composer can launch. */
+fun hasAvailableAgentProvider(
+    cliStatuses: List<AgentCliStatus>,
+    localBackends: Map<AgentKind, Boolean>,
+): Boolean = agentPickerOptions().any { it.comboReady(cliStatuses, localBackends) }
+
 fun AgentTaskDraft.localModelLaunchError(): String? {
     if (!agent.isLocalModelBackend) return null
     if (localRuntime == null) return "runtime is required for ${agent.label} (OpenCode, Pi, or Goose)"

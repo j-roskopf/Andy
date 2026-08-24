@@ -24,7 +24,6 @@ import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.key
-import app.andy.desktop.service.ios.NativeIosDeviceJni
 import app.andy.desktop.service.DesktopAgentAttentionCoordinator
 import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
@@ -233,11 +232,6 @@ fun main() {
                 notifications = DesktopOsNotificationService(), sounds = services.notificationSounds,
                 isViewing = services.agentRuns::isViewing,
             ).start()
-        }
-        LaunchedEffect(Unit) {
-            withContext(Dispatchers.IO) {
-                NativeIosDeviceJni.prepareForCapture()
-            }
         }
         // After an iOS pop-out handoff, watch Simulator.app device windows. Closing the window
         // (without needing Quit) clears the handoff so Live reconnects automatically.
