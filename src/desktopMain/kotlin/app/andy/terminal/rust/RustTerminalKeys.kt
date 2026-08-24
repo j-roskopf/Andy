@@ -9,6 +9,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
 
+internal fun formatTerminalPaste(text: String, bracketedPaste: Boolean): ByteArray {
+    val payload = if (bracketedPaste && text.contains('\n')) {
+        "\u001B[200~$text\u001B[201~"
+    } else {
+        text
+    }
+    return payload.toByteArray(Charsets.UTF_8)
+}
+
 /**
  * Minimal VT key encoder for the Rust terminal canvas.
  * Covers printable UTF-16, Enter/Tab/Backspace/Esc, arrows, and common Ctrl chords.

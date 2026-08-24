@@ -84,6 +84,7 @@ private class FakeTerminalRenderable : RustTerminalRenderable {
     }
     override fun updateAppearance(appearance: TerminalAppearanceSnapshot) = Unit
     override fun mouseFlags(): Int = 0
+    override fun bracketedPasteEnabled(): Boolean = false
     override fun write(bytes: ByteArray) = Unit
     override fun close() = Unit
 }

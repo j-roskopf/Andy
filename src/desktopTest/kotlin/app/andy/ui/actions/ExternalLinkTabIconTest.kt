@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import app.andy.ui.components.TabBarItem
 import app.andy.ui.components.TabBarRow
+import app.andy.ui.theme.AndyTheme
 import kotlin.math.abs
 import kotlin.test.assertTrue
 import org.junit.Rule
@@ -21,14 +22,16 @@ class ExternalLinkTabIconTest {
     @Test
     fun externalLinkTabSitsOnTheSameLineAsPlainTabs() {
         composeRule.setContent {
-            TabBarRow {
-                TabBarItem(label = "Worktrees", selected = false, onClick = {})
-                TabBarItem(
-                    label = "GitHub",
-                    selected = false,
-                    onClick = {},
-                    trailing = { ExternalLinkTabIcon() },
-                )
+            AndyTheme {
+                TabBarRow {
+                    TabBarItem(label = "Worktrees", selected = false, onClick = {})
+                    TabBarItem(
+                        label = "GitHub",
+                        selected = false,
+                        onClick = {},
+                        trailing = { ExternalLinkTabIcon() },
+                    )
+                }
             }
         }
 

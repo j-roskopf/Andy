@@ -18,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
@@ -164,14 +166,21 @@ internal fun IconButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = AndyShape.Interactive,
+    contentDescription: String? = null,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
     androidx.compose.material3.Button(
         onClick = onClick,
         modifier = modifier
             .size(AndyLayout.ControlHeightMd)
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                },
+            )
             .andyPressScale(interactionSource, enabled),
         enabled = enabled,
         shape = shape,

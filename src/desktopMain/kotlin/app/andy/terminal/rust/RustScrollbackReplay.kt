@@ -53,6 +53,8 @@ class RustScrollbackReplay private constructor(
 
     override fun mouseFlags(): Int = 0
 
+    override fun bracketedPasteEnabled(): Boolean = false
+
     override fun write(bytes: ByteArray) {
         // read-only
     }

@@ -28,6 +28,18 @@ class RustTerminalCanvasSupportTest {
         assertEquals(listOf(0x03), encodeTerminalKey(keyEvent(Key.C, ctrl = true))?.map { it.toInt() and 0xFF })
     }
 
+    @Test
+    fun formatTerminalPasteWrapsMultilineWhenBracketed() {
+        val bytes = formatTerminalPaste("line1\nline2", bracketedPaste = true)
+        assertEquals("\u001B[200~line1\nline2\u001B[201~", bytes.decodeToString())
+    }
+
+    @Test
+    fun formatTerminalPasteLeavesSingleLineUntouched() {
+        val bytes = formatTerminalPaste("hello", bracketedPaste = true)
+        assertEquals("hello", bytes.decodeToString())
+    }
+
     private fun keyEvent(
         key: Key,
         ctrl: Boolean = false,

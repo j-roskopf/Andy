@@ -550,6 +550,7 @@ private fun KanbanLaneColumn(
                 IconButton(
                     onClick = { menuExpanded = true },
                     modifier = Modifier.size(28.dp),
+                    contentDescription = "Actions for ${lane.name}",
                 ) {
                     Text("⋯", color = TextSecondary, fontSize = 16.sp)
                 }

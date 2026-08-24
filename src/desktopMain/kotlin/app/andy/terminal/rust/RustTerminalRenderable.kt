@@ -11,6 +11,7 @@ interface RustTerminalRenderable {
     fun scrollDisplay(delta: Int)
     fun updateAppearance(appearance: TerminalAppearanceSnapshot)
     fun mouseFlags(): Int
+    fun bracketedPasteEnabled(): Boolean
     fun write(bytes: ByteArray)
     fun close()
 }

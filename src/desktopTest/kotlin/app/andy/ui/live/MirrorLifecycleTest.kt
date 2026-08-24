@@ -20,6 +20,7 @@ import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.logcat.LogcatState
+import app.andy.ui.theme.AndyTheme
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -52,8 +53,9 @@ class MirrorLifecycleTest {
             )
 
             setContent {
-                if (visible.value) {
-                    LiveScreen(
+                AndyTheme {
+                    if (visible.value) {
+                        LiveScreen(
                         services = services,
                         serial = device.serial,
                         device = device,
@@ -69,7 +71,8 @@ class MirrorLifecycleTest {
                         selectedPackage = null,
                         onSelectedPackageChange = {},
                         transfer = DeviceTransferCoordinator(),
-                    )
+                        )
+                    }
                 }
             }
 
@@ -94,7 +97,9 @@ class MirrorLifecycleTest {
             val services = ScreenshotServices.create().copy(mirror = mirror)
 
             setContent {
-                DeviceLivePanel(services = services, serial = serial.value, device = null)
+                AndyTheme {
+                    DeviceLivePanel(services = services, serial = serial.value, device = null)
+                }
             }
 
             waitUntil(timeoutMillis = 5_000) { mirror.connectCalls == 1 }
@@ -111,8 +116,10 @@ class MirrorLifecycleTest {
             val services = ScreenshotServices.create().copy(mirror = mirror)
 
             setContent {
-                if (visible.value) {
-                    DeviceLivePanel(services = services, serial = "device-1", device = null)
+                AndyTheme {
+                    if (visible.value) {
+                        DeviceLivePanel(services = services, serial = "device-1", device = null)
+                    }
                 }
             }
 
@@ -134,12 +141,14 @@ class MirrorLifecycleTest {
             lateinit var sendInput: (MirrorInput) -> Unit
 
             setContent {
-                sendInput = rememberMirrorInputSender(
-                    services = services,
-                    serial = serial.value,
-                    mirror = mirror,
-                    recordActions = false,
-                )
+                AndyTheme {
+                    sendInput = rememberMirrorInputSender(
+                        services = services,
+                        serial = serial.value,
+                        mirror = mirror,
+                        recordActions = false,
+                    )
+                }
             }
 
             try {
@@ -179,24 +188,26 @@ class MirrorLifecycleTest {
             val services = ScreenshotServices.create().copy(mirror = mirror)
 
             setContent {
-                LiveScreen(
-                    services = services,
-                    serial = serial.value,
-                    device = android.takeIf { iosTarget.value == null },
-                    iosTarget = iosTarget.value,
-                    devicePaneWidth = 680f,
-                    onStopEmulator = {},
-                    stoppingEmulatorSerial = null,
-                    stopStatus = "",
-                    onDevicePaneWidthChange = {},
-                    onBugSaved = {},
-                    onRecordingSaved = {},
-                    logcatState = LogcatState(),
-                    onPopOutMirror = {},
-                    selectedPackage = null,
-                    onSelectedPackageChange = {},
-                    transfer = DeviceTransferCoordinator(),
-                )
+                AndyTheme {
+                    LiveScreen(
+                        services = services,
+                        serial = serial.value,
+                        device = android.takeIf { iosTarget.value == null },
+                        iosTarget = iosTarget.value,
+                        devicePaneWidth = 680f,
+                        onStopEmulator = {},
+                        stoppingEmulatorSerial = null,
+                        stopStatus = "",
+                        onDevicePaneWidthChange = {},
+                        onBugSaved = {},
+                        onRecordingSaved = {},
+                        logcatState = LogcatState(),
+                        onPopOutMirror = {},
+                        selectedPackage = null,
+                        onSelectedPackageChange = {},
+                        transfer = DeviceTransferCoordinator(),
+                    )
+                }
             }
 
             waitUntil(timeoutMillis = 5_000) { mirror.connectedSerials == listOf(android.serial) }

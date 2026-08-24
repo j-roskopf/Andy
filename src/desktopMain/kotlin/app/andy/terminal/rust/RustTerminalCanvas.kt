@@ -91,6 +91,7 @@ fun RustTerminalCanvas(
     var selecting by remember { mutableStateOf(false) }
     val copyText = rememberCopyText()
     val readClipboardText = rememberReadClipboardText()
+    var pasteInFlight by remember { mutableStateOf(false) }
     val wheel = remember(backend) {
         RustWheelAccumulator { bytes -> backend.write(bytes) }
     }
@@ -178,14 +179,17 @@ fun RustTerminalCanvas(
                     // Ctrl+C without a selection falls through as SIGINT (0x03).
                 }
                 if (isTerminalPasteChord(event)) {
-                    if (!readOnly) {
+                    if (!readOnly && !pasteInFlight) {
+                        pasteInFlight = true
                         readClipboardText { text ->
                             selection = null
-                            backend.write(text.toByteArray(Charsets.UTF_8))
+                            backend.write(formatTerminalPaste(text, backend.bracketedPasteEnabled()))
+                            pasteInFlight = false
                         }
                     }
                     return@onPreviewKeyEvent true
                 }
+                if (pasteInFlight) return@onPreviewKeyEvent true
                 if (event.key == Key.Escape && selection != null) {
                     selection = null
                     return@onPreviewKeyEvent true

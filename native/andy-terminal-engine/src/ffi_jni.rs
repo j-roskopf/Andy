@@ -422,6 +422,19 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeScro
 }
 
 #[no_mangle]
+pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeBracketedPasteEnabled(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    with_engines(|map| {
+        map.get(&handle)
+            .map(|e| e.bracketed_paste_enabled() as jboolean)
+            .unwrap_or(0)
+    })
+}
+
+#[no_mangle]
 pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeMouseFlags(
     _env: JNIEnv,
     _class: JClass,
