@@ -59,6 +59,7 @@ import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.LogcatFilter
 import app.andy.service.LogcatService
+import app.andy.ui.components.togglePrimaryButtonColors
 import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
@@ -261,7 +262,7 @@ internal fun LogcatPanel(
                 if (showActionsOnToolbar) {
                     Button(
                         onClick = { state.live = !state.live },
-                        colors = ButtonDefaults.buttonColors(containerColor = if (state.live) Rust else PanelSoft)
+                        colors = togglePrimaryButtonColors(state.live),
                     ) {
                         Text(if (state.live) "Live" else "Paused")
                     }
@@ -281,7 +282,6 @@ internal fun LogcatPanel(
                     Box {
                         OutlinedButton(
                             onClick = { overflowExpanded = true },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
                             shape = RoundedCornerShape(AndyRadius.Control),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                         ) {

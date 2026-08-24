@@ -1,4 +1,6 @@
 package app.andy.ui.agents
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -245,7 +246,7 @@ internal fun AgentContextualActionSheet(
                     )
                 }
                 if (launching) {
-                    CircularProgressIndicator(Modifier.width(16.dp), strokeWidth = 2.dp, color = Rust)
+                    Spinner(spinnerSize = SpinnerSize.Md)
                 }
             }
         }

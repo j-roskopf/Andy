@@ -62,12 +62,12 @@ internal fun ConnectedDeviceRow(
                 .height(IntrinsicSize.Min)
                 .heightIn(min = 76.dp)
                 .background(
-                    if (isActive) AndyColors.GreenSubtle.copy(alpha = 0.82f) else AndyColors.Neutral900.copy(alpha = 0.7f),
+                    if (isActive) AndyColors.GreenSubtle else AndyColors.Neutral900.copy(alpha = 0.7f),
                     rowShape,
                 )
                 .border(
                     1.dp,
-                    if (isActive) Green.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f),
+                    if (isActive) Green.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.05f),
                     rowShape,
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -78,7 +78,7 @@ internal fun ConnectedDeviceRow(
                 Modifier
                     .width(2.dp)
                     .fillMaxHeight()
-                    .background(if (isActive) Green else TextSecondary, RoundedCornerShape(AndyRadius.Control)),
+                    .background(if (isActive) AndyColors.GreenSoft else TextSecondary, RoundedCornerShape(AndyRadius.Control)),
             )
             Column(Modifier.weight(1f).widthIn(min = 120.dp)) {
                 Row(

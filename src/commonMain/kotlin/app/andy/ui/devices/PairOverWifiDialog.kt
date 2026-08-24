@@ -1,4 +1,6 @@
 package app.andy.ui.devices
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -15,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -299,7 +300,7 @@ internal fun PairOverWifiDialog(
                                 if (qrBitmap != null) {
                                     Image(bitmap = qrBitmap, contentDescription = "ADB pairing QR", modifier = Modifier.fillMaxSize())
                                 } else {
-                                    CircularProgressIndicator(color = Rust, strokeWidth = 2.dp)
+                                    Spinner(spinnerSize = SpinnerSize.Md)
                                 }
                             }
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.TextFieldDefaults
@@ -25,8 +28,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -36,21 +44,19 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
-import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
-import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.andyTokens
 
 /**
- * Compact field (~32dp single-line). Multiline fields use softer corner radii;
- * use [FieldChromeStyle.Borderless] when the parent container supplies the chrome.
+ * Compact field (~32dp single-line). Multiline fields use the same chrome;
+ * use [FieldChromeStyle.Borderless] when the parent container supplies the border.
  */
 internal enum class FieldChromeStyle {
     Standard,
@@ -70,15 +76,33 @@ internal fun TextField(
     minLines: Int = 1,
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
-    shape: androidx.compose.ui.graphics.Shape? = null,
+    shape: Shape? = null,
     chromeStyle: FieldChromeStyle = FieldChromeStyle.Standard,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    isError: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val retainedColorsForCallSiteCompatibility = colors
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
     val effectiveShape = shape ?: AndyShape.Interactive
+    val tokens = andyTokens()
+    val borderColor = when {
+        !enabled -> AndyColors.BorderEmphasized.copy(alpha = 0.5f)
+        isError -> tokens.error
+        focused -> tokens.accent
+        else -> AndyColors.BorderEmphasized
+    }
+    val container = AndyColors.SurfaceRaised
+    val insetRingColor = when {
+        !enabled || isError -> null
+        focused -> tokens.accentMuted
+        hovered && !focused -> AndyColors.BorderEmphasized.copy(alpha = 0.30f)
+        else -> null
+    }
 
     BasicTextField(
         value = value,
@@ -86,10 +110,11 @@ internal fun TextField(
         modifier = modifier.then(
             if (chromeStyle == FieldChromeStyle.Standard) {
                 Modifier.andyFieldChrome(
-                    enabled = enabled,
-                    focused = focused,
                     singleLine = singleLine,
                     shape = effectiveShape,
+                    borderColor = borderColor,
+                    container = container,
+                    insetRingColor = insetRingColor,
                 )
             } else {
                 Modifier
@@ -97,12 +122,14 @@ internal fun TextField(
         ),
         enabled = enabled,
         readOnly = readOnly,
-        textStyle = resolveFieldTextStyle(textStyle, enabled),
+        textStyle = resolveFieldTextStyle(textStyle, enabled, isError),
         singleLine = singleLine,
         maxLines = maxLines,
         minLines = minLines,
         visualTransformation = visualTransformation,
-        cursorBrush = SolidColor(Rust),
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        cursorBrush = SolidColor(if (isError) MaterialTheme.colorScheme.error else tokens.accent),
         interactionSource = interactionSource,
         decorationBox = { innerTextField ->
             FieldDecoration(
@@ -128,15 +155,33 @@ internal fun TextField(
     minLines: Int = 1,
     placeholder: @Composable (() -> Unit)? = null,
     colors: TextFieldColors = fieldColors(),
-    shape: androidx.compose.ui.graphics.Shape? = null,
+    shape: Shape? = null,
     chromeStyle: FieldChromeStyle = FieldChromeStyle.Standard,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    isError: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     @Suppress("UNUSED_VARIABLE")
     val retainedColorsForCallSiteCompatibility = colors
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
+    val hovered by interactionSource.collectIsHoveredAsState()
     val effectiveShape = shape ?: AndyShape.Interactive
+    val tokens = andyTokens()
+    val borderColor = when {
+        !enabled -> AndyColors.BorderEmphasized.copy(alpha = 0.5f)
+        isError -> tokens.error
+        focused -> tokens.accent
+        else -> AndyColors.BorderEmphasized
+    }
+    val container = AndyColors.SurfaceRaised
+    val insetRingColor = when {
+        !enabled || isError -> null
+        focused -> tokens.accentMuted
+        hovered && !focused -> AndyColors.BorderEmphasized.copy(alpha = 0.30f)
+        else -> null
+    }
 
     BasicTextField(
         value = value,
@@ -144,10 +189,11 @@ internal fun TextField(
         modifier = modifier.then(
             if (chromeStyle == FieldChromeStyle.Standard) {
                 Modifier.andyFieldChrome(
-                    enabled = enabled,
-                    focused = focused,
                     singleLine = singleLine,
                     shape = effectiveShape,
+                    borderColor = borderColor,
+                    container = container,
+                    insetRingColor = insetRingColor,
                 )
             } else {
                 Modifier
@@ -155,12 +201,14 @@ internal fun TextField(
         ),
         enabled = enabled,
         readOnly = readOnly,
-        textStyle = resolveFieldTextStyle(textStyle, enabled),
+        textStyle = resolveFieldTextStyle(textStyle, enabled, isError),
         singleLine = singleLine,
         maxLines = maxLines,
         minLines = minLines,
         visualTransformation = visualTransformation,
-        cursorBrush = SolidColor(Rust),
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        cursorBrush = SolidColor(if (isError) MaterialTheme.colorScheme.error else tokens.accent),
         interactionSource = interactionSource,
         decorationBox = { innerTextField ->
             FieldDecoration(
@@ -174,59 +222,61 @@ internal fun TextField(
 }
 
 @Composable
-private fun defaultFieldTextStyle(): TextStyle = LocalTextStyle.current.copy(
+private fun defaultFieldTextStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(
     fontFamily = DisplayFont,
-    fontSize = 13.sp,
-    lineHeight = 16.sp,
-    fontWeight = FontWeight.Normal,
     color = TextPrimary,
 )
 
 @Composable
-private fun resolveFieldTextStyle(textStyle: TextStyle, enabled: Boolean): TextStyle {
+private fun resolveFieldTextStyle(textStyle: TextStyle, enabled: Boolean, isError: Boolean): TextStyle {
     val baseColor = when {
         !enabled -> AndyColors.TextDisabled
+        isError -> MaterialTheme.colorScheme.error
         textStyle.color == Color.Unspecified -> TextPrimary
         else -> textStyle.color
     }
     return textStyle.copy(
         fontFamily = textStyle.fontFamily ?: DisplayFont,
-        fontSize = if (textStyle.fontSize == TextUnit.Unspecified) 13.sp else textStyle.fontSize,
-        lineHeight = if (textStyle.lineHeight == TextUnit.Unspecified) 16.sp else textStyle.lineHeight,
+        fontSize = if (textStyle.fontSize == TextUnit.Unspecified) 14.sp else textStyle.fontSize,
+        lineHeight = if (textStyle.lineHeight == TextUnit.Unspecified) 20.sp else textStyle.lineHeight,
         color = baseColor,
     )
 }
 
 private fun Modifier.andyFieldChrome(
-    enabled: Boolean,
-    focused: Boolean,
     singleLine: Boolean,
-    shape: androidx.compose.ui.graphics.Shape,
-): Modifier {
-    val borderColor = when {
-        !enabled -> Color.Transparent
-        focused -> AndyColors.OrangeBorder
-        else -> Color.Transparent
-    }
-    val container = when {
-        !enabled -> AndyColors.PaneBg.copy(alpha = 0.55f)
-        focused -> AndyColors.SurfaceRaised
-        else -> AndyColors.SurfaceHover
-    }
-    return this
-        .then(
-            if (singleLine) {
-                Modifier.defaultMinSize(minHeight = AndyLayout.FieldHeight)
-            } else {
-                Modifier
-            },
-        )
-        .background(container, shape)
-        .then(
-            if (borderColor != Color.Transparent) Modifier.border(1.dp, borderColor, shape)
-            else Modifier,
-        )
-}
+    shape: Shape,
+    borderColor: Color,
+    container: Color,
+    insetRingColor: Color?,
+): Modifier = this
+    .then(
+        if (singleLine) {
+            Modifier.defaultMinSize(minHeight = AndyLayout.FieldHeight)
+        } else {
+            Modifier
+        },
+    )
+    .background(container, shape)
+    .border(1.dp, borderColor, shape)
+    .then(
+        if (insetRingColor != null) {
+            Modifier.drawWithContent {
+                drawContent()
+                val inset = 2.dp.toPx()
+                val stroke = 2.dp.toPx()
+                drawRoundRect(
+                    color = insetRingColor,
+                    topLeft = Offset(inset, inset),
+                    size = Size(size.width - inset * 2, size.height - inset * 2),
+                    cornerRadius = CornerRadius(6.dp.toPx()),
+                    style = Stroke(width = stroke),
+                )
+            }
+        } else {
+            Modifier
+        },
+    )
 
 @Composable
 private fun FieldDecoration(
@@ -239,15 +289,13 @@ private fun FieldDecoration(
         Modifier
             .fillMaxWidth()
             .padding(
-                horizontal = AndySpace.Space4,
-                vertical = if (singleLine) 6.dp else AndySpace.Space3,
+                horizontal = AndySpace.Space2,
+                vertical = if (singleLine) AndySpace.Space1 else AndySpace.Space2,
             ),
         contentAlignment = if (singleLine) Alignment.CenterStart else Alignment.TopStart,
     ) {
         if (empty && placeholder != null) {
-            Box(Modifier.graphicsLayer(alpha = 0.55f)) {
-                placeholder()
-            }
+            placeholder()
         }
         innerTextField()
     }
@@ -263,11 +311,14 @@ internal fun fieldColors(): TextFieldColors = TextFieldDefaults.colors(
     focusedIndicatorColor = Color.Transparent,
     unfocusedIndicatorColor = Color.Transparent,
     disabledIndicatorColor = Color.Transparent,
-    cursorColor = Rust,
+    cursorColor = MaterialTheme.colorScheme.primary,
+    errorCursorColor = MaterialTheme.colorScheme.error,
     focusedPlaceholderColor = AndyColors.TextTertiary,
     unfocusedPlaceholderColor = AndyColors.TextTertiary,
+    errorPlaceholderColor = AndyColors.TextTertiary,
 )
 
+/** Horizontal label + field row (settings tables). */
 @Composable
 internal fun FormRow(label: String, field: @Composable () -> Unit) {
     Row(
@@ -278,15 +329,17 @@ internal fun FormRow(label: String, field: @Composable () -> Unit) {
         Text(
             label,
             color = TextSecondary,
+            style = MaterialTheme.typography.labelMedium,
             fontFamily = DisplayFont,
-            fontWeight = FontWeight.Medium,
-            fontSize = 12.sp,
             modifier = Modifier.width(96.dp),
         )
         field()
     }
 }
 
+/**
+ * Label-above-input block (design-taste §4.6): label, field, optional helper, optional error below.
+ */
 @Composable
 internal fun LabeledField(
     label: String,
@@ -296,20 +349,23 @@ internal fun LabeledField(
     singleLine: Boolean = true,
     minHeight: Dp = AndyLayout.FieldHeight,
     placeholder: String? = null,
+    helperText: String? = null,
+    errorText: String? = null,
     testTag: String? = null,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    val isError = errorText != null
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
         Text(
             label,
             color = AndyColors.TextTertiary,
+            style = MaterialTheme.typography.labelSmall,
             fontFamily = DisplayFont,
-            fontWeight = FontWeight.Medium,
-            fontSize = 11.sp,
         )
         TextField(
             value = value,
             onValueChange = onValueChange,
             singleLine = singleLine,
+            isError = isError,
             modifier = Modifier
                 .fillMaxWidth()
                 .then(
@@ -322,21 +378,35 @@ internal fun LabeledField(
                 {
                     Text(
                         hint,
-                        color = AndyColors.TextTertiary,
+                        color = AndyColors.TextDisabled,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontFamily = DisplayFont,
-                        fontSize = 13.sp,
                     )
                 }
             },
         )
+        if (errorText != null) {
+            Text(
+                errorText,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = DisplayFont,
+            )
+        } else if (helperText != null) {
+            Text(
+                helperText,
+                color = AndyColors.TextTertiary,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = DisplayFont,
+            )
+        }
     }
 }
 
 /** Dense mono field for paths, filters, and command-like input. */
 @Composable
-internal fun CodeFieldTextStyle(): TextStyle = LocalTextStyle.current.copy(
+internal fun CodeFieldTextStyle(): TextStyle = MaterialTheme.typography.bodySmall.copy(
     fontFamily = MonoFont,
-    fontSize = 12.sp,
     lineHeight = 14.sp,
     color = TextPrimary,
 )

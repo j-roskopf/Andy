@@ -189,102 +189,23 @@ internal fun Sidebar(
             // expanding the selected Settings (and other) rows into oversized pills.
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
             destinations.forEach { item ->
-                val disabledForIos = iosSelectionActive && !item.availableWithIosTarget(iosCapabilities)
-                val active = item == current
-                Box(
-                    Modifier.fillMaxWidth()
-                        .height(AndyLayout.SidebarRowHeight)
-                        .clip(RoundedCornerShape(AndyRadius.Control))
-                        .background(
-                            if (active) AndyColors.SurfaceSelected else Color.Transparent,
-                        )
-                        .clickable(enabled = !disabledForIos) {
-                            if (disabledForIos) onSelect(AndyDestination.Live) else onSelect(item)
-                        },
-                ) {
-                    if (active) {
-                        Box(
-                            Modifier
-                                .align(Alignment.CenterStart)
-                                .width(AndyLayout.NavAccentBar)
-                                .height(AndyLayout.SidebarRowHeight - 8.dp)
-                                .background(Rust, RoundedCornerShape(AndyRadius.Pill)),
-                        )
-                    }
-                    Row(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = AndySpace.Space3),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = if (labelAlpha > 0.01f) Arrangement.Start else Arrangement.Center,
-                    ) {
-                    Text(
-                        navMark(item),
-                        color = when {
-                            active -> Rust
-                            disabledForIos -> AndyColors.TextDisabled
-                            else -> TextSecondary
-                        },
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                    )
-                    if (labelAlpha > 0.01f) {
-                        Spacer(Modifier.width(labelGap))
-                        Text(
-                            if (iosSelectionActive && item == AndyDestination.Logcat) "Logs" else item.label,
-                            color = (if (active) TextPrimary else TextSecondary)
-                                .copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
-                            fontFamily = DisplayFont,
-                            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                            fontSize = 13.sp,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (item == AndyDestination.Devices) {
-                            Text(
-                                "$deviceCount",
-                                color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
-                                fontFamily = DisplayFont,
-                                fontSize = 11.sp,
-                            )
-                        }
-                        if (item == AndyDestination.Logcat) {
-                            Text(
-                                if (logcatLive) "Live" else "Paused",
-                                color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
-                                fontFamily = DisplayFont,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                    val blocked = (item == AndyDestination.Agents && hasBlockedAgentTasks) ||
-                        (item == AndyDestination.Actions && hasBlockedProjectAgentTasks)
-                    if (
-                        blocked ||
-                        (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
-                        (item == AndyDestination.Actions && (
-                            hasUnreadProjectAgentTasks || hasActiveProjectAgentTasks
-                        ))
-                    ) {
-                        Spacer(Modifier.width(AndySpace.Space2))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                        ) {
-                            if (blocked) {
-                                Box(Modifier.size(6.dp).background(Red, CircleShape))
-                            } else if (
-                                (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
-                                (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
-                            ) UnreadDot()
-                            if (item == AndyDestination.Actions && hasActiveProjectAgentTasks) {
-                                ProjectActivityIndicator(20.dp)
-                            }
-                        }
-                    }
-                    }
-                }
+                SidebarNavItem(
+                    item = item,
+                    active = item == current,
+                    expanded = expanded,
+                    labelAlpha = labelAlpha,
+                    labelGap = labelGap,
+                    disabledForIos = iosSelectionActive && !item.availableWithIosTarget(iosCapabilities),
+                    iosSelectionActive = iosSelectionActive,
+                    deviceCount = deviceCount,
+                    logcatLive = logcatLive,
+                    hasBlockedAgentTasks = hasBlockedAgentTasks,
+                    hasBlockedProjectAgentTasks = hasBlockedProjectAgentTasks,
+                    hasUnreadAgentTasks = hasUnreadAgentTasks,
+                    hasUnreadProjectAgentTasks = hasUnreadProjectAgentTasks,
+                    hasActiveProjectAgentTasks = hasActiveProjectAgentTasks,
+                    onSelect = onSelect,
+                )
             }
             }
         }
@@ -367,6 +288,144 @@ internal fun Sidebar(
                             fontFamily = DisplayFont,
                             fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Medium else FontWeight.Normal,
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarNavItem(
+    item: AndyDestination,
+    active: Boolean,
+    expanded: Boolean,
+    labelAlpha: Float,
+    labelGap: Dp,
+    disabledForIos: Boolean,
+    iosSelectionActive: Boolean,
+    deviceCount: Int,
+    logcatLive: Boolean,
+    hasBlockedAgentTasks: Boolean,
+    hasBlockedProjectAgentTasks: Boolean,
+    hasUnreadAgentTasks: Boolean,
+    hasUnreadProjectAgentTasks: Boolean,
+    hasActiveProjectAgentTasks: Boolean,
+    onSelect: (AndyDestination) -> Unit,
+) {
+    val markColor = when {
+        active -> Rust
+        disabledForIos -> AndyColors.TextDisabled
+        else -> TextSecondary
+    }
+    val blocked = (item == AndyDestination.Agents && hasBlockedAgentTasks) ||
+        (item == AndyDestination.Actions && hasBlockedProjectAgentTasks)
+    val showUnread = (item == AndyDestination.Agents && hasUnreadAgentTasks) ||
+        (item == AndyDestination.Actions && hasUnreadProjectAgentTasks)
+    val showActivity = item == AndyDestination.Actions && hasActiveProjectAgentTasks
+    val showBadge = blocked || showUnread || showActivity
+
+    Box(
+        Modifier.fillMaxWidth()
+            .height(AndyLayout.SidebarRowHeight)
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(if (active) AndyColors.SurfaceSelected else Color.Transparent)
+            .clickable(enabled = !disabledForIos) {
+                if (disabledForIos) onSelect(AndyDestination.Live) else onSelect(item)
+            },
+    ) {
+        if (active && expanded) {
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .width(AndyLayout.NavAccentBar)
+                    .height(AndyLayout.SidebarRowHeight - 8.dp)
+                    .background(Rust, RoundedCornerShape(AndyRadius.Pill)),
+            )
+        }
+        if (expanded) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = AndySpace.Space3),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    navMark(item),
+                    color = markColor,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                if (labelAlpha > 0.01f) {
+                    Spacer(Modifier.width(labelGap))
+                    Text(
+                        if (iosSelectionActive && item == AndyDestination.Logcat) "Logs" else item.label,
+                        color = (if (active) TextPrimary else TextSecondary)
+                            .copy(alpha = if (disabledForIos) labelAlpha * 0.35f else labelAlpha),
+                        fontFamily = DisplayFont,
+                        fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (item == AndyDestination.Devices) {
+                        Text(
+                            "$deviceCount",
+                            color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
+                            fontFamily = DisplayFont,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (item == AndyDestination.Logcat) {
+                        Text(
+                            if (logcatLive) "Live" else "Paused",
+                            color = AndyColors.TextTertiary.copy(alpha = labelAlpha),
+                            fontFamily = DisplayFont,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+                if (showBadge) {
+                    Spacer(Modifier.width(AndySpace.Space2))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    ) {
+                        if (blocked) {
+                            Box(Modifier.size(6.dp).background(Red, CircleShape))
+                        } else if (showUnread) {
+                            UnreadDot()
+                        }
+                        if (showActivity) {
+                            ProjectActivityIndicator(20.dp)
+                        }
+                    }
+                }
+            }
+        } else {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    navMark(item),
+                    color = markColor,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                if (showBadge) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 6.dp, end = 6.dp),
+                    ) {
+                        when {
+                            blocked -> Box(Modifier.size(6.dp).background(Red, CircleShape))
+                            showActivity -> ProjectActivityIndicator(14.dp)
+                            showUnread -> UnreadDot()
+                        }
                     }
                 }
             }

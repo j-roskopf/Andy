@@ -21,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -68,8 +67,11 @@ import app.andy.ui.agents.AgentPillIcon
 import app.andy.ui.components.AndyCheckbox
 import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.Button
+import app.andy.ui.components.EmptyState
 import app.andy.ui.components.ComposerChip
+import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -118,22 +120,11 @@ internal fun AutomationsScreen(
             }
             AndyHorizontalDivider()
             if (projectAutomations.isEmpty() && !creating) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(AndySpace.Space7).widthIn(max = 420.dp),
-                    ) {
-                        Text("No automations yet", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "Schedule a prompt to run on its own, or wake an existing thread on a loop.",
-                            color = TextSecondary,
-                            fontFamily = DisplayFont,
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
+                EmptyState(
+                    title = "No automations yet",
+                    description = "Schedule a prompt to run on its own, or wake an existing thread on a loop.",
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else if (!creating && editor == null) {
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = AndySpace.Space6),
@@ -476,11 +467,23 @@ private fun AutomationEditor(
                 }
             }
             if (kind == "cron") {
-                TextField(value = cron, onValueChange = { cron = it }, label = { Text("Cron (5-field)") }, colors = fieldColors(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+                LabeledField(
+                    label = "Cron (5-field)",
+                    value = cron,
+                    onValueChange = { cron = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             if (kind == "custom") {
                 Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3), verticalAlignment = Alignment.CenterVertically) {
-                    TextField(value = intervalEvery, onValueChange = { intervalEvery = it }, label = { Text("Every") }, colors = fieldColors(), modifier = Modifier.weight(1f), singleLine = true)
+                    LabeledField(
+                        label = "Every",
+                        value = intervalEvery,
+                        onValueChange = { intervalEvery = it },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
                     ChipMenu("Unit", intervalUnit.label, false, {}) {}
                     AutomationIntervalUnit.entries.forEach { unit ->
                         Text(unit.label, color = if (unit == intervalUnit) TextPrimary else TextSecondary, modifier = Modifier.clickable { intervalUnit = unit }, fontSize = 12.sp)
@@ -551,7 +554,14 @@ private fun AutomationEditor(
                     }
                 }
             }
-            TextField(value = stopWhen, onValueChange = { stopWhen = it }, label = { Text("Stop when") }, placeholder = { Text("PR is ready to merge") }, colors = fieldColors(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+            LabeledField(
+                label = "Stop when",
+                value = stopWhen,
+                onValueChange = { stopWhen = it },
+                placeholder = "PR is ready to merge",
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
                 ChipMenu("On failure", failurePolicy.label, failureMenu, { failureMenu = it }) {
                     AutomationFailurePolicy.entries.forEach {

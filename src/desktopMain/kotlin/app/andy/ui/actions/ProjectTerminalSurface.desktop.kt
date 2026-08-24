@@ -1,4 +1,6 @@
 package app.andy.ui.actions
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -6,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -67,7 +68,7 @@ actual fun ProjectTerminalSurface(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                        Spinner(spinnerSize = SpinnerSize.Xl)
                         Text(
                             "Starting terminal…",
                             color = TextSecondary,

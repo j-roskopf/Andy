@@ -16,8 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
+import app.andy.ui.components.ProgressBar
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -197,11 +198,7 @@ internal fun BrowserPaneView(
                         .semantics { contentDescription = "Loading"; role = Role.Button },
                     contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = Cyan,
-                    )
+                    Spinner(spinnerSize = SpinnerSize.Md)
                 }
             } else {
                 BrowserBarGlyphButton(
@@ -284,14 +281,13 @@ internal fun BrowserPaneView(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(2.dp)
+                .height(8.dp)
                 .background(AndyColors.SurfaceRaised),
         ) {
             if (state.loading && engineReady) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Cyan,
-                    trackColor = Color.Transparent,
+                ProgressBar(
+                    modifier = Modifier.fillMaxWidth(),
+                    indeterminate = true,
                 )
             }
         }

@@ -1,4 +1,6 @@
 package app.andy.ui.live
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -14,9 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -190,7 +190,7 @@ internal fun RecordingExportSheet(
                 if (frame != null) {
                     MirrorVideoSurface(frame = frame, modifier = Modifier.fillMaxSize(), passThroughInput = false)
                 } else if (frameCount > 0) {
-                    CircularProgressIndicator(Modifier.width(24.dp), strokeWidth = 2.dp, color = Rust)
+                    Spinner(spinnerSize = SpinnerSize.Lg)
                 } else {
                     Text("No video frames captured", color = TextSecondary, fontSize = 12.sp)
                 }
@@ -236,7 +236,7 @@ internal fun RecordingExportSheet(
 
             if (format == ClipFormat.Gif || format == ClipFormat.WebP) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = loop, onCheckedChange = { loop = it }, colors = CheckboxDefaults.colors(checkedColor = Rust))
+                    AndyCheckbox(checked = loop, onCheckedChange = { loop = it })
                     Text("Loop forever", color = TextPrimary, fontSize = 12.sp)
                 }
             }
@@ -259,7 +259,7 @@ internal fun RecordingExportSheet(
                     shape = RoundedCornerShape(10.dp),
                 ) { Text(if (exporting) "Exporting…" else "Export") }
                 if (exporting) {
-                    CircularProgressIndicator(Modifier.width(16.dp), strokeWidth = 2.dp, color = Rust)
+                    Spinner(spinnerSize = SpinnerSize.Md)
                 }
             }
 

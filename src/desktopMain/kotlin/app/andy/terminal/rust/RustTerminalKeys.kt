@@ -4,6 +4,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
@@ -12,8 +13,20 @@ import androidx.compose.ui.input.key.utf16CodePoint
  * Minimal VT key encoder for the Rust terminal canvas.
  * Covers printable UTF-16, Enter/Tab/Backspace/Esc, arrows, and common Ctrl chords.
  */
+internal fun isTerminalCopyChord(event: KeyEvent): Boolean =
+    event.type == KeyEventType.KeyDown &&
+        (event.isMetaPressed || event.isCtrlPressed) &&
+        event.key == Key.C
+
+internal fun isTerminalPasteChord(event: KeyEvent): Boolean =
+    event.type == KeyEventType.KeyDown &&
+        (event.isMetaPressed || event.isCtrlPressed) &&
+        event.key == Key.V
+
 internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
     if (event.type != KeyEventType.KeyDown) return null
+    // Cmd/Meta chords are handled by the canvas (copy/paste) or dropped — never encoded.
+    if (event.isMetaPressed) return null
 
     if (event.isCtrlPressed) {
         encodeCtrl(event)?.let { return it }
@@ -37,14 +50,18 @@ internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
     }
 
     val codePoint = event.utf16CodePoint
-    if (codePoint != 0 && !Character.isISOControl(codePoint)) {
+    if (codePoint != 0 && Character.isValidCodePoint(codePoint) && !Character.isISOControl(codePoint)) {
         return String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8)
     }
     return null
 }
 
 private fun encodeCtrl(event: KeyEvent): ByteArray? {
-    val ch = event.utf16CodePoint.toChar().lowercaseChar()
+    val ch = when {
+        event.utf16CodePoint != 0 && Character.isValidCodePoint(event.utf16CodePoint) ->
+            event.utf16CodePoint.toChar().lowercaseChar()
+        else -> ctrlLetterFromKey(event.key) ?: return null
+    }
     val ctrl = when (ch) {
         'a' -> 0x01
         'b' -> 0x02
@@ -78,4 +95,34 @@ private fun encodeCtrl(event: KeyEvent): ByteArray? {
         else -> return null
     }
     return byteArrayOf(ctrl.toByte())
+}
+
+private fun ctrlLetterFromKey(key: Key): Char? = when (key) {
+    Key.A -> 'a'
+    Key.B -> 'b'
+    Key.C -> 'c'
+    Key.D -> 'd'
+    Key.E -> 'e'
+    Key.F -> 'f'
+    Key.G -> 'g'
+    Key.H -> 'h'
+    Key.I -> 'i'
+    Key.J -> 'j'
+    Key.K -> 'k'
+    Key.L -> 'l'
+    Key.M -> 'm'
+    Key.N -> 'n'
+    Key.O -> 'o'
+    Key.P -> 'p'
+    Key.Q -> 'q'
+    Key.R -> 'r'
+    Key.S -> 's'
+    Key.T -> 't'
+    Key.U -> 'u'
+    Key.V -> 'v'
+    Key.W -> 'w'
+    Key.X -> 'x'
+    Key.Y -> 'y'
+    Key.Z -> 'z'
+    else -> null
 }

@@ -1,4 +1,6 @@
 package app.andy.ui.devices
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -533,7 +534,7 @@ private fun AndroidDevicesTab(
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (startingEmulatorName != null) {
-                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                            Spinner(spinnerSize = SpinnerSize.Md)
                         }
                         Text(
                             startStatus,
@@ -811,7 +812,7 @@ private fun IosDevicesTab(
             item {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (startingName != null) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                        Spinner(spinnerSize = SpinnerSize.Md)
                     }
                     Text(
                         startStatus,

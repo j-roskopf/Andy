@@ -96,6 +96,7 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
 import app.andy.ui.components.MarkdownPreview
+import app.andy.ui.components.dangerOutlinedButtonColors
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.StatusTag
@@ -385,7 +386,7 @@ internal fun ProjectWorkflowDetail(
                 OutlinedButton(onClick = { onEdit(task) }, enabled = !task.isActive && !pairActive) { Text("Edit") }
             }
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { onDelete(task) }, enabled = !task.isActive && !pairActive) { Text("Delete", color = Red) }
+            OutlinedButton(onClick = { onDelete(task) }, enabled = !task.isActive && !pairActive, colors = dangerOutlinedButtonColors()) { Text("Delete") }
         }
     }
 }
@@ -523,7 +524,7 @@ private fun BuildDetail(
                     }
                 }
                 OutlinedButton(onClick = { services.projectWorkflows.pauseBuildPair(build.id) }) { Text("Pause after current") }
-                OutlinedButton(onClick = { services.projectWorkflows.stopBuildPair(build.id) }) { Text("Stop current", color = Red) }
+                OutlinedButton(onClick = { services.projectWorkflows.stopBuildPair(build.id) }, colors = dangerOutlinedButtonColors()) { Text("Stop current") }
             }
             build.recoveryMode -> {
                 OutlinedButton(onClick = { followUpOpen = true }) { Text("Add build follow-up") }

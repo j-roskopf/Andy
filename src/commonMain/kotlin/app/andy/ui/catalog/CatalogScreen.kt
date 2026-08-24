@@ -1,4 +1,6 @@
 package app.andy.ui.catalog
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,12 +24,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
+import app.andy.ui.components.TextButton
+import app.andy.ui.components.accentTextButtonColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -166,7 +169,7 @@ internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                        Spinner(spinnerSize = SpinnerSize.Xl)
                         Text("Loading system image catalog…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
                     }
                 }
@@ -313,7 +316,9 @@ private fun CatalogFilterSidebar(
         FilterCheckboxGroup("VARIANT", availableVariants, selectedVariants, onVariantsChange)
         FilterCheckboxGroup("ABI", availableAbis, selectedAbis, onAbisChange)
         FilterCheckboxGroup("STATE", listOf("Installed", "Available"), selectedStates, onStatesChange)
-        TextButton(onClick = onReset) { Text("Reset filters", color = AndyColors.Orange, fontFamily = MonoFont, fontSize = 12.sp) }
+        TextButton(onClick = onReset, colors = accentTextButtonColors()) {
+            Text("Reset filters", fontFamily = MonoFont, fontSize = 12.sp)
+        }
     }
 }
 
@@ -333,7 +338,10 @@ private fun FilterCheckboxGroup(
                 },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Checkbox(checked = option in selected, onCheckedChange = { checked -> onChange(if (checked) selected + option else selected - option) }, modifier = Modifier.size(28.dp))
+                AndyCheckbox(
+                    checked = option in selected,
+                    onCheckedChange = { checked -> onChange(if (checked) selected + option else selected - option) },
+                )
                 Text(option, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp))
             }
         }

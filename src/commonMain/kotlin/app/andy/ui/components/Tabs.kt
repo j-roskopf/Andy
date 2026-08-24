@@ -12,10 +12,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,9 +51,9 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
-import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.andyTokens
 
 /**
  * Underline-style tab bar for page-level navigation. Prefer this over [FilterPill]
@@ -97,7 +97,7 @@ internal fun TabBarRow(
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Row(
                 // Weighted so the trailing content keeps its intrinsic width on the
@@ -105,18 +105,16 @@ internal fun TabBarRow(
                 Modifier
                     .then(if (trailing != null) Modifier.weight(1f) else Modifier)
                     .then(if (scrollTabs) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
-                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5),
-                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 tabs()
             }
             if (trailing != null) {
                 Box(
                     Modifier
-                        // Match TabBarItem bottom inset so trailing content cannot grow the bar.
-                        .padding(bottom = AndySpace.Space2)
-                        .height(28.dp)
-                        .horizontalScroll(rememberScrollState()),
+                        .padding(start = AndySpace.Space2)
+                        .height(32.dp),
                     contentAlignment = Alignment.CenterEnd,
                 ) {
                     trailing()
@@ -124,6 +122,7 @@ internal fun TabBarRow(
             }
         }
         if (showDivider) {
+            Spacer(Modifier.height(AndySpace.Space2))
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -163,22 +162,24 @@ internal fun TabBarItem(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    indicatorColor: Color = Rust,
+    indicatorColor: Color? = null,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable (hovered: Boolean) -> Unit)? = null,
     onRename: ((String) -> Unit)? = null,
 ) {
+    val accent = indicatorColor ?: AndyColors.Blue
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     var editing by remember { mutableStateOf(false) }
     var draft by remember(label) { mutableStateOf(TextFieldValue(label)) }
     var editorHadFocus by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
-    val textColor = when {
-        selected -> TextPrimary
-        hovered -> TextPrimary.copy(alpha = 0.82f)
-        else -> TextSecondary
+    val hoverOverlay = if (AndyColors.isLight) {
+        Color.Black.copy(alpha = 0.04f)
+    } else {
+        Color.White.copy(alpha = 0.06f)
     }
+    val textColor = if (selected) TextPrimary else TextSecondary
     fun finishEditing() {
         if (!editing) return
         val updated = draft.text.trim()
@@ -190,8 +191,9 @@ internal fun TabBarItem(
     LaunchedEffect(editing) {
         if (editing) focusRequester.requestFocus()
     }
-    Column(
+    Box(
         modifier
+            .height(32.dp)
             .clip(RoundedCornerShape(AndyRadius.Control))
             .hoverable(interactionSource)
             .combinedClickable(
@@ -203,11 +205,21 @@ internal fun TabBarItem(
                         editing = true
                     }
                 },
-            )
-            .padding(bottom = AndySpace.Space2),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            ),
     ) {
+        if (hovered && !editing) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(hoverOverlay, RoundedCornerShape(AndyRadius.Control)),
+            )
+        }
+        // Width comes from label intrinsic size — avoid matchParentSize on this Row or
+        // horizontalScroll tab strips measure every item at zero width.
         Row(
+            Modifier
+                .height(32.dp)
+                .padding(horizontal = AndySpace.Space3),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -229,36 +241,41 @@ internal fun TabBarItem(
                     textStyle = TextStyle(
                         color = TextPrimary,
                         fontFamily = DisplayFont,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
                     ),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { finishEditing() }),
-                    cursorBrush = SolidColor(indicatorColor),
+                    cursorBrush = SolidColor(accent),
                 )
             } else {
                 Text(
                     label,
                     color = textColor,
                     fontFamily = DisplayFont,
-                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
                     maxLines = 1,
                     softWrap = false,
-                    overflow = TextOverflow.Clip,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 180.dp),
                 )
             }
             trailing?.invoke(hovered)
         }
         Box(
             Modifier
-                .padding(top = 6.dp)
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = AndySpace.Space3)
                 .height(2.dp)
-                .width(if (selected) 28.dp else 0.dp)
-                .background(if (selected) indicatorColor else Color.Transparent, RoundedCornerShape(AndyRadius.Pill)),
+                .background(
+                    if (selected) accent else Color.Transparent,
+                    RoundedCornerShape(AndyRadius.Pill),
+                ),
         )
     }
 }
@@ -274,12 +291,15 @@ internal fun SegmentedControl(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val shape = AndyShape.Interactive
+    val tokens = andyTokens()
+    val outerShape = AndyShape.Interactive
+    val segmentShape = RoundedCornerShape(6.dp)
     Row(
         modifier
-            .clip(shape)
-            .background(AndyColors.SurfaceHover, shape),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
+            .clip(outerShape)
+            .background(tokens.neutralFill, outerShape)
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         options.forEachIndexed { index, label ->
             val selected = index == selectedIndex
@@ -287,13 +307,17 @@ internal fun SegmentedControl(
                 label,
                 color = if (selected) TextPrimary else TextSecondary,
                 fontFamily = DisplayFont,
-                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
                 modifier = Modifier
-                    .clip(shape)
-                    .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
+                    .clip(segmentShape)
+                    .background(
+                        if (selected) AndyColors.SurfaceRaised else Color.Transparent,
+                        segmentShape,
+                    )
                     .clickable { onSelect(index) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
             )
         }
     }

@@ -146,7 +146,7 @@ fun AndyMirrorPopOut(
     controlsVisible: Boolean = false,
     contentTopPadding: androidx.compose.ui.unit.Dp = 0.dp,
     tintId: String = AndyTint.Default.id,
-    surfaceModeId: String = AndySurfaceMode.Tinted.id,
+    surfaceModeId: String = AndySurfaceMode.PitchBlack.id,
 ) {
     AndyTheme(tintId, surfaceModeId) {
         val scope = rememberCoroutineScope()

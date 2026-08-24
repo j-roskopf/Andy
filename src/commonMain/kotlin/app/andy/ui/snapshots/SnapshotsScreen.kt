@@ -1,4 +1,6 @@
 package app.andy.ui.snapshots
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -20,7 +22,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -125,7 +126,7 @@ internal fun SnapshotsScreen(
         )
         if (startingEmulatorName != null && startStatus.isNotBlank()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Rust)
+                Spinner(spinnerSize = SpinnerSize.Md)
                 Text(startStatus, color = Rust, fontFamily = MonoFont, fontSize = 12.sp)
             }
         }

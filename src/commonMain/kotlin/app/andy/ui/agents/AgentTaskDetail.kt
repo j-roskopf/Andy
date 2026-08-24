@@ -29,7 +29,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import app.andy.ui.components.bottomBorder
@@ -130,6 +129,7 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.shell.LocalOpenInvestigation
+import app.andy.ui.components.StatusDotVariant
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
@@ -1402,8 +1402,13 @@ private fun AgentTaskHeader(
                 }
             }
             // The chat is unrecoverable once closed, so say so where it cannot be missed.
-            if (task.temporary) StatusTag("temporary", Yellow)
-            StatusTag(statusLabel, statusColor)
+            if (task.temporary) StatusTag("temporary", StatusDotVariant.Warning, accentColor = Yellow)
+            StatusTag(
+                statusLabel,
+                agentStatusVariant(task, planModeActive, hasPendingPlanEntries),
+                pulsing = isSessionWorking(task),
+                accentColor = statusColor,
+            )
         }
 
         if (hasSessionActions || showDeleteDetailsActions) {

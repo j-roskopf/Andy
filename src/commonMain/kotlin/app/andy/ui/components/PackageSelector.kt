@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -123,9 +121,6 @@ internal fun PackageSelector(
         OutlinedButton(
             onClick = { expanded = true },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = TextPrimary,
-            ),
             shape = RoundedCornerShape(AndyRadius.Control),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
         ) {
@@ -141,11 +136,7 @@ internal fun PackageSelector(
             )
             Spacer(Modifier.width(4.dp))
             if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
-                    strokeWidth = 1.5.dp,
-                    color = Rust,
-                )
+                Spinner(spinnerSize = SpinnerSize.Sm)
             } else {
                 Text("▼", color = TextSecondary, fontSize = 10.sp)
             }
@@ -206,11 +197,7 @@ internal fun PackageSelector(
                                         fontWeight = FontWeight.SemiBold,
                                     )
                                     if (resolvingCurrent) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(12.dp),
-                                            strokeWidth = 1.5.dp,
-                                            color = Rust,
-                                        )
+                                        Spinner(spinnerSize = SpinnerSize.Sm)
                                     }
                                 }
                             },
@@ -243,11 +230,7 @@ internal fun PackageSelector(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = Rust,
-                            )
+                            Spinner(spinnerSize = SpinnerSize.Md)
                             Text("Loading packages…", color = TextSecondary, fontSize = 12.sp)
                         }
                     }

@@ -134,20 +134,10 @@ internal fun WorkspaceEmptyCanvas(
     message: String,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            message,
-            color = TextSecondary,
-            fontFamily = DisplayFont,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = AndySpace.Space8),
-        )
-    }
+    EmptyState(
+        title = message,
+        modifier = modifier.fillMaxSize(),
+    )
 }
 
 @Composable

@@ -31,6 +31,7 @@ import app.andy.ui.components.FormRow
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -72,7 +73,12 @@ internal fun IntentsScreen(
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         PanelCard {
             if (!urlSchemesOnly) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = AndySpace.Space2),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+                ) {
                     IntentMode.entries.forEach { item -> FilterPill(item.name, item == mode, Rust) { mode = item } }
                 }
                 FormRow("Action") { TextField(action, { action = it }, singleLine = true, modifier = Modifier.fillMaxWidth(), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace), colors = fieldColors()) }

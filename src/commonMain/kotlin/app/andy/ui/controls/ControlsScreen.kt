@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ButtonDefaults
+import app.andy.ui.components.overlayOutlinedButtonColors
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -495,10 +495,7 @@ private fun HardwareCommand(label: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
         border = BorderStroke(1.dp, Border.copy(alpha = 0.90f)),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = AndyColors.Neutral900.copy(alpha = 0.42f),
-            contentColor = TextPrimary,
-        ),
+        colors = overlayOutlinedButtonColors(),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
     ) {
         Text(

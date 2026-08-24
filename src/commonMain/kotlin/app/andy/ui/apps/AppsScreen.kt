@@ -1,5 +1,8 @@
 package app.andy.ui.apps
 
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerShade
+import app.andy.ui.components.SpinnerSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,7 +21,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -183,11 +185,7 @@ internal fun AppsScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
-                                strokeWidth = 2.dp,
-                                color = TextSecondary,
-                            )
+                            Spinner(spinnerSize = SpinnerSize.Xl, shade = SpinnerShade.Subtle)
                             Text("Loading packages...", color = TextSecondary, fontSize = 13.sp)
                         }
                     }

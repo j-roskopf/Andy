@@ -1,4 +1,6 @@
 package app.andy.ui.inspector
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import app.andy.currentTimeMillis
 import androidx.compose.foundation.background
@@ -22,10 +24,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
+import app.andy.ui.components.TextField
+import app.andy.ui.components.fieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -322,7 +324,7 @@ internal fun InspectorScreen(
                 Box(Modifier.fillMaxWidth().weight(1f).background(PanelSoft, RoundedCornerShape(8.dp)).padding(10.dp)) {
                     if (state.isLoading) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = Rust)
+                            Spinner(spinnerSize = SpinnerSize.Md)
                         }
                     } else if (flattenedNodes.isNotEmpty()) {
                         Box(Modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {

@@ -1,4 +1,6 @@
 package app.andy.ui.live
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -19,9 +21,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -244,7 +244,7 @@ internal fun ScreenshotEditorSheet(
                 }
 
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = deviceFrame, onCheckedChange = { deviceFrame = it }, colors = CheckboxDefaults.colors(checkedColor = Rust))
+                    AndyCheckbox(checked = deviceFrame, onCheckedChange = { deviceFrame = it })
                     Text("Device frame", color = TextPrimary, fontSize = 12.sp, modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = { if (annotations.isNotEmpty()) annotations.removeAt(annotations.lastIndex) }, enabled = annotations.isNotEmpty()) {
                         Text("Undo")
@@ -254,7 +254,7 @@ internal fun ScreenshotEditorSheet(
                 if (status.isNotBlank()) Text(status, color = Rust, fontSize = 12.sp)
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    if (saving) CircularProgressIndicator(Modifier.height(16.dp), strokeWidth = 2.dp, color = Rust)
+                    if (saving) Spinner(spinnerSize = SpinnerSize.Md)
                     Button(
                         onClick = ::runSave,
                         enabled = !saving,

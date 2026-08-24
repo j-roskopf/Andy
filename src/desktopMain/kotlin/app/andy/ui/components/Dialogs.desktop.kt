@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,7 +20,7 @@ import androidx.compose.ui.window.rememberDialogState
 import app.andy.desktop.ApplyMacWindowChrome
 import app.andy.desktop.macTitleBarContentInset
 import app.andy.ui.theme.Panel
-import app.andy.ui.theme.Red
+import app.andy.ui.components.destructiveButtonColors
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 
@@ -84,7 +83,7 @@ internal actual fun ConfirmationDialog(
                     }
                     Button(
                         onClick = onConfirm,
-                        colors = ButtonDefaults.buttonColors(containerColor = Red),
+                        colors = destructiveButtonColors(),
                     ) { Text(confirmation.confirmLabel) }
                 }
             }

@@ -369,10 +369,10 @@ private fun ActionRunnerSelector(
             onClick = onProjectClick,
             colors = secondaryButtonColors(),
             shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             modifier = Modifier.widthIn(min = 132.dp, max = 210.dp),
         ) {
-            Text("Prj", color = Rust, fontFamily = DisplayFont, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            Text("Prj", color = Rust, fontFamily = DisplayFont, fontSize = 11.sp, fontWeight = FontWeight.Medium, lineHeight = 11.sp)
             Spacer(Modifier.width(AndySpace.Space2))
             Text(
                 project?.name ?: "Project",
@@ -389,10 +389,10 @@ private fun ActionRunnerSelector(
             enabled = project?.actions?.isNotEmpty() == true,
             colors = secondaryButtonColors(),
             shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = AndySpace.Space2),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
         ) {
-            Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+            Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 11.sp)
             Spacer(Modifier.width(AndySpace.Space2))
             Text(
                 action?.name ?: "No actions",
@@ -416,9 +416,9 @@ private fun ActionRunnerSelector(
             enabled = project != null && action != null,
             colors = primaryButtonColors(),
             shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = 0.dp),
         ) {
-            Text("Run", fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text("Run", fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 12.sp)
         }
     }
 }
