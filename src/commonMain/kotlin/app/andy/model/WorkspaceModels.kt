@@ -133,9 +133,11 @@ data class WorkspaceState(
     val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,
     val agentNotificationSoundId: String = AgentNotificationSound.Chime.id,
-    /** Expand tool, thinking, and grouped activity rows when a transcript opens. */
-    val agentTranscriptAutoExpandActivity: Boolean = false,
-    /** Merge consecutive thinking/tool steps into one block between user/assistant messages. */
+    /** Keep each thinking step on the transcript timeline (and expand it) instead of folding into tool activity. */
+    val agentTranscriptAutoExpandThinking: Boolean = false,
+    /** Expand tool calls, file edits, and grouped activity rows when a transcript opens. */
+    val agentTranscriptAutoExpandTools: Boolean = false,
+    /** Merge consecutive tool steps into one block between user/assistant messages. */
     val agentTranscriptCollapseActivityBlocks: Boolean = false,
     /** When [AgentMessageDeliveryMode.Queue], follow-ups wait in a queue until the current run finishes. */
     val agentMessageDeliveryMode: AgentMessageDeliveryMode = AgentMessageDeliveryMode.Immediate,
@@ -149,6 +151,11 @@ data class WorkspaceState(
     val ollamaBearerToken: String = "",
     val lmStudioBaseUrl: String = DefaultLmStudioBaseUrl,
     val lmStudioBearerToken: String = "",
+    /**
+     * Saved SSH targets for desktop remote (`Host` alias or `user@host`). Non-secret only —
+     * credentials stay in the system ssh agent / `~/.ssh/config`.
+     */
+    val savedSshTargets: List<String> = emptyList(),
     /**
      * Physical iOS CMIO `uniqueID` keyed by device UDID, remembered across reconnects so the
      * native screen-capture lookup can skip re-resolving it from the CoreMediaIO device list

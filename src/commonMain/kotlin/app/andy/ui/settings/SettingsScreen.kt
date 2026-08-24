@@ -847,16 +847,22 @@ private fun AgentTranscriptPanel(
         description = "How thinking steps and tool calls appear in agent chats.",
         ) {
         SettingsToggleRow(
-            label = "Auto-expand thinking and tool sections",
-            checked = workspace.agentTranscriptAutoExpandActivity,
-            onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandActivity = value) } },
-            description = "Opens each thinking step and tool call when it appears. You can still collapse sections manually.",
+            label = "Show thinking on timeline",
+            checked = workspace.agentTranscriptAutoExpandThinking,
+            onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandThinking = value) } },
+            description = "Keeps each thinking step as its own expanded row. Thoughts are not folded into the collapsed tool activity summary.",
+        )
+        SettingsToggleRow(
+            label = "Auto-expand tool sections",
+            checked = workspace.agentTranscriptAutoExpandTools,
+            onCheckedChange = { value -> update { it.copy(agentTranscriptAutoExpandTools = value) } },
+            description = "Opens each tool call and file edit when it appears. You can still collapse sections manually.",
         )
         SettingsToggleRow(
             label = "Collapse activity between messages",
             checked = workspace.agentTranscriptCollapseActivityBlocks,
             onCheckedChange = { value -> update { it.copy(agentTranscriptCollapseActivityBlocks = value) } },
-            description = "Groups consecutive thinking and tool steps into one block between user and assistant messages.",
+            description = "Groups consecutive tool steps into one block between user and assistant messages. Thinking stays separate when shown on the timeline.",
         )
     }
 }

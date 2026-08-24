@@ -1056,6 +1056,7 @@ data class AndyServices(
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
     val orchestrationPreferences: OrchestrationPreferencesService = UnavailableOrchestrationPreferencesService,
     val localServers: LocalServerService = UnavailableLocalServerService,
+    val remoteSession: RemoteSessionService = UnavailableRemoteSessionService,
     val capabilities: PlatformCapabilities = PlatformCapabilities.Desktop,
     val web: WebServices? = null,
 )

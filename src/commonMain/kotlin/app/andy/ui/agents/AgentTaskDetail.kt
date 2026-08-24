@@ -152,6 +152,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -532,7 +533,7 @@ internal fun AgentTaskDetail(
                 showDeleteDetailsActions = showDeleteDetailsActions,
                 detailsExpanded = detailsExpanded,
                 onDetailsExpandedChange = onDetailsExpandedChange,
-                onStop = { services.agentRuns.stop(task.id) },
+                onStop = { scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) } },
                 onCompleteBuild = if (task.workflowStage == ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
                 } else {
@@ -640,7 +641,8 @@ internal fun AgentTaskDetail(
                         restoreScrollKey = task.id,
                         scrollMemory = transcriptScrollMemory,
                         scrollToLatestRequest = scrollToLatestRequest,
-                        autoExpandActivitySections = workspaceState.agentTranscriptAutoExpandActivity,
+                        autoExpandThinkingSections = workspaceState.agentTranscriptAutoExpandThinking,
+                        autoExpandToolSections = workspaceState.agentTranscriptAutoExpandTools,
                         collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
                         pendingContent = task.userInputRequest?.let { request ->
                             {

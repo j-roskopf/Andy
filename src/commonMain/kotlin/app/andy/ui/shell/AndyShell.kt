@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.andy.AndyDestination
+import app.andy.availableWhileRemote
 import app.andy.showsSideChat
 import app.andy.availableWithIosTarget
 import app.andy.isToggleableInSidebar
@@ -133,18 +134,29 @@ internal fun AndyShell(
         }
     }
 
+    val remoteSessionState by services.remoteSession.state.collectAsState()
     val visibleDestinations = remember(
         capabilities.destinations,
         state.workspaceState.disabledDestinations,
+        remoteSessionState.isRemote,
     ) {
         capabilities.destinations.filter { destination ->
-            !destination.isToggleableInSidebar() || destination.name !in state.workspaceState.disabledDestinations
+            val enabled = !destination.isToggleableInSidebar() ||
+                destination.name !in state.workspaceState.disabledDestinations
+            val remoteOk = !remoteSessionState.isRemote || destination.availableWhileRemote()
+            enabled && remoteOk
         }
     }
     LaunchedEffect(state.destination, visibleDestinations) {
         if (state.destination !in visibleDestinations) {
             state.navigateTo(visibleDestinations.firstOrNull() ?: AndyDestination.Settings)
         }
+    }
+
+    LaunchedEffect(remoteSessionState.isRemote) {
+        // Refresh on both enter-remote and return-to-local so the device list never sticks
+        // on the previous host's adb devices.
+        state.refreshDevices()
     }
 
     LaunchedEffect(Unit) {
@@ -291,6 +303,8 @@ internal fun AndyShell(
                 updates = services.updates.takeIf { capabilities.updates },
                 mcpRunning = mcpRunning,
                 mcpPort = state.workspaceState.mcpServerPort,
+                remoteSession = services.remoteSession,
+                remoteSessionState = remoteSessionState,
                 // SidebarBg paints under the transparent macOS title bar; content clears the traffic lights.
                 contentTopPadding = contentTopPadding,
             )
@@ -490,9 +504,9 @@ internal fun AndyShell(
                             onForgetPairedWifi = state::forgetPairedWifi,
                             onReconnectPairedWifi = state::reconnectPairedWifi,
                             onDisconnectWifi = state::disconnectWifi,
-                            allowAvdManagement = capabilities.avdManagement,
-                            allowIosManagement = capabilities.iosDeviceManagement,
-                            allowWifiPairing = capabilities.wifiPairing,
+                            allowAvdManagement = capabilities.avdManagement && !remoteSessionState.isRemote,
+                            allowIosManagement = capabilities.iosDeviceManagement && !remoteSessionState.isRemote,
+                            allowWifiPairing = capabilities.wifiPairing && !remoteSessionState.isRemote,
                             transfer = state.transfer,
                             deviceLabels = state.workspaceState.deviceLabels,
                             onSetDeviceLabel = { serial, label -> state.setDeviceLabel(serial, label) },

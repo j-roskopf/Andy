@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.remote.SwappableAgentBackend
 import app.andy.model.WorkspaceState
 import app.andy.model.panelBackgroundArgb
 import app.andy.model.toTerminalAppearance
@@ -64,6 +65,7 @@ actual fun AgentTerminalSurface(
     val agentRuns = when (val runs = services.agentRuns) {
         is DesktopAgentRunService -> runs
         is McpAgentRunClient -> runs.terminalHost()
+        is SwappableAgentBackend -> runs.terminalHost()
         else -> null
     }
     val workspaceStore = services.workspaceStore as? DesktopWorkspaceStore
@@ -159,6 +161,7 @@ actual fun AgentTerminalSurface(
             when (val runs = services.agentRuns) {
                 is DesktopAgentRunService -> runs.reconcileStaleActiveTaskIfNeeded(taskId)
                 is McpAgentRunClient -> runs.reconcileStaleActiveTaskIfNeeded(taskId)
+                is SwappableAgentBackend -> runs.reconcileStaleActiveTaskIfNeeded(taskId)
             }
         }
         if (!effectiveSessionActive) {

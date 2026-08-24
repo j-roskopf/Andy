@@ -154,7 +154,14 @@ class DesktopWorkspaceStore(
             keepAgentSessionsOnShutdown = props.getProperty("keepAgentSessionsOnShutdown")?.toBooleanStrictOrNull() ?: false,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
-            agentTranscriptAutoExpandActivity = props.getProperty("agentTranscriptAutoExpandActivity")?.toBooleanStrictOrNull() ?: false,
+            agentTranscriptAutoExpandThinking = props.booleanOrLegacy(
+                key = "agentTranscriptAutoExpandThinking",
+                legacyKey = "agentTranscriptAutoExpandActivity",
+            ),
+            agentTranscriptAutoExpandTools = props.booleanOrLegacy(
+                key = "agentTranscriptAutoExpandTools",
+                legacyKey = "agentTranscriptAutoExpandActivity",
+            ),
             agentTranscriptCollapseActivityBlocks = props.getProperty("agentTranscriptCollapseActivityBlocks")?.toBooleanStrictOrNull() ?: false,
             agentMessageDeliveryMode = props.getProperty("agentMessageDeliveryMode")?.let { value ->
                 AgentMessageDeliveryMode.entries.firstOrNull { it.name == value }
@@ -166,6 +173,7 @@ class DesktopWorkspaceStore(
             ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
             lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
             lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
+            savedSshTargets = props.getProperty("savedSshTargets").orEmpty().lines().filter { it.isNotBlank() },
             iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
         )
     }.also { mutableState.value = it }
@@ -281,7 +289,8 @@ class DesktopWorkspaceStore(
             setProperty("keepAgentSessionsOnShutdown", state.keepAgentSessionsOnShutdown.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)
-            setProperty("agentTranscriptAutoExpandActivity", state.agentTranscriptAutoExpandActivity.toString())
+            setProperty("agentTranscriptAutoExpandThinking", state.agentTranscriptAutoExpandThinking.toString())
+            setProperty("agentTranscriptAutoExpandTools", state.agentTranscriptAutoExpandTools.toString())
             setProperty("agentTranscriptCollapseActivityBlocks", state.agentTranscriptCollapseActivityBlocks.toString())
             setProperty("agentMessageDeliveryMode", state.agentMessageDeliveryMode.name)
             setProperty("agentPinPriorityChats", state.agentPinPriorityChats.toString())
@@ -291,6 +300,7 @@ class DesktopWorkspaceStore(
             setProperty("ollamaBearerToken", state.ollamaBearerToken)
             setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
             setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
+            setProperty("savedSshTargets", state.savedSshTargets.joinToString("\n"))
             saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
@@ -369,6 +379,12 @@ class DesktopWorkspaceStore(
             .filter { it.isNotBlank() && ":" in it }
             .associate { it.substringBefore(':').trim() to it.substringAfter(':').trim() }
     }
+
+    /** Prefer [key]; if unset, fall back to a pre-split legacy boolean (defaults false). */
+    private fun Properties.booleanOrLegacy(key: String, legacyKey: String): Boolean =
+        getProperty(key)?.toBooleanStrictOrNull()
+            ?: getProperty(legacyKey)?.toBooleanStrictOrNull()
+            ?: false
 
     private companion object {
         val WorkspaceJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

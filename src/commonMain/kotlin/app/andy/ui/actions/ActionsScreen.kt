@@ -155,6 +155,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -637,7 +638,9 @@ private fun ProjectCockpit(
                                                 },
                                                 color = Rust,
                                             ) {
-                                                services.agentRuns.stop(selected.id)
+                                                scope.launch(Dispatchers.Default) {
+                                                    services.agentRuns.stop(selected.id)
+                                                }
                                             }
                                         }
                                     }
@@ -853,6 +856,7 @@ private fun ProjectCockpit(
         ProjectDialog(
             project = edit.project,
             existingProjects = config.projects,
+            remotePaths = services.remoteSession.isRemote,
             onDismiss = { editingProject = null },
             onDelete = edit.project?.takeIf { it.source != ConfigSource.Repo }?.let { project ->
                 {
@@ -2161,6 +2165,7 @@ private fun ProjectDialog(
     existingProjects: List<ActionProject>,
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)? = null,
+    remotePaths: Boolean = false,
     onSave: (ActionProject) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -2176,10 +2181,33 @@ private fun ProjectDialog(
             Column(Modifier.width(660.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 LabeledField("Name", name, { name = it }, Modifier.fillMaxWidth())
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Context directory", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    Text(
+                        if (remotePaths) "Context directory (remote path)" else "Context directory",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TextField(contextDir, { contextDir = it }, readOnly = true, singleLine = true, modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight), textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont), colors = fieldColors())
-                        Button(onClick = { scope.launch { pickDirectory(contextDir.ifBlank { null })?.let { contextDir = it } } }, colors = primaryButtonColors()) { Text("browse") }
+                        TextField(
+                            contextDir,
+                            { contextDir = it },
+                            readOnly = !remotePaths,
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                            colors = fieldColors(),
+                        )
+                        if (!remotePaths) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        pickDirectory(contextDir.ifBlank { null })?.let { contextDir = it }
+                                    }
+                                },
+                                colors = primaryButtonColors(),
+                            ) { Text("browse") }
+                        }
                     }
                 }
                 LabeledField("Env (KEY=VALUE)", envText, { envText = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 120.dp)

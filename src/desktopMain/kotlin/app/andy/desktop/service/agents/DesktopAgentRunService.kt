@@ -334,6 +334,15 @@ class DesktopAgentRunService(
     /** Push latest Settings terminal appearance into live agent sessions. */
     internal fun reloadTerminalAppearance() = terminals.reloadAppearance()
 
+    /** Remote SSH tmux forward for [AgentTerminalManager] — not process-global [TmuxAndy]. */
+    fun setForwardedTmuxSocket(path: File?) {
+        terminals.setForwardedTmuxSocket(path)
+    }
+
+    fun setRemoteTerminalTaskIds(ids: Collection<String>) {
+        terminals.setRemoteTerminalTaskIds(ids)
+    }
+
     /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the terminal mounts when the PTY appears. */
     internal val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
 
@@ -1077,7 +1086,19 @@ class DesktopAgentRunService(
                 setOfNotNull(linkedBuild?.id, linkedBuild?.linkedReviewTaskId, linkedBuild?.linkedVerificationTaskId)
             }
         }
-        if (_projects.value[task.projectId]?.tasks.orEmpty().any { it.id in removeIds && it.isActive }) return
+        // Waiting includes grill-me Blocked parks — abandon those agent runs so delete is not a
+        // silent no-op. Only refuse while a stage is still Queued/Running after stop attempts.
+        val linkedRunIds = _projects.value[task.projectId]?.tasks.orEmpty()
+            .filter { it.id in removeIds }
+            .flatMap { it.attempts.map { attempt -> attempt.runId } }
+            .distinct()
+        for (runId in linkedRunIds) {
+            val run = currentTask(runId) ?: continue
+            if (run.isActive) {
+                delete(run.id, removeWorktree = run.ownsWorktree, force = true)
+            }
+        }
+        if (_projects.value[task.projectId]?.tasks.orEmpty().any { it.id in removeIds && it.isInFlight }) return
         updateProject(task.projectId) { state -> state.copy(tasks = state.tasks.filterNot { it.id in removeIds }) }
         persist()
     }
@@ -3124,6 +3145,11 @@ class DesktopAgentRunService(
     }
 
     override fun stop(taskId: String) {
+        // Teardown can block on tmux/git; never run that on the Compose main thread.
+        scope.launch(Dispatchers.IO) { stopNow(taskId) }
+    }
+
+    private fun stopNow(taskId: String) {
         val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
         if (acpTask != null) {
             handles[taskId]?.stopRequested = true
@@ -3195,7 +3221,7 @@ class DesktopAgentRunService(
             )
         }
         if (task.isActive) {
-            stop(taskId)
+            withContext(Dispatchers.IO) { stopNow(taskId) }
         }
         handles.remove(taskId)
         terminals.clear(taskId)
@@ -4433,7 +4459,25 @@ class DesktopAgentRunService(
         }
     }
 
+    private suspend fun ensureCompletedChangesCaptured(runId: String) {
+        val task = currentTask(runId) ?: return
+        if (task.completedChanges != null) return
+        val cwd = task.cwd ?: return
+        val baseline = task.changeBaselineTree ?: return
+        val completedChanges = withContext(Dispatchers.IO) {
+            worktrees.changeSnapshot(
+                cwd,
+                baseline,
+                touchedPaths(runId, cwd).takeIf { it.isNotEmpty() },
+            )
+        } ?: return
+        updateTask(runId) { t ->
+            if (t.completedChanges == null) t.copy(completedChanges = completedChanges) else t
+        }
+    }
+
     private suspend fun reconcileWorkflowRun(runId: String) {
+        ensureCompletedChangesCaptured(runId)
         val run = currentTask(runId) ?: return
         val projectTaskId = run.workflowTaskId ?: return
         val typedTask = projectTask(projectTaskId) ?: return
@@ -5410,18 +5454,21 @@ class DesktopAgentRunService(
         forceKillTerminal: Boolean = false,
         stopReason: String? = null,
     ) {
-        val lane = currentTask(taskId)?.lane ?: AgentLaneKind.Terminal
-        val completedChanges = currentTask(taskId)?.let { task ->
-            val baseline = task.changeBaselineTree
-            task.cwd?.takeIf { baseline != null }?.let { cwd ->
-                worktrees.changeSnapshot(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
-            }
-        }
+        val prior = currentTask(taskId)
+        val lane = prior?.lane ?: AgentLaneKind.Terminal
+        val snapshotCwd = prior?.cwd
+        val snapshotBaseline = prior?.changeBaselineTree
+        val captureChanges = snapshotCwd != null && snapshotBaseline != null
         var finalized = false
         updateTask(taskId) { task ->
             // Launching chats keep status=null. User stop must still leave that overlay.
-            val shouldFinalize = task.finishedAtMillis == null &&
-                (task.isActive || task.status != null || stoppedByUser)
+            // Grill-me / permission Blocked stamps finishedAtMillis while staying active — cancel
+            // must still finalize, or ACP stop leaves the chat Blocked forever.
+            val shouldFinalize = when {
+                stoppedByUser && (task.isActive || task.userInputRequest != null || task.status == null) -> true
+                task.finishedAtMillis == null && (task.isActive || task.status != null || stoppedByUser) -> true
+                else -> false
+            }
             if (shouldFinalize) {
                 finalized = true
                 val resolvedPlanText = if (status == AgentStatus.Done && task.planMode) {
@@ -5437,6 +5484,7 @@ class DesktopAgentRunService(
                 task.copy(
                     status = status,
                     stoppedByUser = stoppedByUser,
+                    userInputRequest = if (stoppedByUser) null else task.userInputRequest,
                     resumable = resumable,
                     interrupted = interrupted,
                     statusConfident = statusConfident,
@@ -5445,11 +5493,8 @@ class DesktopAgentRunService(
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
                     unread = !isViewing(taskId),
-                    completedChanges = completedChanges ?: task.completedChanges,
                     completedPlanText = completedPlanText,
                 )
-            } else if (completedChanges != null && task.completedChanges == null) {
-                task.copy(completedChanges = completedChanges)
             } else {
                 task
             }
@@ -5468,10 +5513,13 @@ class DesktopAgentRunService(
             }
         } else {
             when {
-                forceKillTerminal || stoppedByUser -> terminals.stop(taskId)
+                forceKillTerminal || stoppedByUser -> {
+                    // tmux hasSession/killSession can block up to 30s each — keep off Main.
+                    scope.launch(Dispatchers.IO) { terminals.stop(taskId) }
+                }
                 terminals.isAlive(taskId) && keepViewerMounted -> Unit
                 terminals.isAlive(taskId) -> terminals.detach(taskId)
-                else -> terminals.stop(taskId)
+                else -> scope.launch(Dispatchers.IO) { terminals.stop(taskId) }
             }
         }
         previousTaskStatuses.remove(taskId)
@@ -5487,6 +5535,9 @@ class DesktopAgentRunService(
             )
         } else {
             scope.launch {
+                if (captureChanges) {
+                    ensureCompletedChangesCaptured(taskId)
+                }
                 persist()
                 reconcileWorkflowRun(taskId)
                 val workflowTaskId = currentTask(taskId)?.workflowTaskId

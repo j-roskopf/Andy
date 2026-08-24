@@ -56,6 +56,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * How agent CLIs are hosted.
@@ -109,6 +110,36 @@ class AgentTerminalManager(
     )
 
     private val handles = ConcurrentHashMap<String, Handle>()
+
+    /** SSH-forwarded remote tmux socket; only [remoteTerminalTaskIds] use it. */
+    private val forwardedTmuxSocket = AtomicReference<File?>(null)
+    private val remoteTerminalTaskIds = ConcurrentHashMap.newKeySet<String>()
+
+    fun setForwardedTmuxSocket(path: File?) {
+        forwardedTmuxSocket.set(path)
+    }
+
+    fun setRemoteTerminalTaskIds(ids: Collection<String>) {
+        remoteTerminalTaskIds.clear()
+        remoteTerminalTaskIds.addAll(ids)
+    }
+
+    private fun tmuxSocketFor(taskId: String): File? {
+        val forwarded = forwardedTmuxSocket.get() ?: return null
+        return forwarded.takeIf { taskId in remoteTerminalTaskIds }
+    }
+
+    private inline fun <T> withTmuxSocket(taskId: String, block: () -> T): T {
+        val socket = tmuxSocketFor(taskId)
+        if (socket == null) return block()
+        val previous = TmuxAndy.absoluteSocket()
+        TmuxAndy.useAbsoluteSocket(socket)
+        try {
+            return block()
+        } finally {
+            TmuxAndy.useAbsoluteSocket(previous)
+        }
+    }
 
     /** One derivation of `scrollback.raw`, valid while the file is untouched. */
     private data class DerivedRawTranscript(
@@ -282,7 +313,7 @@ class AgentTerminalManager(
         // GUI may have closed while the daemon/tmux session still runs. This runs once per
         // owned chat on every sessions-revision bump, so it reads the shared session-list
         // snapshot rather than forking a has-session per chat per navigation.
-        return TmuxAndy.isAvailable() && TmuxAndy.sessionExists(taskId)
+        return TmuxAndy.isAvailable() && withTmuxSocket(taskId) { TmuxAndy.sessionExists(taskId) }
     }
 
     fun scrollbackPath(taskId: String): File = scrollbackFile(taskId)
@@ -576,8 +607,8 @@ class AgentTerminalManager(
             return
         }
         // Detached tmux session (e.g. GUI reattach pending).
-        if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
-            TmuxAndy.sendKeys(taskId, text)
+        if (TmuxAndy.isAvailable() && withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }) {
+            withTmuxSocket(taskId) { TmuxAndy.sendKeys(taskId, text) }
         }
     }
 
@@ -595,18 +626,18 @@ class AgentTerminalManager(
         writeRaw(taskId, body)
         delay(SUBMIT_KEY_GAP_MS)
         if (handles[taskId]?.session is TmuxAgentBackend ||
-            (handles[taskId] == null && TmuxAndy.hasSession(taskId))
+            (handles[taskId] == null && withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) })
         ) {
-            TmuxAndy.sendEnter(taskId)
+            withTmuxSocket(taskId) { TmuxAndy.sendEnter(taskId) }
         } else {
             writeRaw(taskId, "\r")
         }
         if (body.contains('\n')) {
             delay(SUBMIT_KEY_GAP_MS)
             if (handles[taskId]?.session is TmuxAgentBackend ||
-                (handles[taskId] == null && TmuxAndy.hasSession(taskId))
+                (handles[taskId] == null && withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) })
             ) {
-                TmuxAndy.sendEnter(taskId)
+                withTmuxSocket(taskId) { TmuxAndy.sendEnter(taskId) }
             } else {
                 writeRaw(taskId, "\r")
             }
@@ -832,7 +863,9 @@ class AgentTerminalManager(
             liveOrReattachHandle(taskId)
         }?.let { return@withContext it }
 
-        if (!TmuxAndy.hasSession(taskId) && !TmuxAndy.waitForSession(taskId)) {
+        if (!withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) } &&
+            !withTmuxSocket(taskId) { TmuxAndy.waitForSession(taskId) }
+        ) {
             return@withContext null
         }
 
@@ -840,11 +873,11 @@ class AgentTerminalManager(
             liveOrReattachHandle(taskId)?.let { return@withLock it }
             // Broken panes (deleted cwd / uv_cwd) are not attachable — kill so the
             // caller can relaunch into a resolved scratch/project directory.
-            if (TmuxAndy.sessionLooksBroken(taskId)) {
-                TmuxAndy.killSession(taskId)
+            if (withTmuxSocket(taskId) { TmuxAndy.sessionLooksBroken(taskId) }) {
+                withTmuxSocket(taskId) { TmuxAndy.killSession(taskId) }
                 return@withLock null
             }
-            if (!TmuxAndy.hasSession(taskId)) return@withLock null
+            if (!withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }) return@withLock null
 
             // Capture before clearing a stale handle so the fresh attach can keep
             // status + artifact dir across the viewer rebuild.
@@ -874,7 +907,7 @@ class AgentTerminalManager(
             try {
                 session.attach()
                 Thread.sleep(200)
-                if (!TmuxAndy.hasSession(taskId)) return@withLock null
+                if (!withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }) return@withLock null
                 val attachSnap = stripAnsi(session.bufferSnapshot().trim())
                 if (TmuxAndy.paneContentLooksLikeFailedAttach(attachSnap)) return@withLock null
                 check(session.hasLiveViewer()) {
@@ -951,12 +984,12 @@ class AgentTerminalManager(
         if (isViewerAlive(taskId)) {
             existing.foreground.set(true)
             if (existing.session is TmuxAttachBackend) {
-                TmuxAndy.exitCopyModeIfActive(taskId)
+                withTmuxSocket(taskId) { TmuxAndy.exitCopyModeIfActive(taskId) }
             }
             return existing
         }
         val session = existing.session
-        if (session is TmuxAttachBackend && TmuxAndy.hasSession(taskId)) {
+        if (session is TmuxAttachBackend && withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }) {
             existing.foreground.set(true)
             session.reattachViewer(terminalAppearance())
             resumeBackgroundPolling(existing)
@@ -981,7 +1014,7 @@ class AgentTerminalManager(
         if (handle != null) return handle.session.bufferSnapshot()
         // No has-session precheck: capture-pane already returns empty for a dead session.
         if (TmuxAndy.isAvailable()) {
-            return TmuxAndy.capturePane(taskId, historyLines = 80).trimEnd()
+            return withTmuxSocket(taskId) { TmuxAndy.capturePane(taskId, historyLines = 80).trimEnd() }
         }
         return ""
     }
@@ -1048,8 +1081,8 @@ class AgentTerminalManager(
             }
         }
         // Headless wait when only tmux remains.
-        if (TmuxAndy.isAvailable() && TmuxAndy.hasSession(taskId)) {
-            return withContext(Dispatchers.IO) { TmuxAndy.waitExit(taskId) }
+        if (TmuxAndy.isAvailable() && withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }) {
+            return withContext(Dispatchers.IO) { withTmuxSocket(taskId) { TmuxAndy.waitExit(taskId) } }
         }
         return UNKNOWN_EXIT_CODE
     }
@@ -1105,9 +1138,9 @@ class AgentTerminalManager(
         // up-to-30s wait) so test/harness teardown cannot stall on a wedged tmux.
         if (mode != AgentTerminalMode.DirectPty &&
             TmuxAndy.isAvailable() &&
-            TmuxAndy.hasSession(taskId)
+            withTmuxSocket(taskId) { TmuxAndy.hasSession(taskId) }
         ) {
-            TmuxAndy.killSession(taskId)
+            withTmuxSocket(taskId) { TmuxAndy.killSession(taskId) }
         }
         bumpSessionsRevision()
     }
@@ -1359,11 +1392,13 @@ class AgentTerminalManager(
     private fun captureTmuxRows(taskId: String, historyLines: Int): List<StyledTerminalRow> {
         // capture-pane's exit code covers the dead-session case, so skip the extra has-session fork.
         if (!TmuxAndy.isAvailable()) return emptyList()
-        val pane = TmuxAndy.capturePane(
-            taskId,
-            historyLines = historyLines,
-            escapes = true,
-        )
+        val pane = withTmuxSocket(taskId) {
+            TmuxAndy.capturePane(
+                taskId,
+                historyLines = historyLines,
+                escapes = true,
+            )
+        }
         if (pane.isBlank() || TmuxAndy.paneContentLooksLikeFailedAttach(stripAnsi(pane))) return emptyList()
         return styledRowsFromAnsiText(pane)
     }

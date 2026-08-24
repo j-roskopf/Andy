@@ -209,7 +209,8 @@ internal fun AgentTranscript(
     scrollMemory: TranscriptScrollMemory? = null,
     /** Increment to jump to the live edge (e.g. after the user sends a follow-up). */
     scrollToLatestRequest: Int = 0,
-    autoExpandActivitySections: Boolean = false,
+    autoExpandThinkingSections: Boolean = false,
+    autoExpandToolSections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
     /** Known Andy chats used to resolve spawn rows to openable task ids. */
@@ -221,8 +222,12 @@ internal fun AgentTranscript(
     val compositionCounter = LocalTranscriptCompositionCounter.current
     SideEffect { compositionCounter?.let { it.rootRestarts++ } }
     val scope = rememberCoroutineScope()
-    val displayItems = remember(events, collapseActivityBetweenMessages) {
-        transcriptDisplayItems(events, collapseActivityBetweenMessages)
+    val displayItems = remember(events, collapseActivityBetweenMessages, autoExpandThinkingSections) {
+        transcriptDisplayItems(
+            events,
+            collapseActivityBetweenMessages = collapseActivityBetweenMessages,
+            keepThinkingOnTimeline = autoExpandThinkingSections,
+        )
     }
     val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths)
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
@@ -255,13 +260,14 @@ internal fun AgentTranscript(
         key: String,
         expanded: Boolean,
         overrides: Set<String>,
+        autoExpand: Boolean,
         onOverridesChange: (Set<String>) -> Unit,
     ) {
         onOverridesChange(
             when {
-                autoExpandActivitySections && expanded -> overrides - key
-                autoExpandActivitySections && !expanded -> overrides + key
-                !autoExpandActivitySections && expanded -> overrides + key
+                autoExpand && expanded -> overrides - key
+                autoExpand && !expanded -> overrides + key
+                !autoExpand && expanded -> overrides + key
                 else -> overrides - key
             },
         )
@@ -460,12 +466,12 @@ internal fun AgentTranscript(
                                 toolExpanded = transcriptActivityExpanded(
                                     transcriptEventKey(item.index, item.event),
                                     expandedToolKeys,
-                                    autoExpandActivitySections,
+                                    autoExpandToolSections,
                                 ),
                                 thinkingExpanded = transcriptActivityExpanded(
                                     transcriptEventKey(item.index, item.event),
                                     expandedThinkingKeys,
-                                    autoExpandActivitySections,
+                                    autoExpandThinkingSections,
                                 ),
                                 agentLabel = agentLabel,
                                 completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
@@ -473,10 +479,20 @@ internal fun AgentTranscript(
                                     itemIndex == latestPlanUpdateItemIndex,
                                 activePermissionRequestId = activePermissionRequestId,
                                 onToolExpandedChange = { key, expanded ->
-                                    setActivityExpanded(key, expanded, expandedToolKeys) { expandedToolKeys = it }
+                                    setActivityExpanded(
+                                        key,
+                                        expanded,
+                                        expandedToolKeys,
+                                        autoExpandToolSections,
+                                    ) { expandedToolKeys = it }
                                 },
                                 onThinkingExpandedChange = { key, expanded ->
-                                    setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
+                                    setActivityExpanded(
+                                        key,
+                                        expanded,
+                                        expandedThinkingKeys,
+                                        autoExpandThinkingSections,
+                                    ) { expandedThinkingKeys = it }
                                 },
                                 onSkillOpen = onSkillOpen,
                                 onToolFileOpen = onToolFileOpen,
@@ -489,20 +505,36 @@ internal fun AgentTranscript(
                                 expanded = transcriptActivityExpanded(
                                     transcriptDisplayItemKey(item),
                                     expandedToolGroups,
-                                    autoExpandActivitySections,
+                                    autoExpandToolSections,
                                 ),
                                 onExpandedChange = { expanded ->
                                     val key = transcriptDisplayItemKey(item)
-                                    setActivityExpanded(key, expanded, expandedToolGroups) { expandedToolGroups = it }
+                                    setActivityExpanded(
+                                        key,
+                                        expanded,
+                                        expandedToolGroups,
+                                        autoExpandToolSections,
+                                    ) { expandedToolGroups = it }
                                 },
                                 expandedToolKeys = expandedToolKeys,
                                 expandedThinkingKeys = expandedThinkingKeys,
-                                autoExpandActivitySections = autoExpandActivitySections,
+                                autoExpandThinkingSections = autoExpandThinkingSections,
+                                autoExpandToolSections = autoExpandToolSections,
                                 onToolExpandedChange = { key, expanded ->
-                                    setActivityExpanded(key, expanded, expandedToolKeys) { expandedToolKeys = it }
+                                    setActivityExpanded(
+                                        key,
+                                        expanded,
+                                        expandedToolKeys,
+                                        autoExpandToolSections,
+                                    ) { expandedToolKeys = it }
                                 },
                                 onThinkingExpandedChange = { key, expanded ->
-                                    setActivityExpanded(key, expanded, expandedThinkingKeys) { expandedThinkingKeys = it }
+                                    setActivityExpanded(
+                                        key,
+                                        expanded,
+                                        expandedThinkingKeys,
+                                        autoExpandThinkingSections,
+                                    ) { expandedThinkingKeys = it }
                                 },
                                 onToolFileOpen = onToolFileOpen,
                                 knownTasks = knownTasks,
@@ -620,6 +652,7 @@ internal fun transcriptActivityExpanded(
 internal fun transcriptDisplayItems(
     events: List<AgentEvent>,
     collapseActivityBetweenMessages: Boolean = false,
+    keepThinkingOnTimeline: Boolean = false,
 ): List<TranscriptDisplayItem> {
     val display = transcriptDisplayEvents(events).filterNot { it is AgentEvent.ContextUsage }
     val items = mutableListOf<TranscriptDisplayItem>()
@@ -631,13 +664,22 @@ internal fun transcriptDisplayItems(
             index += 1
             continue
         }
+        // Keep thinking as first-class timeline rows when requested, even if tool activity collapses.
+        if (keepThinkingOnTimeline && event is AgentEvent.Thinking) {
+            items += TranscriptDisplayItem.Event(index, event)
+            index += 1
+            continue
+        }
         val startIndex = index
         val group = mutableListOf<AgentEvent>()
         while (index < display.size && display[index].isTranscriptActivityEvent()) {
-            group += display[index]
+            val next = display[index]
+            if (keepThinkingOnTimeline && next is AgentEvent.Thinking) break
+            group += next
             index += 1
         }
         when {
+            group.isEmpty() -> Unit
             group.size == 1 -> items += TranscriptDisplayItem.Event(startIndex, group.single())
             collapseActivityBetweenMessages -> items += TranscriptDisplayItem.ToolCalls(startIndex, group)
             group.all { it is AgentEvent.ToolCall || it is AgentEvent.ToolResult } ->
@@ -1294,7 +1336,8 @@ private fun CompactToolCallsBlock(
     onExpandedChange: (Boolean) -> Unit,
     expandedToolKeys: Set<String>,
     expandedThinkingKeys: Set<String>,
-    autoExpandActivitySections: Boolean,
+    autoExpandThinkingSections: Boolean,
+    autoExpandToolSections: Boolean,
     onToolExpandedChange: (String, Boolean) -> Unit,
     onThinkingExpandedChange: (String, Boolean) -> Unit,
     onToolFileOpen: (ToolCallFileContent) -> Unit,
@@ -1355,7 +1398,7 @@ private fun CompactToolCallsBlock(
                 when (event) {
                     is AgentEvent.Thinking -> ThinkingStep(
                         text = event.text,
-                        expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandActivitySections),
+                        expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandThinkingSections),
                         onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
                     )
                     is AgentEvent.ToolCall -> if (isSpawn) {
@@ -1369,7 +1412,7 @@ private fun CompactToolCallsBlock(
                         )
                     } else {
                         ToolBlock(
-                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
                             marker = "▸",
                             name = event.toolName,
@@ -1386,7 +1429,7 @@ private fun CompactToolCallsBlock(
                     }
                     is AgentEvent.ToolResult -> if (event.isError || !isSpawn) {
                         ToolBlock(
-                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandActivitySections),
+                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
                             marker = if (event.isError) "✗" else "✓",
                             name = event.toolName,

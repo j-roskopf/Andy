@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.remote.SshRemoteProbes
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
@@ -105,6 +106,14 @@ class McpAgentRunClient(
     private val json = Json { ignoreUnknownKeys = true }
     private val idSeq = AtomicLong(1)
     private val localWorktrees = WorktreeManager()
+    @Volatile private var sshProbeTarget: String? = null
+    @Volatile private var sshProbes: SshRemoteProbes? = null
+
+    /** Enable SSH-based git/skill discovery while the GUI is remoted to [target]. */
+    fun setSshProbeTarget(target: String?, controlPath: java.io.File? = null) {
+        sshProbeTarget = target?.trim()?.takeIf { it.isNotBlank() }
+        sshProbes = sshProbeTarget?.let { SshRemoteProbes(it, controlPath) }
+    }
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
     override val tasks: StateFlow<List<AgentTask>> = _tasks.asStateFlow()
@@ -631,45 +640,66 @@ class McpAgentRunClient(
 
     override suspend fun refreshProviderQuotas() = Unit
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
-    override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
-        val normalizedDirectory = directory
+    private fun normalizeProbeDirectory(directory: String?): String? {
+        val probes = sshProbes
+        return directory
             ?.takeIf { it.isNotBlank() }
-            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+            ?.let { path ->
+                if (probes != null) path
+                else runCatching { File(path).canonicalPath }.getOrElse { path }
+            }
+    }
+
+    override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> {
+        val probes = sshProbes
+        val normalizedDirectory = normalizeProbeDirectory(directory)
         val skillScope = SkillScope(agent, normalizedDirectory)
         val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
         if (loadedSkillScopes.add(skillScope)) {
             scope.launch(Dispatchers.IO) {
-                flow.value = discoverAgentSkills(agent, normalizedDirectory)
+                flow.value = if (probes != null) {
+                    runCatching { probes.discoverSkills(agent, normalizedDirectory) }.getOrDefault(emptyList())
+                } else {
+                    discoverAgentSkills(agent, normalizedDirectory)
+                }
             }
         }
         return flow
     }
 
     override fun knownSkillNames(directory: String?): StateFlow<Set<String>> {
-        val normalizedDirectory = directory
-            ?.takeIf { it.isNotBlank() }
-            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val probes = sshProbes
+        val normalizedDirectory = normalizeProbeDirectory(directory)
         val skillScope = KnownSkillScope(normalizedDirectory)
         val flow = knownSkillNameFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptySet()) }
         if (loadedKnownSkillScopes.add(skillScope)) {
             scope.launch(Dispatchers.IO) {
-                flow.value = discoverKnownAgentSkillNames(normalizedDirectory)
+                flow.value = if (probes != null) {
+                    runCatching { probes.knownSkillNames(normalizedDirectory) }.getOrDefault(emptySet())
+                } else {
+                    discoverKnownAgentSkillNames(normalizedDirectory)
+                }
             }
         }
         return flow
     }
 
     override fun refreshSkills(agent: AgentKind, directory: String?) {
-        val normalizedDirectory = directory
-            ?.takeIf { it.isNotBlank() }
-            ?.let { path -> runCatching { File(path).canonicalPath }.getOrElse { path } }
+        val probes = sshProbes
+        val normalizedDirectory = normalizeProbeDirectory(directory)
         val skillScope = SkillScope(agent, normalizedDirectory)
         val flow = skillFlows.computeIfAbsent(skillScope) { MutableStateFlow(emptyList()) }
         loadedSkillScopes.add(skillScope)
         scope.launch(Dispatchers.IO) {
-            flow.value = discoverAgentSkills(agent, normalizedDirectory)
-            knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
-                discoverKnownAgentSkillNames(normalizedDirectory)
+            if (probes != null) {
+                flow.value = runCatching { probes.discoverSkills(agent, normalizedDirectory) }.getOrDefault(emptyList())
+                knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
+                    runCatching { probes.knownSkillNames(normalizedDirectory) }.getOrDefault(emptySet())
+            } else {
+                flow.value = discoverAgentSkills(agent, normalizedDirectory)
+                knownSkillNameFlows[KnownSkillScope(normalizedDirectory)]?.value =
+                    discoverKnownAgentSkillNames(normalizedDirectory)
+            }
         }
     }
 
@@ -1057,21 +1087,19 @@ class McpAgentRunClient(
         refreshComposerOptions()
     }
     override suspend fun isGitRepo(dir: String): Boolean = withContext(Dispatchers.IO) {
-        localWorktrees.isGitRepo(dir)
+        val probes = sshProbes
+        if (probes != null) probes.isGitRepo(dir) else localWorktrees.isGitRepo(dir)
     }
     override suspend fun currentBranch(dir: String): String? = withContext(Dispatchers.IO) {
-        localWorktrees.currentBranch(dir)
+        val probes = sshProbes
+        if (probes != null) probes.currentBranch(dir) else localWorktrees.currentBranch(dir)
     }
     override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> {
-        val onDiskPaths = withContext(Dispatchers.IO) {
-            localWorktrees.listAll(originDir).mapTo(linkedSetOf()) { canonicalPath(it.path) }
-        }
-        return _tasks.value.filter { task ->
+        val tracked = _tasks.value.filter { task ->
             task.originDir == originDir &&
                 !task.archived &&
                 task.branchName != null &&
-                task.worktreePath != null &&
-                canonicalPath(task.worktreePath) in onDiskPaths
+                task.worktreePath != null
         }.map { task ->
             WorktreeBaseOption(
                 taskId = task.id,
@@ -1080,8 +1108,40 @@ class McpAgentRunClient(
                 path = task.worktreePath!!,
             )
         }
+        val probes = sshProbes
+        if (probes != null) {
+            return probes.worktreeBaseOptions(originDir, tracked)
+        }
+        val onDiskPaths = withContext(Dispatchers.IO) {
+            localWorktrees.listAll(originDir).mapTo(linkedSetOf()) { canonicalPath(it.path) }
+        }
+        return tracked.filter { canonicalPath(it.path) in onDiskPaths }
     }
     override suspend fun worktreeTree(originDir: String): List<WorktreeNode> {
+        val probes = sshProbes
+        if (probes != null) {
+            val onDisk = probes.worktreeTree(originDir)
+            val trackedByPath = _tasks.value
+                .filter { it.originDir == originDir && it.worktreePath != null }
+                .groupBy { it.worktreePath!! }
+                .mapValues { (_, group) ->
+                    group.firstOrNull { it.ownsWorktree }
+                        ?: group.minByOrNull { it.createdAtMillis }
+                        ?: group.first()
+                }
+            return onDisk.map { info ->
+                val task = trackedByPath[info.path]
+                WorktreeNode(
+                    path = info.path,
+                    branch = info.branch,
+                    isMain = info.isMain,
+                    taskId = task?.id,
+                    taskTitle = task?.title,
+                    parentTaskId = task?.parentWorktreeTaskId,
+                    tracked = task != null,
+                )
+            }
+        }
         val onDisk = withContext(Dispatchers.IO) { localWorktrees.listAll(originDir) }
         val trackedByPath = _tasks.value
             .filter { it.originDir == originDir && it.worktreePath != null }

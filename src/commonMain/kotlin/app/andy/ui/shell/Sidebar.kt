@@ -1,14 +1,9 @@
 package app.andy.ui.shell
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -40,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -96,6 +92,8 @@ internal fun Sidebar(
     updates: AppUpdateService?,
     mcpRunning: Boolean,
     mcpPort: Int,
+    remoteSession: app.andy.service.RemoteSessionService? = null,
+    remoteSessionState: app.andy.service.RemoteSessionState = app.andy.service.RemoteSessionState(),
     /** Clears traffic-light / title-bar chrome while keeping SidebarBg full-bleed underneath. */
     contentTopPadding: Dp = 0.dp,
 ) {
@@ -105,6 +103,17 @@ internal fun Sidebar(
         remember { mutableStateOf<AppUpdateState>(AppUpdateState.Idle) }
     }
     val scope = rememberCoroutineScope()
+    var hostPanelOpen by remember { mutableStateOf(false) }
+
+    fun setHostPanelOpen(open: Boolean) {
+        hostPanelOpen = open
+        if (open) onStatusExpandedChange(false)
+    }
+
+    fun setStatusExpanded(open: Boolean) {
+        onStatusExpandedChange(open)
+        if (open) hostPanelOpen = false
+    }
     val spatialSpec = tween<androidx.compose.ui.unit.Dp>(
         durationMillis = AndyMotion.SpatialMs,
         easing = FastOutSlowInEasing,
@@ -279,106 +288,85 @@ internal fun Sidebar(
             }
             }
         }
+        if (remoteSession != null) {
+            RemoteSessionSidebarControls(
+                remoteSession = remoteSession,
+                session = remoteSessionState,
+                expanded = expanded,
+                panelOpen = hostPanelOpen,
+                onPanelOpenChange = ::setHostPanelOpen,
+            )
+        }
         if (expanded) {
-            Column(
-                Modifier.fillMaxWidth()
-                    .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space2),
-                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            SidebarCollapsiblePanel(
+                title = "System",
+                detail = "v${app.andy.updates.AndyBuildInfo.versionName}",
+                expanded = statusExpanded,
+                onExpandedChange = ::setStatusExpanded,
+                showTopDivider = remoteSession != null,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onStatusExpandedChange(!statusExpanded) },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                ) {
-                    Text(
-                        "v${app.andy.updates.AndyBuildInfo.versionName}",
-                        color = AndyColors.TextTertiary,
-                        fontFamily = DisplayFont,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        if (statusExpanded) "▾" else "▸",
-                        color = AndyColors.TextTertiary,
-                        fontFamily = DisplayFont,
-                        fontSize = 10.sp,
-                    )
+                Text(
+                    "H.264 embedded",
+                    color = AndyColors.TextTertiary,
+                    fontFamily = DisplayFont,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                )
+                if (updates != null) {
+                    StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
+                    StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
+                    StatusRow("Proxy CA", "local", true)
+                    StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
+                } else {
+                    StatusRow("Web ADB", if (deviceCount > 0) "connected" else "disconnected", deviceCount > 0)
+                    StatusRow("Local only", "port 10000", true)
                 }
-                AnimatedVisibility(
-                    visible = statusExpanded,
-                    enter = expandVertically(animationSpec = tween(AndyMotion.StandardMs, easing = FastOutSlowInEasing)) +
-                        fadeIn(tween(AndyMotion.FastMs)),
-                    exit = shrinkVertically(animationSpec = tween(AndyMotion.SmallMinMs, easing = FastOutSlowInEasing)) +
-                        fadeOut(tween(AndyMotion.MicroMinMs)),
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
-                        Text(
-                            "H.264 embedded",
-                            color = AndyColors.TextTertiary,
-                            fontFamily = DisplayFont,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                        )
-                        if (updates != null) {
-                            StatusRow("ADB server", if (sdk.hasAdb) "ready" else "missing", sdk.hasAdb)
-                            StatusRow("AVD tools", if (sdk.hasEmulatorTools) "ready" else "missing", sdk.hasEmulatorTools)
-                            StatusRow("Proxy CA", "local", true)
-                            StatusRow("MCP server", if (mcpRunning) "running :$mcpPort" else "stopped", mcpRunning)
-                        } else {
-                            StatusRow("Web ADB", if (deviceCount > 0) "connected" else "disconnected", deviceCount > 0)
-                            StatusRow("Local only", "port 10000", true)
+
+                AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = AndySpace.Space1))
+
+                if (updates != null) {
+                    val updateText = when (updateState) {
+                        AppUpdateState.Idle -> "Check for updates"
+                        AppUpdateState.Checking -> "Checking for updates..."
+                        AppUpdateState.Current -> "Andy is up to date"
+                        is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
+                        is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
+                            val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
+                            "${it.message}$pct"
                         }
+                        is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
+                    }
 
-                        AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = AndySpace.Space1))
+                    val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
+                    val updateColor = when (updateState) {
+                        is AppUpdateState.Available -> Rust
+                        is AppUpdateState.Failed -> Red
+                        else -> TextSecondary
+                    }
 
-                        if (updates != null) {
-                            val updateText = when (updateState) {
-                                AppUpdateState.Idle -> "Check for updates"
-                                AppUpdateState.Checking -> "Checking for updates..."
-                                AppUpdateState.Current -> "Andy is up to date"
-                                is AppUpdateState.Available -> "Update to v${(updateState as AppUpdateState.Available).update.versionName}"
-                                is AppUpdateState.Installing -> (updateState as AppUpdateState.Installing).let {
-                                    val pct = it.progress?.let { p -> " ${(p * 100).toInt()}%" } ?: ""
-                                    "${it.message}$pct"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (isActionable) Modifier.clickable {
+                                scope.launch {
+                                    if (updateState is AppUpdateState.Available) {
+                                        updates.installAvailableUpdate()
+                                    } else {
+                                        updates.checkForUpdates()
+                                    }
                                 }
-                                is AppUpdateState.Failed -> (updateState as AppUpdateState.Failed).message
-                            }
-
-                            val isActionable = updateState is AppUpdateState.Idle || updateState is AppUpdateState.Available || updateState is AppUpdateState.Failed
-                            val updateColor = when (updateState) {
-                                is AppUpdateState.Available -> Rust
-                                is AppUpdateState.Failed -> Red
-                                else -> TextSecondary
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(if (isActionable) Modifier.clickable {
-                                        scope.launch {
-                                            if (updateState is AppUpdateState.Available) {
-                                                updates.installAvailableUpdate()
-                                            } else {
-                                                updates.checkForUpdates()
-                                            }
-                                        }
-                                    } else Modifier)
-                                    .padding(vertical = AndySpace.Space1),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = updateText,
-                                    color = updateColor,
-                                    fontSize = 11.sp,
-                                    fontFamily = DisplayFont,
-                                    fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Medium else FontWeight.Normal
-                                )
-                            }
-                        }
+                            } else Modifier)
+                            .padding(vertical = AndySpace.Space1),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = updateText,
+                            color = updateColor,
+                            fontSize = 11.sp,
+                            fontFamily = DisplayFont,
+                            fontWeight = if (updateState is AppUpdateState.Available) FontWeight.Medium else FontWeight.Normal,
+                        )
                     }
                 }
             }

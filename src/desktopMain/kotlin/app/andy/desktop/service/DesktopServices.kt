@@ -1,5 +1,11 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.remote.AndroidBackendSwitcher
+import app.andy.desktop.service.remote.DesktopRemoteSessionService
+import app.andy.desktop.service.remote.SwappableAgentBackend
+import app.andy.desktop.service.remote.SwappableAutomationService
+import app.andy.desktop.service.remote.SwappableAvdService
+import app.andy.desktop.service.remote.SwappableDeviceService
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.AgentTerminalMode
 import app.andy.desktop.service.agents.AntigravityAdapter
@@ -141,10 +147,14 @@ fun createDaemonRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
     )
-    val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
-    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
-    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
+    val localAvd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
+    val avd = SwappableAvdService(localAvd)
+    val localAndroidApps = DesktopAppService(runner, devices)
+    val localAndroidFiles = DesktopFileService(runner, devices)
+    val localAndroidIntents = DesktopIntentService(runner, devices)
+    val intents = RoutingIntentService(localAndroidIntents, DesktopIosIntentService(runner))
+    val apps = RoutingAppService(localAndroidApps, DesktopIosAppService(runner))
+    val files = RoutingFileService(localAndroidFiles, DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
     val proxy = DesktopProxyService(runner, devices)
     val accessibility = DesktopAccessibilityService(runner, devices)
@@ -175,7 +185,7 @@ fun createDaemonRuntime(
 
     val mcp = DesktopMcpServerService(
         devices = devices,
-        avd = avd,
+        avd = localAvd,
         mirror = mirror,
         logcat = logcat,
         intents = intents,
@@ -377,17 +387,19 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     runBlocking { store.load() }
-    val devices = DesktopDeviceService(runner, locator, store)
+    val localDevices = DesktopDeviceService(runner, locator, store)
+    val devices = SwappableDeviceService(localDevices)
     val iosDevices = DesktopIosDeviceService(runner)
-    val androidMirror = DesktopMirrorEngine(runner, devices)
+    val androidMirror = DesktopMirrorEngine(runner, localDevices)
     val iosMirror = DesktopIosMirrorEngine(iosDevices, store)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val popOutMirrors = DesktopPopOutMirrorPool(
         primary = mirror,
-        newAndroid = { DesktopMirrorEngine(runner, devices) },
+        newAndroid = { DesktopMirrorEngine(runner, localDevices) },
         newIos = { DesktopIosMirrorEngine(iosDevices, store) },
     )
-    val logcat = RoutingLogcatService(DesktopLogcatService(runner, devices), DesktopIosLogcatService(runner))
+    val localAndroidLogcat = DesktopLogcatService(runner, localDevices)
+    val logcat = RoutingLogcatService(localAndroidLogcat, DesktopIosLogcatService(runner))
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
@@ -402,22 +414,26 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
     )
-    val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
-    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
-    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
+    val localAvd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
+    val avd = SwappableAvdService(localAvd)
+    val localAndroidApps = DesktopAppService(runner, localDevices)
+    val localAndroidFiles = DesktopFileService(runner, localDevices)
+    val localAndroidIntents = DesktopIntentService(runner, localDevices)
+    val intents = RoutingIntentService(localAndroidIntents, DesktopIosIntentService(runner))
+    val apps = RoutingAppService(localAndroidApps, DesktopIosAppService(runner))
+    val files = RoutingFileService(localAndroidFiles, DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
-    val proxy = DesktopProxyService(runner, devices)
-    val accessibility = DesktopAccessibilityService(runner, devices)
-    val viewHierarchy = DesktopViewHierarchyService(runner, devices)
-    val tracing = DesktopTracingService(runner, devices, files)
+    val proxy = DesktopProxyService(runner, localDevices)
+    val accessibility = DesktopAccessibilityService(runner, localDevices)
+    val viewHierarchy = DesktopViewHierarchyService(runner, localDevices)
+    val tracing = DesktopTracingService(runner, localDevices, files)
     val traceViewer = DesktopTraceViewerService()
-    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, devices), DesktopIosSharedPrefsService(runner))
-    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, devices), DesktopIosAppDatabaseService(runner))
-    val dhu = DesktopDhuService(devices = devices, runner = runner)
-    val metrics = DesktopMetricsService(runner, devices)
-    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(devices), DesktopIosCrashInspectorService(runner))
-    val heapDump = DesktopHeapDumpService(runner, devices, files)
+    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, localDevices), DesktopIosSharedPrefsService(runner))
+    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, localDevices), DesktopIosAppDatabaseService(runner))
+    val dhu = DesktopDhuService(devices = localDevices, runner = runner)
+    val metrics = DesktopMetricsService(runner, localDevices)
+    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(localDevices), DesktopIosCrashInspectorService(runner))
+    val heapDump = DesktopHeapDumpService(runner, localDevices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
@@ -438,8 +454,8 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val mcp = DesktopMcpServerService(
-        devices = devices,
-        avd = avd,
+        devices = localDevices,
+        avd = localAvd,
         mirror = mirror,
         logcat = logcat,
         intents = intents,
@@ -458,8 +474,9 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     )
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
+    val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val remoteAgents = McpAgentRunClient(
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        scope = agentScope,
         socketPath = socket,
     )
     // Attach-only terminal host: must not open ~/.andy/agents.db. andyd owns that
@@ -494,6 +511,39 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         ownsAgentSessions = false,
     )
     remoteAgents.attachLocalTerminalBridge(localAttach)
+    val swappableAgents = SwappableAgentBackend(remoteAgents, agentScope)
+    val swappableAutomations = SwappableAutomationService(remoteAgents, agentScope)
+    val androidBackend = AndroidBackendSwitcher(
+        scope = agentScope,
+        devices = devices,
+        avd = avd,
+        mirror = mirror,
+        logcat = logcat,
+        apps = apps,
+        files = files,
+        intents = intents,
+        localDevices = localDevices,
+        localAvd = localAvd,
+        localAndroidMirror = androidMirror,
+        localAndroidLogcat = localAndroidLogcat,
+        localAndroidApps = localAndroidApps,
+        localAndroidFiles = localAndroidFiles,
+        localAndroidIntents = localAndroidIntents,
+        baseRunner = runner,
+        sdkLocator = locator,
+        workspaceStore = store,
+        selectedSdkPath = { store.state.value.selectedSdkPath },
+    )
+    val remoteSession = DesktopRemoteSessionService(
+        workspaceStore = store,
+        scope = agentScope,
+        attachBridge = localAttach,
+        agentBackend = swappableAgents,
+        automationBackend = swappableAutomations,
+        localAgentBackend = remoteAgents,
+        localAutomations = remoteAgents,
+        androidBackend = androidBackend,
+    )
 
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
     // Do not open a second writer here — use UnavailableKanbanService until the daemon
@@ -514,7 +564,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
 
     val localServers = DesktopLocalServerService(
         runner = runner,
-        agentRuns = remoteAgents,
+        agentRuns = swappableAgents,
         actionRuns = actionRuns,
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     )
@@ -534,10 +584,10 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         accessibility = accessibility,
         viewHierarchy = viewHierarchy,
         bugs = bugService,
-        artifacts = DesktopArtifactService(runner, devices, mirror),
+        artifacts = DesktopArtifactService(runner, localDevices, mirror),
         projectArtifacts = DesktopProjectArtifactCatalogService(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-            agentRuns = remoteAgents,
+            agentRuns = swappableAgents,
             bugs = bugService,
         ),
         recordingExport = recordingExportService,
@@ -553,22 +603,23 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         updates = updates,
         runtimeBundle = runtimeBundle,
         cliUpdates = DesktopCliUpdateCheckService(
-            agentRuns = remoteAgents,
+            agentRuns = swappableAgents,
             actionRuns = actionRuns,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         ),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
-        agentRuns = remoteAgents,
-        projectWorkflows = remoteAgents,
+        agentRuns = swappableAgents,
+        projectWorkflows = swappableAgents,
         kanban = kanban,
-        automations = remoteAgents,
+        automations = swappableAutomations,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
         orchestrationPreferences = orchestrationPreferences,
         localServers = localServers,
+        remoteSession = remoteSession,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
@@ -583,17 +634,19 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val locator = SdkLocator()
     val store = DesktopWorkspaceStore()
     runBlocking { store.load() }
-    val devices = DesktopDeviceService(runner, locator, store)
+    val localDevices = DesktopDeviceService(runner, locator, store)
+    val devices = SwappableDeviceService(localDevices)
     val iosDevices = DesktopIosDeviceService(runner)
-    val androidMirror = DesktopMirrorEngine(runner, devices)
+    val androidMirror = DesktopMirrorEngine(runner, localDevices)
     val iosMirror = DesktopIosMirrorEngine(iosDevices, store)
     val mirror = RoutingMirrorEngine(androidMirror, iosMirror)
     val popOutMirrors = DesktopPopOutMirrorPool(
         primary = mirror,
-        newAndroid = { DesktopMirrorEngine(runner, devices) },
+        newAndroid = { DesktopMirrorEngine(runner, localDevices) },
         newIos = { DesktopIosMirrorEngine(iosDevices, store) },
     )
-    val logcat = RoutingLogcatService(DesktopLogcatService(runner, devices), DesktopIosLogcatService(runner))
+    val localAndroidLogcat = DesktopLogcatService(runner, localDevices)
+    val logcat = RoutingLogcatService(localAndroidLogcat, DesktopIosLogcatService(runner))
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
@@ -609,22 +662,26 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         terminalAppearance = { store.state.value.toTerminalAppearance() },
     )
 
-    val avd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
-    val intents = RoutingIntentService(DesktopIntentService(runner, devices), DesktopIosIntentService(runner))
-    val apps = RoutingAppService(DesktopAppService(runner, devices), DesktopIosAppService(runner))
-    val files = RoutingFileService(DesktopFileService(runner, devices), DesktopIosFileService(runner))
+    val localAvd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
+    val avd = SwappableAvdService(localAvd)
+    val localAndroidApps = DesktopAppService(runner, localDevices)
+    val localAndroidFiles = DesktopFileService(runner, localDevices)
+    val localAndroidIntents = DesktopIntentService(runner, localDevices)
+    val intents = RoutingIntentService(localAndroidIntents, DesktopIosIntentService(runner))
+    val apps = RoutingAppService(localAndroidApps, DesktopIosAppService(runner))
+    val files = RoutingFileService(localAndroidFiles, DesktopIosFileService(runner))
     val hostFiles = DesktopHostFileService(scope = CoroutineScope(SupervisorJob() + Dispatchers.IO))
-    val proxy = DesktopProxyService(runner, devices)
-    val accessibility = DesktopAccessibilityService(runner, devices)
-    val viewHierarchy = DesktopViewHierarchyService(runner, devices)
-    val tracing = DesktopTracingService(runner, devices, files)
+    val proxy = DesktopProxyService(runner, localDevices)
+    val accessibility = DesktopAccessibilityService(runner, localDevices)
+    val viewHierarchy = DesktopViewHierarchyService(runner, localDevices)
+    val tracing = DesktopTracingService(runner, localDevices, files)
     val traceViewer = DesktopTraceViewerService()
-    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, devices), DesktopIosSharedPrefsService(runner))
-    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, devices), DesktopIosAppDatabaseService(runner))
-    val dhu = DesktopDhuService(devices = devices, runner = runner)
-    val metrics = DesktopMetricsService(runner, devices)
-    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(devices), DesktopIosCrashInspectorService(runner))
-    val heapDump = DesktopHeapDumpService(runner, devices, files)
+    val sharedPrefs = RoutingSharedPrefsService(DesktopSharedPrefsService(runner, localDevices), DesktopIosSharedPrefsService(runner))
+    val appDatabase = RoutingAppDatabaseService(DesktopAppDatabaseService(runner, localDevices), DesktopIosAppDatabaseService(runner))
+    val dhu = DesktopDhuService(devices = localDevices, runner = runner)
+    val metrics = DesktopMetricsService(runner, localDevices)
+    val crashInspector = RoutingCrashInspectorService(DesktopCrashInspectorService(localDevices), DesktopIosCrashInspectorService(runner))
+    val heapDump = DesktopHeapDumpService(runner, localDevices, files)
     Runtime.getRuntime().addShutdownHook(Thread {
         runCatching { traceViewer.shutdown() }
     })
@@ -645,8 +702,8 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val mcp = DesktopMcpServerService(
-        devices = devices,
-        avd = avd,
+        devices = localDevices,
+        avd = localAvd,
         mirror = mirror,
         logcat = logcat,
         intents = intents,
@@ -665,8 +722,9 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
+    val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val agentRuns = DesktopAgentRunService(
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        scope = agentScope,
         store = agentTaskStore,
         locator = AgentCliLocator(),
         adapters = mapOf(
@@ -692,6 +750,66 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         startScheduler = true,
     )
     mcp.bindAgentServices(agentRuns, agentRuns, automations)
+    val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
+    val localAttach = DesktopAgentRunService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        store = DesktopAgentTaskStore(
+            databaseFile = File(attachStoreDir, "agents-remote-${ProcessHandle.current().pid()}.db"),
+            transcriptsDir = defaultAndyAgentArtifactsDir(),
+        ),
+        locator = AgentCliLocator(),
+        adapters = mapOf(
+            AgentKind.ClaudeCode to ClaudeCodeAdapter(),
+            AgentKind.Codex to CodexAdapter(),
+            AgentKind.Cursor to CursorAdapter(),
+            AgentKind.Antigravity to AntigravityAdapter(),
+            AgentKind.OpenCode to OpenCodeAdapter(),
+            AgentKind.Pi to PiAdapter(),
+            AgentKind.Hermes to HermesAdapter(),
+            AgentKind.OpenClaw to OpenClawAdapter(),
+            AgentKind.Goose to GooseAdapter(),
+        ),
+        worktrees = WorktreeManager(),
+        mcp = mcp,
+        workspaceStore = store,
+        actionConfig = actionConfig,
+        enableProbes = false,
+        terminalMode = AgentTerminalMode.TmuxWithAttach,
+        ownsAgentSessions = false,
+    )
+    val swappableAgents = SwappableAgentBackend(agentRuns, agentScope)
+    val swappableAutomations = SwappableAutomationService(automations, agentScope)
+    val androidBackend = AndroidBackendSwitcher(
+        scope = agentScope,
+        devices = devices,
+        avd = avd,
+        mirror = mirror,
+        logcat = logcat,
+        apps = apps,
+        files = files,
+        intents = intents,
+        localDevices = localDevices,
+        localAvd = localAvd,
+        localAndroidMirror = androidMirror,
+        localAndroidLogcat = localAndroidLogcat,
+        localAndroidApps = localAndroidApps,
+        localAndroidFiles = localAndroidFiles,
+        localAndroidIntents = localAndroidIntents,
+        baseRunner = runner,
+        sdkLocator = locator,
+        workspaceStore = store,
+        selectedSdkPath = { store.state.value.selectedSdkPath },
+    )
+    val remoteSession = DesktopRemoteSessionService(
+        workspaceStore = store,
+        scope = agentScope,
+        attachBridge = localAttach,
+        agentBackend = swappableAgents,
+        automationBackend = swappableAutomations,
+        localAgentBackend = agentRuns,
+        localAutomations = automations,
+        androidBackend = androidBackend,
+    )
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -711,6 +829,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
             .collect {
                 actionRuns.reloadAppearance()
                 agentRuns.reloadTerminalAppearance()
+                localAttach.reloadTerminalAppearance()
             }
     }
 
@@ -732,7 +851,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
 
     val localServers = DesktopLocalServerService(
         runner = runner,
-        agentRuns = agentRuns,
+        agentRuns = swappableAgents,
         actionRuns = actionRuns,
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     )
@@ -752,10 +871,10 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         accessibility = accessibility,
         viewHierarchy = viewHierarchy,
         bugs = bugService,
-        artifacts = DesktopArtifactService(runner, devices, mirror),
+        artifacts = DesktopArtifactService(runner, localDevices, mirror),
         projectArtifacts = DesktopProjectArtifactCatalogService(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-            agentRuns = agentRuns,
+            agentRuns = swappableAgents,
             bugs = bugService,
         ),
         recordingExport = recordingExportService,
@@ -771,23 +890,24 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         updates = updates,
         runtimeBundle = runtimeBundle,
         cliUpdates = DesktopCliUpdateCheckService(
-            agentRuns = agentRuns,
+            agentRuns = swappableAgents,
             actionRuns = actionRuns,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         ),
         mcp = mcp,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
-        agentRuns = agentRuns,
+        agentRuns = swappableAgents,
         agentRetention = agentRetention,
-        projectWorkflows = agentRuns,
+        projectWorkflows = swappableAgents,
         kanban = kanban,
-        automations = automations,
+        automations = swappableAutomations,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
         orchestrationPreferences = orchestrationPreferences,
         localServers = localServers,
+        remoteSession = remoteSession,
         capabilities = PlatformCapabilities.Desktop.copy(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
