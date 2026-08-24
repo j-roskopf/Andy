@@ -255,10 +255,10 @@ private fun SideChatStarter(
             input = {
                 Box(Modifier.fillMaxWidth()) {
                     TextField(
-                        value = draftField.text,
+                        value = draftField,
                         onValueChange = {
-                            draftField = TextFieldValue(it)
-                            draft = it
+                            draftField = it
+                            draft = it.text
                         },
                         enabled = !launching,
                         singleLine = false,

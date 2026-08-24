@@ -853,7 +853,10 @@ internal fun AgentTaskDetail(
                 drawerItems = followUpDrawerItems,
                 contextFraction = contextStatus?.fraction,
                 onMentionClick = if (task.userInputRequest == null) {
-                    { followUpValue = insertTextAtCursor(followUpValue, "@") }
+                    {
+                        followUpValue = insertTextAtCursor(followUpValue, "@")
+                        skillMenuDismissed = false
+                    }
                 } else {
                     null
                 },

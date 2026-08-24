@@ -780,7 +780,10 @@ private fun AgentChatComposer(
             highlighted = state.imageDragActive,
             drawerItems = drawerItems,
             onMentionClick = if (hasAvailableProvider) {
-                { state.promptValue = insertTextAtCursor(state.promptValue, "@") }
+                {
+                    state.promptValue = insertTextAtCursor(state.promptValue, "@")
+                    state.skillMenuDismissed = false
+                }
             } else {
                 null
             },
