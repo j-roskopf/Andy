@@ -28,7 +28,9 @@ import app.andy.model.groupedByModelFamily
 import app.andy.model.isLocalModelBackend
 import app.andy.model.labelFor
 import app.andy.model.runtimeKind
-import app.andy.ui.components.ComposerChip
+import app.andy.ui.components.ComposerModelChip
+import app.andy.ui.components.ComposerPermissionsChip
+import app.andy.ui.components.ComposerProviderChip
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -53,14 +55,19 @@ internal fun ComposerProfileChips(
 ) {
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
+    var permissionsMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
-    var sandboxMenuExpanded by remember { mutableStateOf(false) }
     val runtime = agent.runtimeKind(localRuntime)
+    val modelLabel = when {
+        modelId == ComposerCustomModelId -> "custom"
+        selectedModel != null -> selectedModel.label
+        else -> "Default model"
+    }
+    val permissionsLabel = sandboxMode.labelFor(runtime)
 
     Box {
-        ComposerChip(
+        ComposerProviderChip(
             text = AgentPickerOption(agent, localRuntime.takeIf { agent.isLocalModelBackend }).label,
-            selected = true,
             onClick = { agentMenuExpanded = true },
             leadingContent = { AgentPillIcon(agent) },
         )
@@ -90,14 +97,8 @@ internal fun ComposerProfileChips(
         }
     }
     Box {
-        val modelLabel = when {
-            modelId == ComposerCustomModelId -> "custom"
-            selectedModel != null -> selectedModel.label
-            else -> "Default model"
-        }
-        ComposerChip(
+        ComposerModelChip(
             text = modelLabel,
-            selected = modelId != null,
             onClick = { modelMenuExpanded = true },
         )
         DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
@@ -155,48 +156,46 @@ internal fun ComposerProfileChips(
             )
         }
     }
-    selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
-        Box {
-            ComposerChip(
-                text = reasoningEffort?.label ?: "Effort",
-                selected = reasoningEffort != null,
-                onClick = { effortMenuExpanded = true },
-            )
-            DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                if (agent != AgentKind.Cursor) {
-                    DropdownMenuItem(
-                        text = { Text("provider default", color = TextPrimary) },
-                        onClick = {
-                            onReasoningEffortChange(null)
-                            effortMenuExpanded = false
-                        },
-                    )
-                }
-                model.efforts.forEach { effort ->
-                    DropdownMenuItem(
-                        text = { Text(effort.label, color = TextPrimary) },
-                        onClick = {
-                            onReasoningEffortChange(effort)
-                            effortMenuExpanded = false
-                        },
-                    )
-                }
-            }
-        }
-    }
     Box {
-        ComposerChip(
-            text = sandboxMode.labelFor(runtime),
-            selected = true,
-            onClick = { sandboxMenuExpanded = true },
+        ComposerPermissionsChip(
+            text = permissionsLabel,
+            onClick = { permissionsMenuExpanded = true },
         )
-        DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
+        DropdownMenu(expanded = permissionsMenuExpanded, onDismissRequest = { permissionsMenuExpanded = false }) {
             AgentSandboxMode.entries.forEach { mode ->
                 DropdownMenuItem(
                     text = { Text(mode.labelFor(runtime), color = TextPrimary) },
                     onClick = {
                         onSandboxChange(mode)
-                        sandboxMenuExpanded = false
+                        permissionsMenuExpanded = false
+                    },
+                )
+            }
+            selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
+                DropdownMenuItem(
+                    text = { Text("Effort: ${reasoningEffort?.label ?: "default"}", color = TextPrimary) },
+                    onClick = { effortMenuExpanded = true; permissionsMenuExpanded = false },
+                )
+            }
+        }
+    }
+    selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
+        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+            if (agent != AgentKind.Cursor) {
+                DropdownMenuItem(
+                    text = { Text("provider default", color = TextPrimary) },
+                    onClick = {
+                        onReasoningEffortChange(null)
+                        effortMenuExpanded = false
+                    },
+                )
+            }
+            model.efforts.forEach { effort ->
+                DropdownMenuItem(
+                    text = { Text(effort.label, color = TextPrimary) },
+                    onClick = {
+                        onReasoningEffortChange(effort)
+                        effortMenuExpanded = false
                     },
                 )
             }

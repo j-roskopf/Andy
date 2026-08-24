@@ -114,6 +114,41 @@ internal fun ComponentGallery(modifier: Modifier = Modifier) {
                 onSelect = { segmentIndex = it },
             )
         }
+        GallerySection("Chat composer") {
+            var composerDraft by remember { mutableStateOf("") }
+            ChatComposerLayout(
+                modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
+                drawerItems = listOf(
+                    ChatComposerDrawerItem("1", "design-spec.pdf", onRemove = {}),
+                    ChatComposerDrawerItem("2", "requirements.docx", onRemove = {}),
+                    ChatComposerDrawerItem("3", "api-spec.yaml", onRemove = {}),
+                ),
+                contextFraction = 0.62f,
+                onMentionClick = {},
+                onAttachClick = {},
+                input = {
+                    TextField(
+                        value = composerDraft,
+                        onValueChange = { composerDraft = it },
+                        singleLine = false,
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = fieldColors(),
+                        chromeStyle = FieldChromeStyle.Borderless,
+                        placeholder = { ComposerPlaceholderHint("Ask me anything…") },
+                    )
+                },
+                bottomBarLeading = {
+                    ComposerProviderChip(text = "Cursor", onClick = {})
+                    ComposerModelChip(text = "Auto", onClick = {})
+                    ComposerPermissionsChip(text = "Standard", onClick = {})
+                },
+                bottomBarTrailing = {
+                    ChatSendButton(onClick = {}, enabled = composerDraft.isNotBlank())
+                },
+            )
+        }
         GallerySection("Chat") {
             Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space1 + ChatBubbleGroupPullUp)) {
                 ChatMessageBubble(

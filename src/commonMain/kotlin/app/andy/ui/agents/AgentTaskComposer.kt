@@ -7,8 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,23 +102,26 @@ import app.andy.model.parseAgentGoalCommand
 import app.andy.onImageFilesDropped
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.ui.components.ChatComposerFrame
-import app.andy.ui.components.ChatImageAttachButton
+import app.andy.ui.components.ChatComposerLayout
+import app.andy.ui.components.ComposerModelChip
+import app.andy.ui.components.ComposerPermissionsChip
+import app.andy.ui.components.ComposerProviderChip
+import app.andy.ui.components.VoiceDictationButtonStyle
+import app.andy.ui.components.chatComposerDrawerItemsFromPaths
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.ComposerChip
 import app.andy.ui.components.ComposerPlaceholderHint
-import app.andy.ui.components.ComposerToolbarRow
 import app.andy.ui.components.HoverTooltip
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
-import app.andy.ui.components.FilterPill
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
@@ -724,7 +725,6 @@ private fun AgentChatComposer(
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
-    var sandboxMenuExpanded by remember { mutableStateOf(false) }
     var voiceError by remember { mutableStateOf<String?>(null) }
     val canSubmit = form.canSubmit
     val hasAvailableProvider = form.hasAvailableProvider
@@ -743,6 +743,23 @@ private fun AgentChatComposer(
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
     fun selectFileMention(result: HostSearchResult) = form.selectFileMention(result)
 
+    var permissionsMenuExpanded by remember { mutableStateOf(false) }
+    val drawerItems = chatComposerDrawerItemsFromPaths(
+        skillLabels = form.selectedSkills.map { skill ->
+            "/${skill.name}" to {
+                state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
+            }
+        },
+        imagePaths = state.imagePaths,
+        onRemoveImage = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
+    )
+    val modelLabel = when {
+        !hasAvailableProvider -> "No provider"
+        state.usesCustomModel -> "custom"
+        form.selectedModel != null -> form.selectedModel.label
+        else -> "Auto"
+    }
+
     Column(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -758,202 +775,197 @@ private fun AgentChatComposer(
                 .fillMaxWidth()
                 .padding(horizontal = AndySpace.Space4),
         )
-        ChatComposerFrame(
+        ChatComposerLayout(
             modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
             highlighted = state.imageDragActive,
-        ) {
-        Box(Modifier.fillMaxWidth()) {
-            TextField(
-                state.promptValue,
+            drawerItems = drawerItems,
+            onMentionClick = if (hasAvailableProvider) {
+                { state.promptValue = insertTextAtCursor(state.promptValue, "@") }
+            } else {
+                null
+            },
+            onAttachClick = if (hasAvailableProvider && !form.services.remoteSession.isRemote) {
                 {
-                    state.promptValue = it
-                    state.skillMenuDismissed = false
-                },
-                singleLine = false,
-                minLines = 3,
-                maxLines = 7,
-                enabled = hasAvailableProvider,
-                modifier = Modifier.fillMaxWidth()
-                    .heightIn(min = 88.dp, max = 180.dp)
-                    .onVoiceDictationShortcut(voiceShortcut, voiceController)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
-                            form.matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(form.matchingSkills.first())
-                            return@onPreviewKeyEvent true
-                        }
-                        if (event.key == Key.Tab && form.mentionResults.isNotEmpty()) {
-                            selectFileMention(form.mentionResults.first())
-                            return@onPreviewKeyEvent true
-                        }
-                        if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
-                        if (event.isShiftPressed) return@onPreviewKeyEvent false
-                        if (canSubmit) onSubmit()
-                        true
-                    }
-                    .onChatImagePaste(form.scope) { added ->
-                        if (!form.services.remoteSession.isRemote) {
+                    form.scope.launch {
+                        attachImagesFromPicker { added ->
                             state.imagePaths = attachChatImages(state.imagePaths, added)
                         }
                     }
-                    .onImageFilesDropped(
-                        onFiles = { dropped ->
-                            if (!form.services.remoteSession.isRemote) {
-                                state.imagePaths = attachChatImages(state.imagePaths, dropped)
-                            }
-                        },
-                        onDragActiveChange = { active ->
-                            if (!form.services.remoteSession.isRemote) {
-                                state.imageDragActive = active
-                            }
-                        },
-                    ),
-                textStyle = LocalTextStyle.current.copy(
-                    color = TextPrimary,
-                    fontFamily = DisplayFont,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                ),
-                colors = fieldColors(),
-                chromeStyle = FieldChromeStyle.Borderless,
-                visualTransformation = slashHighlight,
-                placeholder = {
-                    ComposerPlaceholderHint(
-                        text = when {
-                            !hasAvailableProvider -> "Install a provider CLI to start a chat"
-                            state.imageDragActive -> "Release to attach images"
-                            state.imagePaths.isNotEmpty() -> "Add a message, or send the attached images"
-                            else -> "Message the agent, tag @files, or use /commands and /skills"
-                        },
-                        highlighted = state.imageDragActive,
-                    )
-                },
-            )
-            DropdownMenu(
-                expanded = form.slashCommand != null && !state.skillMenuDismissed,
-                onDismissRequest = { state.skillMenuDismissed = true },
-                modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
-                properties = PopupProperties(focusable = false),
-            ) {
-                Text(
-                    if (form.matchingCommands.isEmpty() && form.matchingSkills.isEmpty()) {
-                        "no ${state.agent.label} commands or skills matching /${form.slashCommand?.query.orEmpty()}"
-                    } else {
-                        "${state.agent.label} commands and skills matching /${form.slashCommand?.query.orEmpty()}"
-                    },
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                )
-                form.matchingCommands.forEach { command ->
-                    DropdownMenuItem(
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
-                            }
-                        },
-                        onClick = { selectCommand(command) },
-                    )
                 }
-                form.matchingSkills.forEach { skill ->
-                    DropdownMenuItem(
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                    Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+            } else {
+                null
+            },
+            attachEnabled = hasAvailableProvider && !form.services.remoteSession.isRemote,
+            mentionEnabled = hasAvailableProvider,
+            wrapBottomControls = wrapComposerControls,
+            input = {
+                Box(Modifier.fillMaxWidth()) {
+                    TextField(
+                        state.promptValue,
+                        {
+                            state.promptValue = it
+                            state.skillMenuDismissed = false
+                        },
+                        singleLine = false,
+                        minLines = 2,
+                        maxLines = 7,
+                        enabled = hasAvailableProvider,
+                        modifier = Modifier.fillMaxWidth()
+                            .heightIn(min = 72.dp, max = 180.dp)
+                            .onVoiceDictationShortcut(voiceShortcut, voiceController)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
+                                    form.matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(form.matchingSkills.first())
+                                    return@onPreviewKeyEvent true
+                                }
+                                if (event.key == Key.Tab && form.mentionResults.isNotEmpty()) {
+                                    selectFileMention(form.mentionResults.first())
+                                    return@onPreviewKeyEvent true
+                                }
+                                if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                if (event.isShiftPressed) return@onPreviewKeyEvent false
+                                if (canSubmit) onSubmit()
+                                true
+                            }
+                            .onChatImagePaste(form.scope) { added ->
+                                if (!form.services.remoteSession.isRemote) {
+                                    state.imagePaths = attachChatImages(state.imagePaths, added)
                                 }
                             }
+                            .onImageFilesDropped(
+                                onFiles = { dropped ->
+                                    if (!form.services.remoteSession.isRemote) {
+                                        state.imagePaths = attachChatImages(state.imagePaths, dropped)
+                                    }
+                                },
+                                onDragActiveChange = { active ->
+                                    if (!form.services.remoteSession.isRemote) {
+                                        state.imageDragActive = active
+                                    }
+                                },
+                            ),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = TextPrimary,
+                            fontFamily = DisplayFont,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                        ),
+                        colors = fieldColors(),
+                        chromeStyle = FieldChromeStyle.Borderless,
+                        visualTransformation = slashHighlight,
+                        placeholder = {
+                            ComposerPlaceholderHint(
+                                text = when {
+                                    !hasAvailableProvider -> "Install a provider CLI to start a chat"
+                                    state.imageDragActive -> "Release to attach images"
+                                    state.imagePaths.isNotEmpty() -> "Add a message, or send the attached images"
+                                    else -> "Ask me anything…"
+                                },
+                                highlighted = state.imageDragActive,
+                            )
                         },
-                        onClick = { selectSkill(skill) },
                     )
-                }
-            }
-            DropdownMenu(
-                expanded = form.fileMention != null && !state.skillMenuDismissed,
-                onDismissRequest = { state.skillMenuDismissed = true },
-                modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
-                properties = PopupProperties(focusable = false),
-            ) {
-                Text(
-                    if (form.mentionResults.isEmpty()) {
-                        "no files matching @${form.fileMention?.query.orEmpty()}"
-                    } else {
-                        "files matching @${form.fileMention?.query.orEmpty()}"
-                    },
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                )
-                form.mentionResults.forEach { result ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                        },
-                        onClick = { selectFileMention(result) },
-                    )
-                }
-            }
-        }
-
-        if (state.usesCustomModel) {
-            TextField(
-                state.customModel,
-                { state.customModel = it },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
-                colors = fieldColors(),
-                placeholder = { Text("custom model or variant", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp) },
-            )
-        }
-
-        if (form.selectedSkills.isNotEmpty() || state.imagePaths.isNotEmpty()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (form.selectedSkills.isNotEmpty()) {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        form.selectedSkills.forEach { skill ->
-                            FilterPill("/${skill.name} ×", true, Cyan) {
-                                state.promptValue = TextFieldValue(state.prompt.removeComposerSkill(skill))
-                            }
+                    DropdownMenu(
+                        expanded = form.slashCommand != null && !state.skillMenuDismissed,
+                        onDismissRequest = { state.skillMenuDismissed = true },
+                        modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                        properties = PopupProperties(focusable = false),
+                    ) {
+                        Text(
+                            if (form.matchingCommands.isEmpty() && form.matchingSkills.isEmpty()) {
+                                "no ${state.agent.label} commands or skills matching /${form.slashCommand?.query.orEmpty()}"
+                            } else {
+                                "${state.agent.label} commands and skills matching /${form.slashCommand?.query.orEmpty()}"
+                            },
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        )
+                        form.matchingCommands.forEach { command ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                        Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                    }
+                                },
+                                onClick = { selectCommand(command) },
+                            )
+                        }
+                        form.matchingSkills.forEach { skill ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                        skill.description.takeIf { it.isNotBlank() }?.let { description ->
+                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                        }
+                                    }
+                                },
+                                onClick = { selectSkill(skill) },
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = form.fileMention != null && !state.skillMenuDismissed,
+                        onDismissRequest = { state.skillMenuDismissed = true },
+                        modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
+                        properties = PopupProperties(focusable = false),
+                    ) {
+                        Text(
+                            if (form.mentionResults.isEmpty()) {
+                                "no files matching @${form.fileMention?.query.orEmpty()}"
+                            } else {
+                                "files matching @${form.fileMention?.query.orEmpty()}"
+                            },
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        )
+                        form.mentionResults.forEach { result ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                },
+                                onClick = { selectFileMention(result) },
+                            )
                         }
                     }
                 }
-                if (state.imagePaths.isNotEmpty()) {
-                    ChatAttachedImages(
-                        paths = state.imagePaths,
-                        onRemove = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
-                        maxWidth = 140.dp,
-                        maxHeight = 100.dp,
+            },
+            belowInput = if (state.usesCustomModel) {
+                {
+                    TextField(
+                        state.customModel,
+                        { state.customModel = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp),
+                        colors = fieldColors(),
+                        placeholder = { Text("custom model or variant", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp) },
                     )
                 }
-            }
-        }
-
-        val leadingControls: @Composable () -> Unit = {
+            } else {
+                null
+            },
+            bottomBarLeading = {
+                if (hasAvailableProvider) {
+                    val providerLabel = AgentPickerOption(
+                        state.agent,
+                        state.localRuntime.takeIf { state.agent.isLocalModelBackend },
+                    ).label
+                    val permissionsLabel = (state.sandboxMode ?: state.autonomy.defaultSandboxMode())
+                        .labelFor(state.agent.runtimeKind(state.localRuntime))
                     Box {
-                        ComposerChip(
-                            text = if (hasAvailableProvider) {
-                                AgentPickerOption(
-                                    state.agent,
-                                    state.localRuntime.takeIf { state.agent.isLocalModelBackend },
-                                ).label
-                            } else {
-                                "No provider available"
-                            },
-                            selected = true,
+                        ComposerProviderChip(
+                            text = providerLabel,
                             onClick = { agentMenuExpanded = true },
-                            enabled = hasAvailableProvider,
-                            leadingContent = if (hasAvailableProvider) ({ AgentPillIcon(state.agent) }) else null,
+                            leadingContent = { AgentPillIcon(state.agent) },
                         )
                         DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
-                            // Keep this in step with the expanded provider controls: an
-                            // unavailable provider should still be discoverable here.
-                            // It remains disabled until its CLI is available, so a task
-                            // cannot be launched with an unusable provider.
                             agentPickerOptions().forEach { option ->
                                 val ready = option.comboReady(form.cliStatuses, form.localBackends)
                                 DropdownMenuItem(
@@ -979,15 +991,9 @@ private fun AgentChatComposer(
                             }
                         }
                     }
-                    if (hasAvailableProvider) Box {
-                        val modelLabel = when {
-                            state.usesCustomModel -> "custom"
-                            form.selectedModel != null -> form.selectedModel.label
-                            else -> "Default model"
-                        }
-                        ComposerChip(
+                    Box {
+                        ComposerModelChip(
                             text = modelLabel,
-                            selected = state.modelId != null,
                             onClick = { modelMenuExpanded = true },
                         )
                         DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
@@ -1045,137 +1051,111 @@ private fun AgentChatComposer(
                             )
                         }
                     }
-                    if (hasAvailableProvider) form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
-                        Box {
-                            ComposerChip(
-                                text = state.reasoningEffort?.label ?: "Effort",
-                                selected = state.reasoningEffort != null,
-                                onClick = { effortMenuExpanded = true },
+                    Box {
+                        ComposerPermissionsChip(
+                            text = permissionsLabel,
+                            onClick = { permissionsMenuExpanded = true },
+                        )
+                        DropdownMenu(expanded = permissionsMenuExpanded, onDismissRequest = { permissionsMenuExpanded = false }) {
+                            AgentSandboxMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), color = TextPrimary) },
+                                    onClick = {
+                                        state.sandboxMode = mode
+                                        permissionsMenuExpanded = false
+                                    },
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text(if (state.planMode) "Plan mode: on" else "Plan mode: off", color = TextPrimary) },
+                                onClick = { state.planMode = !state.planMode },
                             )
-                            DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                                if (state.agent != AgentKind.Cursor) {
-                                    DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                            form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                                DropdownMenuItem(
+                                    text = { Text("Effort: ${state.reasoningEffort?.label ?: "default"}", color = TextPrimary) },
+                                    onClick = { effortMenuExpanded = true; permissionsMenuExpanded = false },
+                                )
+                                if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (state.fastMode) "Fast mode: on" else "Fast mode: off", color = TextPrimary) },
+                                        onClick = { state.fastMode = !state.fastMode },
+                                    )
                                 }
-                                selectedModel.efforts.forEach { effort -> DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false }) }
+                            }
+                            if (state.agent == AgentKind.OpenClaw) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (state.openClawNewSession) "OpenClaw: new session" else "OpenClaw: main session",
+                                            color = TextPrimary,
+                                        )
+                                    },
+                                    onClick = { state.openClawNewSession = !state.openClawNewSession },
+                                )
+                            }
+                            onCancel?.let { cancel ->
+                                DropdownMenuItem(
+                                    text = { Text("Cancel", color = TextPrimary) },
+                                    onClick = cancel,
+                                )
                             }
                         }
-                        if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
-                            ComposerChip(
-                                text = "Fast",
-                                selected = state.fastMode,
-                                showChevron = false,
-                                onClick = { state.fastMode = !state.fastMode },
-                            )
+                    }
+                    form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                            if (state.agent != AgentKind.Cursor) {
+                                DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                            }
+                            selectedModel.efforts.forEach { effort ->
+                                DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false })
+                            }
                         }
                     }
-                    if (hasAvailableProvider) ComposerChip(
-                        text = "Plan",
-                        selected = state.planMode,
-                        showChevron = false,
-                        onClick = { state.planMode = !state.planMode },
-                    )
-                    if (hasAvailableProvider && state.agent == AgentKind.OpenClaw) {
-                        ComposerChip(
-                            text = if (state.openClawNewSession) "New session" else "Main session",
-                            selected = state.openClawNewSession,
-                            showChevron = false,
-                            onClick = { state.openClawNewSession = !state.openClawNewSession },
+                }
+            },
+            bottomBarTrailing = {
+                if (!hasAvailableProvider) {
+                    ChatSendButton(onClick = onSubmit, enabled = false)
+                } else {
+                    AgentQuotaMenu(services = form.services, agent = state.agent)
+                    if (form.services.remoteSession.isRemote) {
+                        var remoteImagePath by remember { mutableStateOf("") }
+                        OutlinedTextField(
+                            value = remoteImagePath,
+                            onValueChange = { remoteImagePath = it },
+                            singleLine = true,
+                            placeholder = { Text("Remote image path", fontSize = 11.sp) },
+                            modifier = Modifier.widthIn(max = 180.dp),
+                            textStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, color = TextPrimary),
                         )
-                    }
-                    if (hasAvailableProvider) Box {
-                        val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
                         ComposerChip(
-                            text = sandbox.labelFor(state.agent.runtimeKind(state.localRuntime)),
-                            selected = true,
-                            onClick = { sandboxMenuExpanded = true },
-                        )
-                        DropdownMenu(expanded = sandboxMenuExpanded, onDismissRequest = { sandboxMenuExpanded = false }) {
-                            AgentSandboxMode.entries.forEach { mode -> DropdownMenuItem(text = { Text(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), color = TextPrimary) }, onClick = { state.sandboxMode = mode; sandboxMenuExpanded = false }) }
-                        }
-                    }
-                    onCancel?.let { cancel ->
-                        ComposerChip(
-                            text = "Cancel",
+                            text = "Attach",
                             selected = false,
                             showChevron = false,
-                            onClick = cancel,
+                            enabled = remoteImagePath.isNotBlank(),
+                            onClick = {
+                                val path = remoteImagePath.trim()
+                                if (path.isNotEmpty()) {
+                                    state.imagePaths = attachChatImages(state.imagePaths, listOf(path))
+                                    remoteImagePath = ""
+                                }
+                            },
                         )
                     }
-        }
-        val trailingControls: @Composable () -> Unit = {
-            if (!hasAvailableProvider) {
-                ChatSendButton(onClick = onSubmit, enabled = false)
-            } else {
-                AgentQuotaMenu(services = form.services, agent = state.agent)
-                if (form.services.remoteSession.isRemote) {
-                    var remoteImagePath by remember { mutableStateOf("") }
-                    OutlinedTextField(
-                        value = remoteImagePath,
-                        onValueChange = { remoteImagePath = it },
-                        singleLine = true,
-                        placeholder = { Text("Remote image path", fontSize = 11.sp) },
-                        modifier = Modifier.widthIn(max = 220.dp),
-                        textStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, color = TextPrimary),
-                    )
-                    ComposerChip(
-                        text = "Attach",
-                        selected = false,
-                        showChevron = false,
-                        enabled = remoteImagePath.isNotBlank(),
-                        onClick = {
-                            val path = remoteImagePath.trim()
-                            if (path.isNotEmpty()) {
-                                state.imagePaths = attachChatImages(state.imagePaths, listOf(path))
-                                remoteImagePath = ""
-                            }
-                        },
-                    )
-                } else {
-                    ChatImageAttachButton(
-                        onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
+                    ChatVoiceDictationButton(controller = voiceController, style = VoiceDictationButtonStyle.Bare)
+                    ChatSendButton(
+                        onClick = onSubmit,
+                        enabled = canSubmit,
+                        modifier = Modifier.padding(start = AndySpace.Space2),
                     )
                 }
-                ChatVoiceDictationButton(controller = voiceController)
-                ChatSendButton(onClick = onSubmit, enabled = canSubmit)
-            }
-        }
-        if (wrapComposerControls) {
-            Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
-                @OptIn(ExperimentalLayoutApi::class)
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                ) {
-                    leadingControls()
+            },
+            footer = voiceError?.let { err ->
+                {
+                    Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
                 }
-                @OptIn(ExperimentalLayoutApi::class)
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                ) {
-                    trailingControls()
-                }
-            }
-        } else {
-            ComposerToolbarRow(
-                leading = {
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        leadingControls()
-                    }
-                },
-                trailing = { trailingControls() },
-            )
-        }
-        voiceError?.let { err ->
-            Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
-        }
-        }
+            },
+        )
     }
 }
 
