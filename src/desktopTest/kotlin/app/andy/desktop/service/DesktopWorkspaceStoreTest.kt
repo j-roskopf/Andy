@@ -42,6 +42,16 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(agentPinPriorityChats = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().agentPinPriorityChats)
 
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                agentTranscriptAutoExpandThinking = true,
+                agentTranscriptAutoExpandTools = false,
+            ),
+        )
+        val transcriptExpand = DesktopWorkspaceStore(file).load()
+        assertEquals(true, transcriptExpand.agentTranscriptAutoExpandThinking)
+        assertEquals(false, transcriptExpand.agentTranscriptAutoExpandTools)
+
         val retention = saved.copy(
             retentionCleanupEnabled = false,
             retentionCompressArchiveAfterDays = 12,
@@ -158,6 +168,31 @@ class DesktopWorkspaceStoreTest {
 
         DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = emptySet()))
         assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
+    }
+
+    @Test
+    fun migratesLegacyAutoExpandActivityToThinkingAndTools() = runBlocking {
+        val file = createTempDirectory("andy-workspace-legacy-expand").toFile().resolve("workspace.properties")
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            agentTranscriptAutoExpandActivity=true
+            """.trimIndent() + "\n",
+        )
+        val loaded = DesktopWorkspaceStore(file).load()
+        assertEquals(true, loaded.agentTranscriptAutoExpandThinking)
+        assertEquals(true, loaded.agentTranscriptAutoExpandTools)
+
+        DesktopWorkspaceStore(file).save(
+            loaded.copy(
+                agentTranscriptAutoExpandThinking = true,
+                agentTranscriptAutoExpandTools = false,
+            ),
+        )
+        val roundTripped = file.readText()
+        assertEquals(true, "agentTranscriptAutoExpandThinking=true" in roundTripped)
+        assertEquals(true, "agentTranscriptAutoExpandTools=false" in roundTripped)
+        assertEquals(false, "agentTranscriptAutoExpandActivity=" in roundTripped)
     }
 
     @Test

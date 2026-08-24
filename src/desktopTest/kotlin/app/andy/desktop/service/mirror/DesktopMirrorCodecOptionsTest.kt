@@ -27,6 +27,22 @@ class DesktopMirrorCodecOptionsTest {
     }
 
     @Test
+    fun preferLowLatencyAddsMediaCodecLatency() {
+        assertEquals(
+            "latency=1",
+            videoCodecOptionsForDevice("google", null, preferLowLatency = true),
+        )
+        assertEquals(
+            "vendor.qti-ext-enc-low-latency.enable=1,latency=1",
+            videoCodecOptionsForDevice("QTI", null, preferLowLatency = true),
+        )
+        assertEquals(
+            "latency=0",
+            videoCodecOptionsForDevice("google", "latency=0", preferLowLatency = true),
+        )
+    }
+
+    @Test
     fun zeroMaxSizeKeepsNativeCaptureDimensions() {
         assertEquals(1080 to 2340, scaledCaptureSize(1080, 2340, maxSize = 0))
         assertEquals(1440 to 3200, scaledCaptureSize(1440, 3200, maxSize = 0))

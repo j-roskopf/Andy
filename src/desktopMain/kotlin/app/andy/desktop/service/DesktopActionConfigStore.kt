@@ -55,14 +55,21 @@ class DesktopActionConfigStore(
         if (file.exists()) {
             file.copyTo(File(file.absolutePath + ".bak"), overwrite = true)
         }
-        val content = Toml.encodeToString(ActionsFileDto.serializer(), config.toFileDto())
-        file.writeText(content.trimEnd() + "\n")
+        file.writeText(encodeToml(config))
     }
 
     private fun decode(sourceFile: File, source: ConfigSource = ConfigSource.Global): Result<ActionsConfig> = runCatching {
-        Toml { ignoreUnknownKeys = true }
-            .decodeFromString(ActionsFileDto.serializer(), sourceFile.readText())
-            .toModel(source)
+        parseToml(sourceFile.readText(), source)
+    }
+
+    companion object {
+        fun parseToml(text: String, source: ConfigSource = ConfigSource.Global): ActionsConfig =
+            Toml { ignoreUnknownKeys = true }
+                .decodeFromString(ActionsFileDto.serializer(), text)
+                .toModel(source)
+
+        fun encodeToml(config: ActionsConfig): String =
+            Toml.encodeToString(ActionsFileDto.serializer(), config.toFileDto()).trimEnd() + "\n"
     }
 }
 

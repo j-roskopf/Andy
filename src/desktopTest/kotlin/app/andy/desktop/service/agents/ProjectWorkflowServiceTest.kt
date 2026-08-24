@@ -5,9 +5,13 @@ import app.andy.model.ActionsConfig
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
+import app.andy.model.AgentUserInputOrigin
+import app.andy.model.AgentUserInputQuestion
+import app.andy.model.AgentUserInputRequest
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectNote
@@ -1199,6 +1203,201 @@ class ProjectWorkflowServiceTest {
             harness.service.deleteTask(verificationId)
             assertTrue(harness.service.projects.value.getValue("project-1").tasks.isEmpty())
             assertFalse(harness.service.tasks.value.any { it.workflowTaskId in setOf(buildId, externalBuildId, verificationId) })
+        }
+    }
+
+    @Test
+    fun stoppingBlockedAcpSpecRunFinalizesEvenWhenFinishedAtIsSet() = runBlocking {
+        val root = File.createTempFile("andy-blocked-acp-stop", null).also { it.delete(); it.mkdirs() }
+        val projectDir = File(root, "project").apply { mkdirs() }
+        val run = AgentTask(
+            id = "run-spec-blocked",
+            title = "Spec: add MCP",
+            prompt = "Plan external MCP support",
+            agent = AgentKind.ClaudeCode,
+            projectId = "project-1",
+            cwd = projectDir.absolutePath,
+            originDir = projectDir.absolutePath,
+            lane = AgentLaneKind.Acp,
+            planMode = true,
+            status = AgentStatus.Blocked,
+            userInputRequest = AgentUserInputRequest(
+                id = "q1",
+                origin = AgentUserInputOrigin.Artifact,
+                questions = listOf(
+                    AgentUserInputQuestion(
+                        id = "consumption_model",
+                        question = "How should external MCP servers get used?",
+                        options = emptyList(),
+                    ),
+                ),
+            ),
+            workflowTaskId = "spec-blocked",
+            workflowStage = ProjectWorkflowStage.Spec,
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+            exitCode = 0,
+        )
+        val spec = app.andy.model.ProjectTask(
+            id = "spec-blocked",
+            projectId = "project-1",
+            kind = ProjectTaskKind.Spec,
+            title = "add MCP",
+            instructions = "Plan it",
+            profile = specProfile().copy(agent = AgentKind.ClaudeCode),
+            includeScratchpad = false,
+            state = ProjectTaskState.Waiting,
+            attempts = listOf(
+                app.andy.model.ProjectTaskAttempt(
+                    runId = run.id,
+                    stage = ProjectWorkflowStage.Spec,
+                    attempt = 1,
+                    prompt = run.prompt,
+                    profile = specProfile().copy(agent = AgentKind.ClaudeCode),
+                    createdAtMillis = 1,
+                ),
+            ),
+            createdAtMillis = 1,
+            updatedAtMillis = 2,
+        )
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
+        store.save(
+            AgentStoreState(
+                tasks = listOf(run),
+                binaryOverrides = workflowBinaryOverrides(),
+                projectWorkflows = mapOf(
+                    "project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(spec)),
+                ),
+            ),
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.ClaudeCode to WorkflowAdapter(kind = AgentKind.ClaudeCode)),
+                worktrees = WorktreeManager(File(root, "worktrees")),
+                mcp = WorkflowFakeMcp,
+                workspaceStore = WorkflowWorkspaceStore,
+                actionConfig = MutableActionConfig(
+                    ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
+                ),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            service.ensureProject("project-1")
+            assertEquals(AgentStatus.Blocked, service.tasks.value.single { it.id == run.id }.status)
+            service.stop(run.id)
+            await {
+                val stopped = service.tasks.value.firstOrNull { it.id == run.id } ?: return@await false
+                stopped.status == AgentStatus.Done &&
+                    stopped.stoppedByUser &&
+                    stopped.userInputRequest == null
+            }
+            await {
+                service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == spec.id }?.state ==
+                    ProjectTaskState.NeedsAttention
+            }
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun deleteTaskAbandonsWaitingSpecBlockedOnGrillMe() = runBlocking {
+        val root = File.createTempFile("andy-waiting-spec-delete", null).also { it.delete(); it.mkdirs() }
+        val projectDir = File(root, "project").apply { mkdirs() }
+        val run = AgentTask(
+            id = "run-spec-waiting-delete",
+            title = "Spec: add MCP",
+            prompt = "Plan external MCP support",
+            agent = AgentKind.ClaudeCode,
+            projectId = "project-1",
+            cwd = projectDir.absolutePath,
+            originDir = projectDir.absolutePath,
+            lane = AgentLaneKind.Acp,
+            planMode = true,
+            status = AgentStatus.Blocked,
+            userInputRequest = AgentUserInputRequest(
+                id = "q1",
+                origin = AgentUserInputOrigin.Artifact,
+                questions = listOf(
+                    AgentUserInputQuestion(
+                        id = "consumption_model",
+                        question = "How should external MCP servers get used?",
+                        options = emptyList(),
+                    ),
+                ),
+            ),
+            workflowTaskId = "spec-waiting-delete",
+            workflowStage = ProjectWorkflowStage.Spec,
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+            exitCode = 0,
+        )
+        val profile = specProfile().copy(agent = AgentKind.ClaudeCode)
+        val spec = app.andy.model.ProjectTask(
+            id = "spec-waiting-delete",
+            projectId = "project-1",
+            kind = ProjectTaskKind.Spec,
+            title = "add MCP",
+            instructions = "Plan it",
+            profile = profile,
+            includeScratchpad = false,
+            state = ProjectTaskState.Waiting,
+            attempts = listOf(
+                app.andy.model.ProjectTaskAttempt(
+                    runId = run.id,
+                    stage = ProjectWorkflowStage.Spec,
+                    attempt = 1,
+                    prompt = run.prompt,
+                    profile = profile,
+                    createdAtMillis = 1,
+                ),
+            ),
+            createdAtMillis = 1,
+            updatedAtMillis = 2,
+        )
+        val store = DesktopAgentTaskStore(File(root, "agents.db"))
+        store.save(
+            AgentStoreState(
+                tasks = listOf(run),
+                binaryOverrides = workflowBinaryOverrides(),
+                projectWorkflows = mapOf(
+                    "project-1" to app.andy.model.ProjectWorkflowState("project-1", tasks = listOf(spec)),
+                ),
+            ),
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.ClaudeCode to WorkflowAdapter(kind = AgentKind.ClaudeCode)),
+                worktrees = WorktreeManager(File(root, "worktrees")),
+                mcp = WorkflowFakeMcp,
+                workspaceStore = WorkflowWorkspaceStore,
+                actionConfig = MutableActionConfig(
+                    ActionsConfig(projects = listOf(ActionProject("project-1", "Test project", projectDir.absolutePath))),
+                ),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            service.ensureProject("project-1")
+            assertEquals(ProjectTaskState.Waiting, service.projects.value.getValue("project-1").tasks.single().state)
+            service.deleteTask(spec.id, cascade = false)
+            assertTrue(service.projects.value.getValue("project-1").tasks.none { it.id == spec.id })
+            assertTrue(service.tasks.value.none { it.id == run.id })
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            root.deleteRecursively()
         }
     }
 

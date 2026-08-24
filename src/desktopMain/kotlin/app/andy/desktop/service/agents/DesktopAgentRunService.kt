@@ -1077,7 +1077,19 @@ class DesktopAgentRunService(
                 setOfNotNull(linkedBuild?.id, linkedBuild?.linkedReviewTaskId, linkedBuild?.linkedVerificationTaskId)
             }
         }
-        if (_projects.value[task.projectId]?.tasks.orEmpty().any { it.id in removeIds && it.isActive }) return
+        // Waiting includes grill-me Blocked parks — abandon those agent runs so delete is not a
+        // silent no-op. Only refuse while a stage is still Queued/Running after stop attempts.
+        val linkedRunIds = _projects.value[task.projectId]?.tasks.orEmpty()
+            .filter { it.id in removeIds }
+            .flatMap { it.attempts.map { attempt -> attempt.runId } }
+            .distinct()
+        for (runId in linkedRunIds) {
+            val run = currentTask(runId) ?: continue
+            if (run.isActive) {
+                delete(run.id, removeWorktree = run.ownsWorktree, force = true)
+            }
+        }
+        if (_projects.value[task.projectId]?.tasks.orEmpty().any { it.id in removeIds && it.isInFlight }) return
         updateProject(task.projectId) { state -> state.copy(tasks = state.tasks.filterNot { it.id in removeIds }) }
         persist()
     }
@@ -3124,6 +3136,11 @@ class DesktopAgentRunService(
     }
 
     override fun stop(taskId: String) {
+        // Teardown can block on tmux/git; never run that on the Compose main thread.
+        scope.launch(Dispatchers.IO) { stopNow(taskId) }
+    }
+
+    private fun stopNow(taskId: String) {
         val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
         if (acpTask != null) {
             handles[taskId]?.stopRequested = true
@@ -3195,7 +3212,7 @@ class DesktopAgentRunService(
             )
         }
         if (task.isActive) {
-            stop(taskId)
+            withContext(Dispatchers.IO) { stopNow(taskId) }
         }
         handles.remove(taskId)
         terminals.clear(taskId)
@@ -5410,18 +5427,21 @@ class DesktopAgentRunService(
         forceKillTerminal: Boolean = false,
         stopReason: String? = null,
     ) {
-        val lane = currentTask(taskId)?.lane ?: AgentLaneKind.Terminal
-        val completedChanges = currentTask(taskId)?.let { task ->
-            val baseline = task.changeBaselineTree
-            task.cwd?.takeIf { baseline != null }?.let { cwd ->
-                worktrees.changeSnapshot(cwd, baseline, touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() })
-            }
-        }
+        val prior = currentTask(taskId)
+        val lane = prior?.lane ?: AgentLaneKind.Terminal
+        val snapshotCwd = prior?.cwd
+        val snapshotBaseline = prior?.changeBaselineTree
+        val captureChanges = snapshotCwd != null && snapshotBaseline != null
         var finalized = false
         updateTask(taskId) { task ->
             // Launching chats keep status=null. User stop must still leave that overlay.
-            val shouldFinalize = task.finishedAtMillis == null &&
-                (task.isActive || task.status != null || stoppedByUser)
+            // Grill-me / permission Blocked stamps finishedAtMillis while staying active — cancel
+            // must still finalize, or ACP stop leaves the chat Blocked forever.
+            val shouldFinalize = when {
+                stoppedByUser && (task.isActive || task.userInputRequest != null || task.status == null) -> true
+                task.finishedAtMillis == null && (task.isActive || task.status != null || stoppedByUser) -> true
+                else -> false
+            }
             if (shouldFinalize) {
                 finalized = true
                 val resolvedPlanText = if (status == AgentStatus.Done && task.planMode) {
@@ -5437,6 +5457,7 @@ class DesktopAgentRunService(
                 task.copy(
                     status = status,
                     stoppedByUser = stoppedByUser,
+                    userInputRequest = if (stoppedByUser) null else task.userInputRequest,
                     resumable = resumable,
                     interrupted = interrupted,
                     statusConfident = statusConfident,
@@ -5445,11 +5466,8 @@ class DesktopAgentRunService(
                     errorMessage = error,
                     finishedAtMillis = System.currentTimeMillis(),
                     unread = !isViewing(taskId),
-                    completedChanges = completedChanges ?: task.completedChanges,
                     completedPlanText = completedPlanText,
                 )
-            } else if (completedChanges != null && task.completedChanges == null) {
-                task.copy(completedChanges = completedChanges)
             } else {
                 task
             }
@@ -5468,13 +5486,31 @@ class DesktopAgentRunService(
             }
         } else {
             when {
-                forceKillTerminal || stoppedByUser -> terminals.stop(taskId)
+                forceKillTerminal || stoppedByUser -> {
+                    // tmux hasSession/killSession can block up to 30s each — keep off Main.
+                    scope.launch(Dispatchers.IO) { terminals.stop(taskId) }
+                }
                 terminals.isAlive(taskId) && keepViewerMounted -> Unit
                 terminals.isAlive(taskId) -> terminals.detach(taskId)
-                else -> terminals.stop(taskId)
+                else -> scope.launch(Dispatchers.IO) { terminals.stop(taskId) }
             }
         }
         previousTaskStatuses.remove(taskId)
+        if (captureChanges) {
+            val cwd = checkNotNull(snapshotCwd)
+            val baseline = checkNotNull(snapshotBaseline)
+            scope.launch(Dispatchers.IO) {
+                val completedChanges = worktrees.changeSnapshot(
+                    cwd,
+                    baseline,
+                    touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() },
+                ) ?: return@launch
+                updateTask(taskId) { task ->
+                    if (task.completedChanges == null) task.copy(completedChanges = completedChanges) else task
+                }
+                persist()
+            }
+        }
         if (status == AgentStatus.Done && queuedFollowUp != null && !stoppedByUser) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(

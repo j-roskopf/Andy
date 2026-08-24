@@ -688,6 +688,11 @@ internal class ShellState(
     /** Re-reads global + repo action configs so newly added project actions appear. */
     private suspend fun refreshActionsConfigNow() {
         if (!services.capabilities.hostAutomation) return
+        // While SSH-remoted, projects come from remoteActionsConfig — never clobber with local.
+        if (services.remoteSession.isRemote) {
+            services.remoteSession.remoteActionsConfig.value?.let { actionsConfig = it }
+            return
+        }
         runCatching { actionsConfig = services.actionConfig.load() }
     }
 
@@ -776,6 +781,14 @@ internal class ShellState(
             actionsConfig = services.actionConfig.load()
         }
         workspaceLoaded = true
+        // While SSH-remoted, projects come from the remote ~/.andy/actions.toml (chats already
+        // come from remote andyd). Swap back to local config on disconnect.
+        scope.launch {
+            services.remoteSession.remoteActionsConfig.collect { remote ->
+                if (!services.capabilities.hostAutomation) return@collect
+                actionsConfig = remote ?: runCatching { services.actionConfig.load() }.getOrDefault(ActionsConfig())
+            }
+        }
         if (services.capabilities.wifiPairing && saved.pairedWifiDevices.isNotEmpty()) {
             // Reconnect in the background so workspace load / first device refresh are not blocked.
             scope.launch {
@@ -865,7 +878,13 @@ internal class ShellState(
 
     fun persistActionsConfig(next: ActionsConfig) {
         actionsConfig = next
-        scope.launch { services.actionConfig.save(next) }
+        scope.launch {
+            if (services.remoteSession.isRemote) {
+                services.remoteSession.saveRemoteActionsConfig(next)
+            } else {
+                services.actionConfig.save(next)
+            }
+        }
     }
 
     fun openLive(serial: String) {

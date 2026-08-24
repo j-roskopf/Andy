@@ -272,7 +272,7 @@ class AgentTranscriptUiTest {
                             ),
                         ),
                         isActive = false,
-                        autoExpandActivitySections = true,
+                        autoExpandToolSections = true,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -318,7 +318,7 @@ class AgentTranscriptUiTest {
                             ),
                         ),
                         isActive = false,
-                        autoExpandActivitySections = true,
+                        autoExpandToolSections = true,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

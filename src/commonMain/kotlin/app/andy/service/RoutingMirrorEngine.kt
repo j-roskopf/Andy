@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -44,9 +44,23 @@ class RoutingMirrorEngine(
     )
     override val status: Flow<String> = _session.flatMapLatest { session ->
         when {
-            session == null -> flowOf("Disconnected")
-            IosTargetRegistry.isIosTarget(session.serial) -> ios.status
-            else -> androidEngine.flatMapLatest { it.status }
+            session != null && IosTargetRegistry.isIosTarget(session.serial) -> ios.status
+            // Prefer the active Android engine's status while connecting / failing before a
+            // session is published (e.g. remote SSH scrcpy bridge errors).
+            session != null -> androidEngine.flatMapLatest { it.status }
+            else -> androidEngine.flatMapLatest { engine ->
+                engine.status.map { engineStatus ->
+                    val trimmed = engineStatus.trim()
+                    if (trimmed.isEmpty() ||
+                        trimmed.equals("Disconnected", ignoreCase = true) ||
+                        trimmed.equals("Ready for embedded mirror", ignoreCase = true)
+                    ) {
+                        "Disconnected"
+                    } else {
+                        trimmed
+                    }
+                }
+            }
         }
     }
     override val presenting: StateFlow<Boolean> = _session.flatMapLatest { session ->
@@ -140,7 +154,12 @@ class RoutingMirrorEngine(
             height = 0,
         )
         val result = owner.connect(serial, config)
-        _session.value = owner.session.value
+        // Keep the placeholder session until the engine publishes one so status/frames stay
+        // routed to the owner during async scrcpy startup (and remote SSH bridge failures).
+        _session.value = owner.session.value ?: _session.value
+        if (!result.isSuccess && owner.session.value == null) {
+            _session.value = null
+        }
         return result
     }
 

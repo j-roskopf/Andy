@@ -72,6 +72,36 @@ fun AndyDestination.availableWithIosTarget(
 /** Settings is always reachable and never appears in the "customize sidebar" list. */
 fun AndyDestination.isToggleableInSidebar(): Boolean = this != AndyDestination.Settings
 
+/**
+ * Destinations shown while the desktop GUI is SSH-remoted to another machine.
+ * Keep panes that work over the tunneled remote adb/scrcpy stack; hide local-only tooling.
+ */
+fun AndyDestination.availableWhileRemote(): Boolean = when (this) {
+    AndyDestination.Devices,
+    AndyDestination.Live,
+    AndyDestination.Apps,
+    AndyDestination.Logcat,
+    AndyDestination.Intents,
+    AndyDestination.Files,
+    AndyDestination.Actions,
+    AndyDestination.Agents,
+    AndyDestination.Controls,
+    AndyDestination.Settings,
+    -> true
+    // Still local-only / not exposed over the remote adb tunnel yet.
+    AndyDestination.Catalog,
+    AndyDestination.ComputerFiles,
+    AndyDestination.Network,
+    AndyDestination.Snapshots,
+    AndyDestination.Performance,
+    AndyDestination.Tracing,
+    AndyDestination.Design,
+    AndyDestination.Inspector,
+    AndyDestination.Bugs,
+    AndyDestination.Recordings,
+    -> false
+}
+
 @Composable
 fun AndyApp(
     services: AndyServices,

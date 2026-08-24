@@ -231,6 +231,8 @@ internal fun LiveScreen(
     }
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var connectResult by remember { mutableStateOf("") }
+    val remoteSessionState by services.remoteSession.state.collectAsState()
+    val isRemoteSession = remoteSessionState.isRemote
     val isWeb = services.capabilities.platform == AndyPlatform.Web
     val acceleratedMirror = services.capabilities.acceleratedMirror
     val preferred = LiveMirrorSettings.config.value
@@ -365,14 +367,28 @@ internal fun LiveScreen(
             connectResult = if (result.isSuccess) result.stdout else result.stderr
         }
     }
-    fun applyPreset(size: String, mbps: String, fps: String = "60") {
+    fun applyPreset(size: String, mbps: String, fps: String = if (isRemoteSession) RemoteMirrorTuning.MAX_FPS.toString() else "60") {
         maxSize = size
         bitRateMbps = mbps
         maxFps = fps
         reconnectMirror(mirrorVideoConfig(size, mbps, fps, rendererMode))
     }
-    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode).also {
-        LiveMirrorSettings.update(it)
+    fun mirrorConfig(): MirrorVideoConfig = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode)
+        .let { if (isRemoteSession) it.forRemoteTunnel() else it }
+        .also { LiveMirrorSettings.update(it) }
+    LaunchedEffect(isRemoteSession) {
+        if (!isRemoteSession) return@LaunchedEffect
+        val current = mirrorVideoConfig(maxSize, bitRateMbps, maxFps, rendererMode)
+        val tuned = current.forRemoteTunnel()
+        if (current == tuned) return@LaunchedEffect
+        maxSize = tuned.maxSize.toString()
+        bitRateMbps = (tuned.bitRate / 1_000_000f).let { value ->
+            if (value == value.toInt().toFloat()) value.toInt().toString() else value.toString()
+        }
+        maxFps = tuned.maxFps.toString()
+        if (serial != null && mirrorReady && !mirroredElsewhere) {
+            reconnectMirror(tuned, force = true)
+        }
     }
     LaunchedEffect(Unit) {
         services.mirror.status.collectLatest { mirrorStatus = it }
@@ -711,6 +727,7 @@ internal fun LiveScreen(
             androidAutoReadyHint = androidAutoReadyHint,
             acceleratedMirror = acceleratedMirror,
             isWeb = isWeb,
+            isRemoteSession = isRemoteSession,
             maxSize = maxSize,
             bitRateMbps = bitRateMbps,
             maxFps = maxFps,
@@ -722,7 +739,7 @@ internal fun LiveScreen(
                 rendererMode = mode
                 reconnectMirror(mirrorVideoConfig(maxSize, bitRateMbps, maxFps, mode))
             },
-            onApplyPreset = { size, mbps -> applyPreset(size, mbps) },
+            onApplyPreset = { size, mbps, fps -> applyPreset(size, mbps, fps) },
             onReconnectMirror = { reconnectMirror(mirrorConfig()) },
             foldable = foldable,
             foldableHingeAngle = foldableHingeAngle,

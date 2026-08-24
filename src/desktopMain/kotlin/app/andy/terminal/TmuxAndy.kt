@@ -23,6 +23,8 @@ object TmuxAndy {
     const val TEST_SERVER = "andy-test"
 
     private val serverName = AtomicReference(defaultIsolatedOrProductionServer())
+    /** When set, all tmux invocations use `-S` (SSH-forwarded remote server). */
+    private val absoluteSocketPath = AtomicReference<File?>(null)
 
     /** Active tmux `-L` socket name (`andy` in production, `andy-test[-wN]` under desktopTest). */
     val SERVER: String get() = serverName.get()
@@ -40,6 +42,33 @@ object TmuxAndy {
         serverConfigured.set(false)
         sessionCache.set(null)
     }
+
+    /**
+     * Use an absolute tmux server socket (SSH LocalForward of a remote `tmux -L andy`).
+     * Pass null to restore normal `-L` [SERVER] selection. While set, [killServer] is a
+     * no-op so the GUI never destroys the remote host's tmux server.
+     */
+    fun useAbsoluteSocket(path: File?) {
+        absoluteSocketPath.set(path)
+        serverConfigured.set(false)
+        sessionCache.set(null)
+    }
+
+    fun absoluteSocket(): File? = absoluteSocketPath.get()
+
+    /** `-S /path` when forwarding a remote server; otherwise `-L <SERVER>`. */
+    private fun socketArgs(): List<String> {
+        val abs = absoluteSocketPath.get()
+        return if (abs != null) listOf("-S", abs.absolutePath) else listOf("-L", SERVER)
+    }
+
+    /** Prefix every Andy tmux argv with the binary and socket selector. */
+    private fun tmuxArgv(vararg args: String): List<String> =
+        listOf(tmuxBinary()) + socketArgs() + args.toList()
+
+    private fun tmuxArgv(args: List<String>): List<String> =
+        listOf(tmuxBinary()) + socketArgs() + args
+
 
     /**
      * Prefer `ANDY_TMUX_SOCKET`, then append Gradle's per-fork worker id when present so
@@ -114,7 +143,7 @@ object TmuxAndy {
     fun startServer() {
         val binary = tmuxBinary()
         fun boot() = run(
-            listOf(binary, "-L", SERVER, "start-server", ";") + SERVER_OPTIONS,
+            listOf(binary) + socketArgs() + listOf("start-server", ";") + SERVER_OPTIONS,
             checkExit = false,
         )
         boot()
@@ -130,13 +159,13 @@ object TmuxAndy {
      */
     fun ensureServerConfigured() {
         if (!serverConfigured.compareAndSet(false, true)) return
-        run(listOf(tmuxBinary(), "-L", SERVER) + SERVER_OPTIONS, checkExit = false)
+        run(tmuxArgv() + SERVER_OPTIONS, checkExit = false)
     }
 
     /** True when the Andy tmux server accepts commands. */
     fun serverResponds(): Boolean {
         val result = run(
-            listOf(tmuxBinary(), "-L", SERVER, "list-sessions"),
+            tmuxArgv("list-sessions"),
             checkExit = false,
         )
         // exit 0 = sessions listed (maybe empty). exit 1 with empty stderr can also
@@ -163,7 +192,7 @@ object TmuxAndy {
 
     fun hasSession(taskId: String): Boolean {
         val result = run(
-            listOf(tmuxBinary(), "-L", SERVER, "has-session", "-t", sessionName(taskId)),
+            tmuxArgv("has-session", "-t", sessionName(taskId)),
             checkExit = false,
         )
         return result.exitCode == 0
@@ -171,7 +200,7 @@ object TmuxAndy {
 
     fun listSessions(): List<String> {
         val result = run(
-            listOf(tmuxBinary(), "-L", SERVER, "list-sessions", "-F", "#{session_name}"),
+            tmuxArgv("list-sessions", "-F", "#{session_name}"),
             checkExit = false,
         )
         if (result.exitCode != 0) return emptyList()
@@ -268,8 +297,8 @@ object TmuxAndy {
         // agent prompt is.
         val scriptFile = launchScriptFile(name)
         writeOwnerOnlyText(scriptFile, launch)
-        val cmd = listOf(
-            tmuxBinary(), "-L", SERVER, "new-session", "-d", "-s", name,
+        val cmd = tmuxArgv(
+            "new-session", "-d", "-s", name,
             "-c", sessionCwd,
             "--", "/bin/sh", scriptFile.absolutePath,
         )
@@ -304,7 +333,7 @@ object TmuxAndy {
 
     fun killSession(taskId: String) {
         run(
-            listOf(tmuxBinary(), "-L", SERVER, "kill-session", "-t", sessionName(taskId)),
+            tmuxArgv("kill-session", "-t", sessionName(taskId)),
             checkExit = false,
         )
         invalidateSessionCache()
@@ -313,7 +342,9 @@ object TmuxAndy {
 
     /** Drop the Andy tmux server (all sessions). Next [startServer] boots from a safe cwd. */
     fun killServer() {
-        run(listOf(tmuxBinary(), "-L", SERVER, "kill-server"), checkExit = false)
+        // Never destroy a forwarded remote tmux server from the GUI client.
+        if (absoluteSocketPath.get() != null) return
+        run(tmuxArgv("kill-server"), checkExit = false)
         invalidateSessionCache()
         serverConfigured.set(false)
         launchScriptDir().listFiles()?.forEach { it.delete() }
@@ -323,8 +354,8 @@ object TmuxAndy {
     fun sendKeys(taskId: String, text: String) {
         if (text.isEmpty()) return
         run(
-            listOf(
-                tmuxBinary(), "-L", SERVER, "send-keys", "-t", sessionName(taskId),
+            tmuxArgv(
+                "send-keys", "-t", sessionName(taskId),
                 "-l", "--", text,
             ),
         )
@@ -332,7 +363,7 @@ object TmuxAndy {
 
     fun sendEnter(taskId: String) {
         run(
-            listOf(tmuxBinary(), "-L", SERVER, "send-keys", "-t", sessionName(taskId), "Enter"),
+            tmuxArgv("send-keys", "-t", sessionName(taskId), "Enter"),
         )
     }
 
@@ -348,7 +379,7 @@ object TmuxAndy {
         historyLines: Int = 200,
         escapes: Boolean = false,
     ): String {
-        val cmd = mutableListOf(tmuxBinary(), "-L", SERVER, "capture-pane", "-p", "-t", session)
+        val cmd = mutableListOf<String>().also { it += tmuxArgv("capture-pane", "-p", "-t", session) }
         if (escapes) cmd += "-e"
         if (historyLines < 0) {
             cmd += listOf("-S", "-")
@@ -403,8 +434,7 @@ object TmuxAndy {
     /** Pane OSC/window title (`#{pane_title}`), empty when unavailable. */
     fun paneTitle(taskId: String): String {
         val result = run(
-            listOf(
-                tmuxBinary(), "-L", SERVER,
+            tmuxArgv(
                 "display-message", "-p", "-t", sessionName(taskId), "#{pane_title}",
             ),
             checkExit = false,
@@ -417,8 +447,7 @@ object TmuxAndy {
     fun panePid(taskId: String): Long? {
         if (!hasSession(taskId)) return null
         val result = run(
-            listOf(
-                tmuxBinary(), "-L", SERVER,
+            tmuxArgv(
                 "display-message", "-p", "-t", sessionName(taskId), "#{pane_pid}",
             ),
             checkExit = false,
@@ -433,8 +462,7 @@ object TmuxAndy {
     /** True when the pane is in copy mode (user scrolled into tmux history). */
     fun isPaneInCopyMode(taskId: String): Boolean {
         val result = run(
-            listOf(
-                tmuxBinary(), "-L", SERVER,
+            tmuxArgv(
                 "display-message", "-p", "-t", sessionName(taskId), "#{pane_in_mode}",
             ),
             checkExit = false,
@@ -446,8 +474,7 @@ object TmuxAndy {
     fun exitCopyModeIfActive(taskId: String) {
         if (!isPaneInCopyMode(taskId)) return
         run(
-            listOf(
-                tmuxBinary(), "-L", SERVER,
+            tmuxArgv(
                 "copy-mode", "-q", "-t", sessionName(taskId),
             ),
             checkExit = false,
@@ -465,11 +492,12 @@ object TmuxAndy {
      */
     fun probePane(taskId: String, historyLines: Int = 200, escapes: Boolean = false): PaneProbe {
         val name = sessionName(taskId)
-        val cmd = mutableListOf(
-            tmuxBinary(), "-L", SERVER,
-            "display-message", "-p", "-t", name, "#{pane_title}", ";",
-            "capture-pane", "-p", "-t", name,
-        )
+        val cmd = mutableListOf<String>().also {
+            it += tmuxArgv(
+                "display-message", "-p", "-t", name, "#{pane_title}", ";",
+                "capture-pane", "-p", "-t", name,
+            )
+        }
         if (escapes) cmd += "-e"
         if (historyLines < 0) {
             cmd += listOf("-S", "-")
@@ -487,7 +515,7 @@ object TmuxAndy {
     }
 
     fun attachArgv(taskId: String): List<String> =
-        listOf(tmuxBinary(), "-L", SERVER, "attach-session", "-t", sessionName(taskId))
+        tmuxArgv("attach-session", "-t", sessionName(taskId))
 
     /**
      * Blocks until the tmux session disappears (agent process exited) or [timeoutMs]

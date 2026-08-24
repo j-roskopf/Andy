@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -739,11 +740,21 @@ private fun AgentChatComposer(
                         true
                     }
                     .onChatImagePaste(form.scope) { added ->
-                        state.imagePaths = attachChatImages(state.imagePaths, added)
+                        if (!form.services.remoteSession.isRemote) {
+                            state.imagePaths = attachChatImages(state.imagePaths, added)
+                        }
                     }
                     .onImageFilesDropped(
-                        onFiles = { dropped -> state.imagePaths = attachChatImages(state.imagePaths, dropped) },
-                        onDragActiveChange = { active -> state.imageDragActive = active },
+                        onFiles = { dropped ->
+                            if (!form.services.remoteSession.isRemote) {
+                                state.imagePaths = attachChatImages(state.imagePaths, dropped)
+                            }
+                        },
+                        onDragActiveChange = { active ->
+                            if (!form.services.remoteSession.isRemote) {
+                                state.imageDragActive = active
+                            }
+                        },
                     ),
                 textStyle = LocalTextStyle.current.copy(
                     color = TextPrimary,
@@ -1035,9 +1046,34 @@ private fun AgentChatComposer(
         }
         val trailingControls: @Composable () -> Unit = {
                 AgentQuotaMenu(services = form.services, agent = state.agent)
-                ChatImageAttachButton(
-                    onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
-                )
+                if (form.services.remoteSession.isRemote) {
+                    var remoteImagePath by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = remoteImagePath,
+                        onValueChange = { remoteImagePath = it },
+                        singleLine = true,
+                        placeholder = { Text("Remote image path", fontSize = 11.sp) },
+                        modifier = Modifier.widthIn(max = 220.dp),
+                        textStyle = LocalTextStyle.current.copy(fontFamily = MonoFont, fontSize = 11.sp, color = TextPrimary),
+                    )
+                    ComposerChip(
+                        text = "Attach",
+                        selected = false,
+                        showChevron = false,
+                        enabled = remoteImagePath.isNotBlank(),
+                        onClick = {
+                            val path = remoteImagePath.trim()
+                            if (path.isNotEmpty()) {
+                                state.imagePaths = attachChatImages(state.imagePaths, listOf(path))
+                                remoteImagePath = ""
+                            }
+                        },
+                    )
+                } else {
+                    ChatImageAttachButton(
+                        onImagesAttached = { added -> state.imagePaths = attachChatImages(state.imagePaths, added) },
+                    )
+                }
                 ChatVoiceDictationButton(controller = voiceController)
                 ChatSendButton(onClick = onSubmit, enabled = canSubmit)
         }

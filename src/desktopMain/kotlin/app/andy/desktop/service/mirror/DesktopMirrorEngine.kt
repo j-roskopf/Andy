@@ -23,6 +23,7 @@ import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
+import app.andy.ui.live.forRemoteTunnel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -192,6 +193,7 @@ internal fun remoteScrcpyServerSizeMatches(localByteCount: Long, remoteSizeStdou
 internal fun videoCodecOptionsForDevice(
     socManufacturer: String?,
     override: String?,
+    preferLowLatency: Boolean = false,
 ): String? {
     val options = override
         ?.split(',')
@@ -207,6 +209,10 @@ internal fun videoCodecOptionsForDevice(
     val lowLatencyKey = "vendor.qti-ext-enc-low-latency.enable"
     if (isQualcomm && options.none { it.substringBefore('=').trim() == lowLatencyKey }) {
         options += "$lowLatencyKey=1"
+    }
+    // MediaCodec KEY_LATENCY — prefer the smallest encode pipeline when mirroring over SSH.
+    if (preferLowLatency && options.none { it.substringBefore('=').trim() == "latency" }) {
+        options += "latency=1"
     }
     return options.takeIf { it.isNotEmpty() }?.joinToString(",")
 }
@@ -234,6 +240,17 @@ internal fun scaledEmulatorTouchPoint(
 class DesktopMirrorEngine(
     private val runner: CommandRunner,
     private val devices: DesktopDeviceService,
+    /**
+     * When adb runs against a remote server (SSH tunnel), `adb forward tcp:PORT` listens on the
+     * remote host. This bridge opens a matching local SSH forward so we can connect to
+     * 127.0.0.1:PORT with only network latency (real scrcpy H.264).
+     */
+    private val forwardBridge: app.andy.desktop.service.remote.AdbForwardBridge? = null,
+    /**
+     * Rewrite adb argv for long-lived ProcessBuilder launches (scrcpy-server shell). [runner]
+     * already rewrites commands it executes; this covers the one process we spawn directly.
+     */
+    private val rewriteAdbCommand: (List<String>) -> List<String> = { it },
 ) : MirrorEngine {
     override val session = MutableStateFlow<MirrorSession?>(null)
     override val frames = MutableStateFlow(MirrorFrame(1, 1, intArrayOf(0xff000000.toInt())))
@@ -319,14 +336,15 @@ class DesktopMirrorEngine(
     }
 
     override suspend fun connect(serial: String, config: MirrorVideoConfig): CommandResult {
+        val effectiveConfig = if (forwardBridge != null) config.forRemoteTunnel() else config
         val handingOff = pendingRelease?.isActive == true
         pendingRelease?.cancel()
         pendingRelease = null
 
         if (connectedSerial == serial && videoJob?.isActive == true) {
             // Same config, or warm handoff from another live destination — keep scrcpy running.
-            if (connectedConfig == config || handingOff) {
-                rebindPresentationHost(config)
+            if (connectedConfig == effectiveConfig || handingOff) {
+                rebindPresentationHost(effectiveConfig)
                 activeGpuPipeline()?.repaintAll()
                 return CommandResult.success("Embedded mirror already connected for $serial")
             }
@@ -337,7 +355,7 @@ class DesktopMirrorEngine(
         }
 
         connectedSerial = serial
-        connectedConfig = config
+        connectedConfig = effectiveConfig
         connectedAtNanos = System.nanoTime()
         lastEmulatorDisplaySizeRefreshNanos = 0L
         if (config.rendererMode == MirrorRendererMode.Legacy) {
@@ -402,7 +420,7 @@ class DesktopMirrorEngine(
         } else {
             null
         }
-        if (!useNativeRenderer) publishLegacySession(serial, config, fallbackReason = fallbackReason)
+        if (!useNativeRenderer) publishLegacySession(serial, effectiveConfig, fallbackReason = fallbackReason)
         val scrcpyServer = ScrcpyServerLocator.find()
             ?: run {
                 releaseGpuPipeline()
@@ -410,14 +428,18 @@ class DesktopMirrorEngine(
                 nativeHost = null
                 return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
             }
-        status.value = legacyStatus("Starting scrcpy-server raw H.264 mirror for $serial (${config.maxSize}px, ${config.bitRate / 1_000_000.0} Mbps)")
-        startMirrorVideoJob(adb, serial, scrcpyServer, config, useNativeRenderer)
+        val remoteNote = if (forwardBridge != null && effectiveConfig != config) " (remote SSH cap)" else ""
+        status.value = legacyStatus(
+            "Starting scrcpy-server raw H.264 mirror for $serial (${effectiveConfig.maxSize}px, ${effectiveConfig.bitRate / 1_000_000.0} Mbps$remoteNote)",
+        )
+        startMirrorVideoJob(adb, serial, scrcpyServer, effectiveConfig, useNativeRenderer)
         return CommandResult.success("Embedded mirror starting for $serial")
     }
 
     override suspend fun restartForDisplayChange(serial: String, config: MirrorVideoConfig): CommandResult {
+        val effectiveConfig = if (forwardBridge != null) config.forRemoteTunnel() else config
         val adb = devices.adbPath() ?: return CommandResult.failure("ADB not found")
-        if (connectedSerial != serial || videoJob?.isActive != true || connectedConfig != config) {
+        if (connectedSerial != serial || videoJob?.isActive != true || connectedConfig != effectiveConfig) {
             return reconnect(serial, config)
         }
         val scrcpyServer = ScrcpyServerLocator.find()
@@ -439,17 +461,17 @@ class DesktopMirrorEngine(
         status.value = "Restarting mirror for display change…"
         if (serial.isEmulatorSerial()) {
             ensureEmulatorGrpcClient(serial)
-            applyEmulatorGuestRefreshRate(adb, serial, config.maxFps)
+            applyEmulatorGuestRefreshRate(adb, serial, effectiveConfig.maxFps)
         }
         val useNativeRenderer =
             config.rendererMode != MirrorRendererMode.Legacy && activeGpuPipeline() != null
         if (useNativeRenderer) {
             activeGpuPipeline()?.resetDecoderStream()
-            val capture = captureSize(adb, serial, config.maxSize)
+            val capture = captureSize(adb, serial, effectiveConfig.maxSize)
             frames.value = MirrorFrame(capture.width, capture.height, IntArray(0), frameNumber = 1)
             activeGpuPipeline()?.setContentSize(capture.width, capture.height)
         }
-        startMirrorVideoJob(adb, serial, scrcpyServer, config, useNativeRenderer)
+        startMirrorVideoJob(adb, serial, scrcpyServer, effectiveConfig, useNativeRenderer)
         activeGpuPipeline()?.refreshAllGeometry()
         activeGpuPipeline()?.repaintAll()
         return CommandResult.success("Mirror restarting for display change")
@@ -468,6 +490,7 @@ class DesktopMirrorEngine(
         videoProcess?.destroyForcibly()
         videoProcess = null
         videoForwardPort?.let { port ->
+            forwardBridge?.beforeForwardClosed(port)
             runner.run(listOf(adb, "-s", serial, "forward", "--remove", "tcp:$port"), 3)
         }
         videoForwardPort = null
@@ -595,6 +618,7 @@ class DesktopMirrorEngine(
         videoProcess?.destroyForcibly()
         videoProcess = null
         videoForwardPort?.let { port ->
+            forwardBridge?.beforeForwardClosed(port)
             val adb = devices.adbPath()
             if (adb != null && connectedSerial != null) {
                 runner.run(listOf(adb, "-s", connectedSerial!!, "forward", "--remove", "tcp:$port"), 3)
@@ -690,31 +714,31 @@ class DesktopMirrorEngine(
     }
 
     private suspend fun sendScrcpyControl(input: MirrorInput): CommandResult? {
-        val output = synchronized(controlLock) { controlOutput } ?: return null
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                val messages = ScrcpyControlMessage.serialize(input, frames.value)
-                synchronized(controlLock) {
-                    messages.forEach(output::write)
-                    output.flush()
-                    // Start the host-input measurement at the point the command has actually
-                    // entered the scrcpy control socket. Recording it before serialization or a
-                    // contended control lock would inflate the end-to-end result with host-side
-                    // queuing that has not yet injected anything into Android.
-                    if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
-                        activeGpuPipeline()?.recordInput() ?: NativeMirrorJni.recordInput()
-                    }
+        if (synchronized(controlLock) { controlOutput } == null) return null
+        // Avoid nested IO dispatcher hops per Move — those stack with SSH RTT into visible lag.
+        return runCatching {
+            val messages = ScrcpyControlMessage.serialize(input, frames.value)
+            synchronized(controlLock) {
+                val stream = controlOutput ?: return@runCatching CommandResult.failure("scrcpy control closed")
+                messages.forEach(stream::write)
+                stream.flush()
+                // Start the host-input measurement at the point the command has actually
+                // entered the scrcpy control socket. Recording it before serialization or a
+                // contended control lock would inflate the end-to-end result with host-side
+                // queuing that has not yet injected anything into Android.
+                if (session.value?.backend?.kind == MirrorBackendKind.NativeHardware) {
+                    activeGpuPipeline()?.recordInput() ?: NativeMirrorJni.recordInput()
                 }
-                CommandResult.success("Input sent")
-            }.getOrElse { error ->
-                synchronized(controlLock) {
-                    runCatching { controlOutput?.close() }
-                    controlOutput = null
-                    runCatching { controlSocket?.close() }
-                    controlSocket = null
-                }
-                CommandResult.failure("scrcpy control failed: ${error.message ?: error::class.simpleName}")
             }
+            CommandResult.success("Input sent")
+        }.getOrElse { error ->
+            synchronized(controlLock) {
+                runCatching { controlOutput?.close() }
+                controlOutput = null
+                runCatching { controlSocket?.close() }
+                controlSocket = null
+            }
+            CommandResult.failure("scrcpy control failed: ${error.message ?: error::class.simpleName}")
         }
     }
 
@@ -959,6 +983,12 @@ class DesktopMirrorEngine(
             status.value = "Failed to create adb video tunnel: ${forward.stderr.ifBlank { forward.stdout }.take(180)}"
             return@withContext
         }
+        if (forwardBridge != null && !forwardBridge.afterForwardOpened(forwardPort)) {
+            status.value = "Failed to SSH-bridge scrcpy port $forwardPort to the remote adb host"
+            forwardBridge.beforeForwardClosed(forwardPort)
+            runner.run(listOf(adb, "-s", serial, "forward", "--remove", "tcp:$forwardPort"), 3)
+            return@withContext
+        }
         val socManufacturer = runner.run(
             listOf(adb, "-s", serial, "shell", "getprop", "ro.soc.manufacturer"),
             timeoutSeconds = 3,
@@ -966,6 +996,7 @@ class DesktopMirrorEngine(
         val codecOptions = videoCodecOptionsForDevice(
             socManufacturer = socManufacturer,
             override = System.getenv("ANDY_MIRROR_VIDEO_CODEC_OPTIONS"),
+            preferLowLatency = forwardBridge != null,
         )?.let { listOf("video_codec_options=$it") }.orEmpty()
         val command = listOf(
             adb,
@@ -998,7 +1029,7 @@ class DesktopMirrorEngine(
         var fpsWindowStartedAt = System.nanoTime()
         var fpsWindowFrame = 0L
         var decodedFps = 0f
-        val process = ProcessBuilder(command).redirectErrorStream(false).start()
+        val process = ProcessBuilder(rewriteAdbCommand(command)).redirectErrorStream(false).start()
         videoProcess = process
         val stderr = StringBuilder()
         val serverStderrPump = launch {
@@ -1025,8 +1056,12 @@ class DesktopMirrorEngine(
             // First socket only: consume the forward-tunnel dummy byte, then open control.
             socket = awaitScrcpyVideoSocket(forwardPort)
             synchronized(controlLock) {
-                controlSocket = connectScrcpySocket(forwardPort).also { it.tcpNoDelay = true }
-                controlOutput = BufferedOutputStream(controlSocket!!.getOutputStream(), 1024)
+                controlSocket = connectScrcpySocket(forwardPort).also {
+                    it.tcpNoDelay = true
+                    // Prefer low latency over throughput on the control channel (SSH/Tailscale).
+                    runCatching { it.setTrafficClass(0x10) } // IPTOS_LOWDELAY
+                }
+                controlOutput = BufferedOutputStream(controlSocket!!.getOutputStream(), 256)
             }
             status.value = "scrcpy-server video connected (${captureSize.width}x${captureSize.height})"
             var usingNativeRenderer =
@@ -1275,6 +1310,7 @@ class DesktopMirrorEngine(
             if (!process.waitFor(500, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly()
             }
+            forwardBridge?.beforeForwardClosed(forwardPort)
             runner.run(listOf(adb, "-s", serial, "forward", "--remove", "tcp:$forwardPort"), 3)
             if (videoForwardPort == forwardPort) videoForwardPort = null
             videoProcess = null
@@ -1441,7 +1477,10 @@ class DesktopMirrorEngine(
             coroutineContext.ensureActive()
             var socket: Socket? = null
             try {
-                socket = Socket("127.0.0.1", port).also { it.tcpNoDelay = true }
+                socket = Socket("127.0.0.1", port).also {
+                    it.tcpNoDelay = true
+                    runCatching { it.setTrafficClass(0x10) }
+                }
                 val value = socket.getInputStream().read()
                 if (isScrcpyForwardDummyByte(value)) {
                     return socket
@@ -1468,8 +1507,10 @@ class DesktopMirrorEngine(
         var lastError: Throwable? = null
         repeat(SCRCPY_SOCKET_CONNECT_ATTEMPTS) {
             try {
-                val socket = Socket("127.0.0.1", port)
-                socket.tcpNoDelay = true
+                val socket = Socket("127.0.0.1", port).also {
+                    it.tcpNoDelay = true
+                    runCatching { it.setTrafficClass(0x10) }
+                }
                 return socket
             } catch (error: Throwable) {
                 lastError = error

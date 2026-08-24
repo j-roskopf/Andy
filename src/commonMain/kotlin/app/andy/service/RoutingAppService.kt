@@ -1,15 +1,25 @@
 package app.andy.service
 
+import kotlinx.coroutines.flow.MutableStateFlow
+
 /**
  * Routes [AppService] calls to the Android or iOS backend based on
  * [IosTargetRegistry.isIosTarget].
  */
 class RoutingAppService(
-    private val android: AppService,
+    android: AppService,
     private val ios: AppService,
 ) : AppService {
+    private val androidRef = MutableStateFlow(android)
+
+    fun replaceAndroid(next: AppService) {
+        androidRef.value = next
+    }
+
+    private fun android(): AppService = androidRef.value
+
     private fun of(serial: String) =
-        if (IosTargetRegistry.isIosTarget(serial)) ios else android
+        if (IosTargetRegistry.isIosTarget(serial)) ios else android()
 
     override suspend fun listApps(serial: String) = of(serial).listApps(serial)
     override suspend fun focusedPackage(serial: String) = of(serial).focusedPackage(serial)

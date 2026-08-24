@@ -36,15 +36,16 @@ internal fun rememberMirrorInputSender(
     val currentEnabled by rememberUpdatedState(enabled)
     val currentRecordActions by rememberUpdatedState(recordActions)
     var touchGesture by remember { mutableStateOf<BugTouchGesture?>(null) }
-    // A backend call can be slow or non-cancellable (SimulatorKit HID is synchronous JNI).
-    // Give every selected device its own queue so a stalled call from the previous device cannot
-    // hold up input after Android ↔ iOS switching. Disposing the old effect also drops stale
-    // gesture events instead of replaying them against the newly active routing backend.
+    // A backend call can be slow over SSH (or SimulatorKit HID). Unlimited queues of Touch(Move)
+    // events turn network RTT into multi-second gesture lag — coalesce consecutive moves so the
+    // device always sees the latest pointer, never a backlog.
     val channel = remember(mirror, serial) { Channel<MirrorInput>(Channel.UNLIMITED) }
     LaunchedEffect(channel, mirror) {
         withContext(Dispatchers.Default) {
-            for (input in channel) {
-                if (currentEnabled && currentSerial != null) {
+            for (first in channel) {
+                if (!currentEnabled || currentSerial == null) continue
+                for (input in coalesceMirrorInputs(first) { channel.tryReceive().getOrNull() }) {
+                    if (!currentEnabled || currentSerial == null) break
                     mirror.sendInput(input)
                 }
             }
@@ -116,6 +117,37 @@ private data class BugTouchGesture(
 }
 
 private const val BugTapMaxDistancePx = 24
+
+/**
+ * Collapse runs of [MirrorTouchAction.Move] so a slow control path (SSH-tunneled scrcpy)
+ * cannot accumulate a multi-second pointer backlog. Down/Up/keys/taps are never dropped.
+ */
+internal fun coalesceMirrorInputs(
+    first: MirrorInput,
+    tryReceive: () -> MirrorInput?,
+): List<MirrorInput> {
+    val out = ArrayList<MirrorInput>(4)
+    var current = first
+    while (true) {
+        if (current !is MirrorInput.Touch || current.action != MirrorTouchAction.Move) {
+            out += current
+            val next = tryReceive() ?: break
+            current = next
+            continue
+        }
+        // Drain consecutive moves; keep only the latest.
+        var latestMove = current
+        var next: MirrorInput? = tryReceive()
+        while (next is MirrorInput.Touch && next.action == MirrorTouchAction.Move) {
+            latestMove = next
+            next = tryReceive()
+        }
+        out += latestMove
+        if (next == null) break
+        current = next
+    }
+    return out
+}
 
 @Composable
 internal fun MirrorFrameContent(mirror: MirrorEngine, resetKey: Any?, content: @Composable (Flow<MirrorFrame>, MirrorFrame?) -> Unit) {

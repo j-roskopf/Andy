@@ -68,6 +68,7 @@ internal fun LiveSidePanel(
     androidAutoReadyHint: String? = null,
     acceleratedMirror: Boolean,
     isWeb: Boolean,
+    isRemoteSession: Boolean = false,
     maxSize: String,
     bitRateMbps: String,
     maxFps: String,
@@ -76,7 +77,7 @@ internal fun LiveSidePanel(
     onBitRateMbpsChange: (String) -> Unit,
     onMaxFpsChange: (String) -> Unit,
     onRendererModeChange: (MirrorRendererMode) -> Unit,
-    onApplyPreset: (String, String) -> Unit,
+    onApplyPreset: (String, String, String) -> Unit,
     onReconnectMirror: () -> Unit,
     foldable: Boolean,
     foldableHingeAngle: Float,
@@ -162,6 +163,7 @@ internal fun LiveSidePanel(
                     androidAutoReadyHint = androidAutoReadyHint,
                     acceleratedMirror = acceleratedMirror,
                     isWeb = isWeb,
+                    isRemoteSession = isRemoteSession,
                     maxSize = maxSize,
                     bitRateMbps = bitRateMbps,
                     maxFps = maxFps,
@@ -213,6 +215,7 @@ private fun LiveInfoTabContent(
     androidAutoReadyHint: String? = null,
     acceleratedMirror: Boolean,
     isWeb: Boolean,
+    isRemoteSession: Boolean = false,
     maxSize: String,
     bitRateMbps: String,
     maxFps: String,
@@ -221,7 +224,7 @@ private fun LiveInfoTabContent(
     onBitRateMbpsChange: (String) -> Unit,
     onMaxFpsChange: (String) -> Unit,
     onRendererModeChange: (MirrorRendererMode) -> Unit,
-    onApplyPreset: (String, String) -> Unit,
+    onApplyPreset: (String, String, String) -> Unit,
     onReconnectMirror: () -> Unit,
     foldable: Boolean,
     foldableHingeAngle: Float,
@@ -254,14 +257,30 @@ private fun LiveInfoTabContent(
 
         if (showMirrorStreamControls) {
             WorkspaceSectionLabel("Stream quality")
-            val presetOptions = listOf("720", "1080", "1440", "Native")
-            val presetValues = listOf("720", "1080", "1440", "0")
-            val presetBitRates = listOf("4", "8", "12", "16")
-            val selectedPreset = presetValues.indexOf(maxSize).coerceAtLeast(0)
+            val presetOptions = if (isRemoteSession) {
+                listOf("540", "720")
+            } else {
+                listOf("720", "1080", "1440", "Native")
+            }
+            val presetValues = if (isRemoteSession) {
+                listOf("540", "720")
+            } else {
+                listOf("720", "1080", "1440", "0")
+            }
+            val presetBitRates = if (isRemoteSession) {
+                listOf("2", "4")
+            } else {
+                listOf("4", "8", "12", "16")
+            }
+            val presetFps = if (isRemoteSession) RemoteMirrorTuning.MAX_FPS.toString() else "60"
+            val selectedPreset = presetValues.indexOf(maxSize).takeIf { it >= 0 }
+                ?: if (isRemoteSession) presetValues.lastIndex else 0
             SegmentedControl(
                 options = presetOptions,
                 selectedIndex = selectedPreset,
-                onSelect = { index -> onApplyPreset(presetValues[index], presetBitRates[index]) },
+                onSelect = { index ->
+                    onApplyPreset(presetValues[index], presetBitRates[index], presetFps)
+                },
             )
 
             if (acceleratedMirror) {
@@ -297,7 +316,11 @@ private fun LiveInfoTabContent(
                 }
             }
             Text(
-                "Max edge is the stream longest side. 0 keeps native resolution.",
+                if (isRemoteSession) {
+                    "Remote SSH session — capped at ${RemoteMirrorTuning.MAX_SIZE}px / ${RemoteMirrorTuning.BIT_RATE / 1_000_000} Mbps / ${RemoteMirrorTuning.MAX_FPS} fps."
+                } else {
+                    "Max edge is the stream longest side. 0 keeps native resolution."
+                },
                 color = TextSecondary,
                 fontSize = 11.sp,
                 lineHeight = 15.sp,

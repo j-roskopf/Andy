@@ -95,6 +95,45 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun keepThinkingOnTimelineLeavesThoughtsOutOfCollapsedToolGroups() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "Find it"),
+            AgentEvent.Thinking(atMillis = 2, text = "Need to search the repo"),
+            AgentEvent.ToolCall(atMillis = 3, toolName = "Grep", summary = "AgentTranscript"),
+            AgentEvent.ToolCall(atMillis = 4, toolName = "Read", summary = "file.kt"),
+            AgentEvent.Thinking(atMillis = 5, text = "That matches"),
+            AgentEvent.ToolCall(atMillis = 6, toolName = "Edit", summary = "file.kt"),
+            AgentEvent.AssistantText(atMillis = 7, text = "Done."),
+        )
+
+        val items = transcriptDisplayItems(
+            events,
+            collapseActivityBetweenMessages = true,
+            keepThinkingOnTimeline = true,
+        )
+
+        assertEquals(6, items.size)
+        assertIs<TranscriptDisplayItem.Event>(items[0]).also {
+            assertIs<AgentEvent.UserMessage>(it.event)
+        }
+        assertIs<TranscriptDisplayItem.Event>(items[1]).also {
+            assertIs<AgentEvent.Thinking>(it.event)
+        }
+        val firstTools = assertIs<TranscriptDisplayItem.ToolCalls>(items[2])
+        assertEquals(2, firstTools.events.size)
+        assertTrue(firstTools.events.none { it is AgentEvent.Thinking })
+        assertIs<TranscriptDisplayItem.Event>(items[3]).also {
+            assertIs<AgentEvent.Thinking>(it.event)
+        }
+        assertIs<TranscriptDisplayItem.Event>(items[4]).also {
+            assertIs<AgentEvent.ToolCall>(it.event)
+        }
+        assertIs<TranscriptDisplayItem.Event>(items[5]).also {
+            assertIs<AgentEvent.AssistantText>(it.event)
+        }
+    }
+
+    @Test
     fun autoExpandTreatsUnsetKeysAsExpanded() {
         assertTrue(transcriptActivityExpanded("tool-1", emptySet(), autoExpand = true))
         assertFalse(transcriptActivityExpanded("tool-1", setOf("tool-1"), autoExpand = true))

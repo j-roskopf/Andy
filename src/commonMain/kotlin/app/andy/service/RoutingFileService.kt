@@ -1,15 +1,25 @@
 package app.andy.service
 
+import kotlinx.coroutines.flow.MutableStateFlow
+
 /**
  * Routes [FileService] calls to the Android or iOS backend based on
  * [IosTargetRegistry.isIosTarget].
  */
 class RoutingFileService(
-    private val android: FileService,
+    android: FileService,
     private val ios: FileService,
 ) : FileService {
+    private val androidRef = MutableStateFlow(android)
+
+    fun replaceAndroid(next: FileService) {
+        androidRef.value = next
+    }
+
+    private fun android(): FileService = androidRef.value
+
     private fun of(serial: String) =
-        if (IosTargetRegistry.isIosTarget(serial)) ios else android
+        if (IosTargetRegistry.isIosTarget(serial)) ios else android()
 
     override suspend fun list(serial: String, path: String) = of(serial).list(serial, path)
     override suspend fun pull(serial: String, remotePath: String, localPath: String) =
