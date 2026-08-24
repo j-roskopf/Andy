@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,7 +44,10 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.unit.dp
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.composer_mic
 import app.andy.currentTimeMillis
 import app.andy.service.UnavailableVoiceDictationService
 import app.andy.service.VoiceDictationService
@@ -59,6 +63,15 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
+
+internal enum class VoiceDictationButtonStyle {
+    /** Bordered pill with background — settings and legacy composer chrome. */
+    Pill,
+    /** Icon-only — Astryx full-featured composer trailing control. */
+    Bare,
+}
+
 
 /**
  * Desktop [androidx.compose.ui.window.Window] preview-key hook binds the focused chat
@@ -202,6 +215,7 @@ private val TranscribingWidth = 116.dp
 internal fun ChatVoiceDictationButton(
     controller: VoiceDictationController,
     modifier: Modifier = Modifier,
+    style: VoiceDictationButtonStyle = VoiceDictationButtonStyle.Pill,
 ) {
     if (controller.voice is UnavailableVoiceDictationService) return
 
@@ -223,6 +237,20 @@ internal fun ChatVoiceDictationButton(
             elapsedMs = currentTimeMillis() - startedAt
             delay(100)
         }
+    }
+
+    if (style == VoiceDictationButtonStyle.Bare) {
+        BareVoiceDictationButton(
+            controller = controller,
+            modifier = modifier,
+            ready = ready,
+            recording = recording,
+            transcribing = transcribing,
+            interactive = interactive,
+            level = level,
+            elapsedMs = elapsedMs,
+        )
+        return
     }
 
     val targetWidth = when {
@@ -258,6 +286,74 @@ internal fun ChatVoiceDictationButton(
             level = level,
             elapsedMs = elapsedMs,
         )
+    }
+}
+
+@Composable
+private fun BareVoiceDictationButton(
+    controller: VoiceDictationController,
+    modifier: Modifier = Modifier,
+    ready: Boolean,
+    recording: Boolean,
+    transcribing: Boolean,
+    interactive: Boolean,
+    level: Float,
+    elapsedMs: Long,
+) {
+    val tint = when {
+        recording -> Rust
+        ready -> TextPrimary
+        else -> TextSecondary
+    }
+    Box(
+        modifier = modifier
+            .alpha(if (interactive) 1f else 0.7f)
+            .pointerInput(interactive) {
+                if (!interactive) return@pointerInput
+                detectTapGestures(onTap = { controller.toggle() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            recording -> Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Image(
+                    painter = painterResource(Res.drawable.composer_mic),
+                    contentDescription = "Stop recording",
+                    modifier = Modifier.size(AndyLayout.IconLg),
+                    colorFilter = ColorFilter.tint(Rust),
+                )
+                VoiceWaveform(
+                    level = level,
+                    color = Rust,
+                    modifier = Modifier.width(36.dp).height(18.dp),
+                )
+                Text(
+                    text = formatElapsed(elapsedMs),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFont),
+                    color = TextSecondary,
+                )
+            }
+            transcribing -> Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Spinner(spinnerSize = SpinnerSize.Sm, shade = SpinnerShade.Subtle)
+                Text(
+                    text = "Transcribing…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary,
+                )
+            }
+            else -> Image(
+                painter = painterResource(Res.drawable.composer_mic),
+                contentDescription = "Voice input",
+                modifier = Modifier.size(AndyLayout.IconLg),
+                colorFilter = ColorFilter.tint(tint),
+            )
+        }
     }
 }
 

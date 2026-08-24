@@ -20,7 +20,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -49,14 +51,16 @@ import app.andy.ui.agents.ComposerModelSelection
 import app.andy.ui.agents.ComposerProfileChips
 import app.andy.ui.agents.composerModelSelection
 import app.andy.ui.agents.composerModelSelectionAfterCatalogUpdate
-import app.andy.ui.components.ChatComposerFrame
+import app.andy.ui.components.ChatComposerLayout
+import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ComposerPlaceholderHint
-import app.andy.ui.components.ComposerToolbarRow
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
+import app.andy.ui.components.insertTextAtCursor
+import kotlinx.coroutines.launch
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -234,86 +238,106 @@ private fun SideChatStarter(
                 fontSize = 12.sp,
             )
         }
-        ChatComposerFrame(modifier = Modifier.fillMaxWidth()) {
-            Box(Modifier.fillMaxWidth()) {
-                TextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    enabled = !launching,
-                    singleLine = false,
-                    minLines = 3,
-                    maxLines = 7,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 94.dp, max = 180.dp)
-                        .onPreviewKeyEvent { event ->
-                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                            if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
-                            if (event.isShiftPressed) return@onPreviewKeyEvent false
-                            if (canSend) send()
-                            true
-                        },
-                    textStyle = LocalTextStyle.current.copy(
-                        color = TextPrimary,
-                        fontFamily = DisplayFont,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp,
-                    ),
-                    colors = fieldColors(),
-                    chromeStyle = FieldChromeStyle.Borderless,
-                    placeholder = { ComposerPlaceholderHint("Ask a side question…") },
-                )
-            }
-            if (modelId == ComposerCustomModelId) {
-                TextField(
-                    customModel,
-                    { customModel = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = LocalTextStyle.current.copy(
-                        color = TextPrimary,
-                        fontFamily = MonoFont,
-                        fontSize = 12.sp,
-                    ),
-                    colors = fieldColors(),
-                    placeholder = {
-                        Text("custom model or variant", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
-                    },
-                )
-            }
-            ComposerToolbarRow(
-                leading = {
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ComposerProfileChips(
-                            agent = agent,
-                            localRuntime = localRuntime,
-                            modelId = modelId,
-                            reasoningEffort = reasoningEffort,
-                            sandboxMode = sandboxMode,
-                            cliStatuses = cliStatuses,
-                            localBackends = localBackends,
-                            modelOptions = modelOptions,
-                            selectedModel = selectedModel,
-                            onAgentChange = { next, runtime ->
-                                agentChosen = true
-                                agent = next
-                                localRuntime = runtime
-                                seededForAgent = null
-                            },
-                            onModelChange = { modelId = it },
-                            onReasoningEffortChange = { reasoningEffort = it },
-                            onSandboxChange = { sandboxMode = it },
-                        )
-                    }
-                },
-                trailing = {
-                    ChatSendButton(onClick = ::send, enabled = canSend, isSending = launching)
-                },
-            )
+        val scope = rememberCoroutineScope()
+        var draftField by remember { mutableStateOf(TextFieldValue(draft)) }
+        LaunchedEffect(draft) {
+            if (draftField.text != draft) draftField = TextFieldValue(draft)
         }
+        ChatComposerLayout(
+            modifier = Modifier.fillMaxWidth(),
+            onMentionClick = { draftField = insertTextAtCursor(draftField, "@"); draft = draftField.text },
+            onAttachClick = {
+                scope.launch {
+                    attachImagesFromPicker { /* side chat does not support images yet */ }
+                }
+            },
+            attachEnabled = false,
+            input = {
+                Box(Modifier.fillMaxWidth()) {
+                    TextField(
+                        value = draftField,
+                        onValueChange = {
+                            draftField = it
+                            draft = it.text
+                        },
+                        enabled = !launching,
+                        singleLine = false,
+                        minLines = 2,
+                        maxLines = 7,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 72.dp, max = 180.dp)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                if (event.isShiftPressed) return@onPreviewKeyEvent false
+                                if (canSend) send()
+                                true
+                            },
+                        textStyle = LocalTextStyle.current.copy(
+                            color = TextPrimary,
+                            fontFamily = DisplayFont,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                        ),
+                        colors = fieldColors(),
+                        chromeStyle = FieldChromeStyle.Borderless,
+                        placeholder = { ComposerPlaceholderHint("Ask me anything…") },
+                    )
+                }
+            },
+            belowInput = if (modelId == ComposerCustomModelId) {
+                {
+                    TextField(
+                        customModel,
+                        { customModel = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = TextPrimary,
+                            fontFamily = MonoFont,
+                            fontSize = 12.sp,
+                        ),
+                        colors = fieldColors(),
+                        placeholder = {
+                            Text("custom model or variant", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
+                        },
+                    )
+                }
+            } else {
+                null
+            },
+            bottomBarLeading = {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ComposerProfileChips(
+                        agent = agent,
+                        localRuntime = localRuntime,
+                        modelId = modelId,
+                        reasoningEffort = reasoningEffort,
+                        sandboxMode = sandboxMode,
+                        cliStatuses = cliStatuses,
+                        localBackends = localBackends,
+                        modelOptions = modelOptions,
+                        selectedModel = selectedModel,
+                        onAgentChange = { next, runtime ->
+                            agentChosen = true
+                            agent = next
+                            localRuntime = runtime
+                            seededForAgent = null
+                        },
+                        onModelChange = { modelId = it },
+                        onReasoningEffortChange = { reasoningEffort = it },
+                        onSandboxChange = { sandboxMode = it },
+                    )
+                }
+            },
+            bottomBarTrailing = {
+                ChatSendButton(onClick = ::send, enabled = canSend, isSending = launching)
+            },
+        )
     }
 }

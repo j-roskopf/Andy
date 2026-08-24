@@ -109,13 +109,15 @@ import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
-import app.andy.ui.components.ChatComposerFrame
-import app.andy.ui.components.ChatImageAttachButton
+import app.andy.ui.components.ChatComposerLayout
+import app.andy.ui.components.ComposerModelChip
+import app.andy.ui.components.ComposerPermissionsChip
+import app.andy.ui.components.ComposerProviderChip
+import app.andy.ui.components.VoiceDictationButtonStyle
+import app.andy.ui.components.chatComposerDrawerItemsFromPaths
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
-import app.andy.ui.components.ComposerChip
 import app.andy.ui.components.ComposerPlaceholderHint
-import app.andy.ui.components.ComposerToolbarRow
 import app.andy.ui.components.FlyingChatMessage
 import app.andy.ui.components.FlyingChatMessageOverlay
 import app.andy.ui.components.KeyCombo
@@ -123,7 +125,6 @@ import app.andy.ui.components.LocalOnOpenFileLink
 import app.andy.ui.components.flyingChatMessageTarget
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
-import app.andy.ui.components.FilterPill
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
@@ -134,6 +135,7 @@ import app.andy.ui.components.StatusTag
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.TextField
 import app.andy.ui.components.attachChatImages
+import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
@@ -324,6 +326,7 @@ internal fun AgentTaskDetail(
         }
     }
     var modeMenuExpanded by remember(task.id) { mutableStateOf(false) }
+    var permissionsMenuExpanded by remember(task.id) { mutableStateOf(false) }
     val currentAcpMode = remember(availableAcpModes, currentAcpModeId) {
         availableAcpModes.firstOrNull { it.id == currentAcpModeId } ?: availableAcpModes.firstOrNull()
     }
@@ -830,10 +833,45 @@ internal fun AgentTaskDetail(
         }
 
         if (showFollowUpComposer) {
-            ChatComposerFrame(
+            val followUpDrawerItems = if (task.userInputRequest == null) {
+                chatComposerDrawerItemsFromPaths(
+                    skillLabels = selectedSkills.map { skill ->
+                        "/${skill.name}" to {
+                            followUpValue = TextFieldValue(followUp.removeSelectedSkill(skill))
+                        }
+                    },
+                    imagePaths = followUpImagePaths,
+                    onRemoveImage = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
+                )
+            } else {
+                emptyList()
+            }
+            val followUpModelLabel = task.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Auto"
+            ChatComposerLayout(
                 modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
                 highlighted = followUpImageDragActive,
-            ) {
+                drawerItems = followUpDrawerItems,
+                contextFraction = contextStatus?.fraction,
+                onMentionClick = if (task.userInputRequest == null) {
+                    {
+                        followUpValue = insertTextAtCursor(followUpValue, "@")
+                        skillMenuDismissed = false
+                    }
+                } else {
+                    null
+                },
+                onAttachClick = if (task.userInputRequest == null) {
+                    {
+                        scope.launch {
+                            attachImagesFromPicker { added ->
+                                followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                            }
+                        }
+                    }
+                } else {
+                    null
+                },
+                input = {
                 if (task.userInputRequest == null) {
                     task.goal?.let { goal ->
                         Row(
@@ -907,10 +945,10 @@ internal fun AgentTaskDetail(
                                 skillMenuDismissed = false
                             },
                             singleLine = false,
-                            minLines = 3,
+                            minLines = 2,
                             maxLines = 7,
                             modifier = Modifier.fillMaxWidth()
-                                .heightIn(min = 94.dp, max = 180.dp)
+                                .heightIn(min = 72.dp, max = 180.dp)
                                 .onGloballyPositioned { composerFieldCoordinates = it }
                                 .onVoiceDictationShortcut(voiceShortcut, voiceController)
                                 .onPreviewKeyEvent { event ->
@@ -950,7 +988,7 @@ internal fun AgentTaskDetail(
                                         followUpImageDragActive -> "Release to attach images"
                                         followUpImagePaths.isNotEmpty() -> "Add a message, or send the attached images"
                                         awaitingPlanConfirmation -> "Refine the plan, or implement above"
-                                        else -> "Message the agent, tag @files, or use /commands and /skills"
+                                        else -> "Ask me anything…"
                                     },
                                     highlighted = followUpImageDragActive,
                                 )
@@ -1026,117 +1064,104 @@ internal fun AgentTaskDetail(
                         }
                     }
                 }
-
-                if (task.userInputRequest == null && (selectedSkills.isNotEmpty() || followUpImagePaths.isNotEmpty())) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (selectedSkills.isNotEmpty()) {
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                selectedSkills.forEach { skill ->
-                                    FilterPill("/${skill.name} ×", true, Cyan) {
-                                        followUpValue = TextFieldValue(followUp.removeSelectedSkill(skill))
-                                    }
-                                }
-                            }
-                        }
-                        if (followUpImagePaths.isNotEmpty()) {
-                            ChatAttachedImages(
-                                paths = followUpImagePaths,
-                                onRemove = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
-                                maxWidth = 140.dp,
-                                maxHeight = 100.dp,
-                            )
-                        }
-                    }
-                }
-
-                ComposerToolbarRow(
-                    leading = {
-                        Row(
-                            Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                            verticalAlignment = Alignment.CenterVertically,
+                },
+                bottomBarLeading = {
+                    ComposerProviderChip(
+                        text = task.agent.label,
+                        onClick = {},
+                        enabled = false,
+                        leadingContent = { AgentPillIcon(task.agent) },
+                    )
+                    ComposerModelChip(
+                        text = followUpModelLabel,
+                        onClick = {},
+                        enabled = false,
+                    )
+                    Box {
+                        ComposerPermissionsChip(
+                            text = if (planModeActive) "Plan" else "Standard",
+                            onClick = { permissionsMenuExpanded = true },
+                        )
+                        DropdownMenu(
+                            expanded = permissionsMenuExpanded,
+                            onDismissRequest = { permissionsMenuExpanded = false },
                         ) {
-                            ComposerChip(
-                                text = "Plan",
-                                selected = planModeActive,
-                                showChevron = false,
+                            DropdownMenuItem(
+                                text = { Text(if (planModeActive) "Plan mode: on" else "Plan mode: off", color = TextPrimary) },
                                 onClick = { services.agentRuns.updatePlanMode(task.id, !planModeActive) },
                             )
                             if (acpTask && availableAcpModes.isNotEmpty() && currentAcpMode != null) {
-                                Box {
-                                    ComposerChip(
-                                        text = currentAcpMode.name,
-                                        selected = true,
-                                        onClick = { modeMenuExpanded = true },
-                                    )
-                                    DropdownMenu(
-                                        expanded = modeMenuExpanded,
-                                        onDismissRequest = { modeMenuExpanded = false },
-                                    ) {
-                                        availableAcpModes.forEach { mode ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                        Text(
-                                                            mode.name,
-                                                            color = if (mode.id == currentAcpMode.id) Green else TextPrimary,
-                                                            fontFamily = MonoFont,
-                                                            fontSize = 12.sp,
-                                                        )
-                                                        mode.description?.takeIf { it.isNotBlank() }?.let { description ->
-                                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                                        }
-                                                    }
-                                                },
-                                                onClick = {
-                                                    modeMenuExpanded = false
-                                                    services.agentRuns.setAcpSessionMode(task.id, mode.id)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
+                                DropdownMenuItem(
+                                    text = { Text("Mode: ${currentAcpMode.name}", color = TextPrimary) },
+                                    onClick = { modeMenuExpanded = true; permissionsMenuExpanded = false },
+                                )
                             }
                             val providerApp = services.agentRuns.providerAppContinuationLabel(task.id)
                             if (providerApp != null) {
-                                ComposerChip(
-                                    text = "Continue in $providerApp",
-                                    selected = false,
-                                    showChevron = false,
+                                DropdownMenuItem(
+                                    text = { Text("Continue in $providerApp", color = TextPrimary) },
                                     onClick = {
+                                        permissionsMenuExpanded = false
                                         scope.launch { services.agentRuns.openInProviderApp(task.id) }
                                     },
                                 )
                             } else {
-                                ComposerChip(
-                                    text = "Terminal",
-                                    selected = false,
-                                    showChevron = false,
+                                DropdownMenuItem(
+                                    text = { Text("Open terminal", color = TextPrimary) },
                                     onClick = {
+                                        permissionsMenuExpanded = false
                                         services.agentRuns.interactiveResumeCommand(task.id)?.let(copyText)
                                         scope.launch { services.agentRuns.openInTerminal(task.id) }
                                     },
                                 )
                             }
                         }
-                    },
-                    trailing = {
-                        ChatImageAttachButton(
-                            onImagesAttached = { added ->
-                                followUpImagePaths = attachChatImages(followUpImagePaths, added)
-                            },
-                        )
-                        if (task.userInputRequest == null) {
-                            ChatVoiceDictationButton(controller = voiceController)
-                            AgentContextUsageIndicator(contextStatus)
-                            ChatSendButton(onClick = { submitFollowUp() }, enabled = canSendFollowUp)
+                    }
+                    if (acpTask && availableAcpModes.isNotEmpty() && currentAcpMode != null) {
+                        DropdownMenu(
+                            expanded = modeMenuExpanded,
+                            onDismissRequest = { modeMenuExpanded = false },
+                        ) {
+                            availableAcpModes.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(
+                                                mode.name,
+                                                color = if (mode.id == currentAcpMode.id) Green else TextPrimary,
+                                                fontFamily = MonoFont,
+                                                fontSize = 12.sp,
+                                            )
+                                            mode.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                                Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        modeMenuExpanded = false
+                                        services.agentRuns.setAcpSessionMode(task.id, mode.id)
+                                    },
+                                )
+                            }
                         }
-                    },
-                )
-                voiceError?.let { err ->
-                    Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
-                }
-            }
+                    }
+                },
+                bottomBarTrailing = {
+                    if (task.userInputRequest == null) {
+                        ChatVoiceDictationButton(controller = voiceController, style = VoiceDictationButtonStyle.Bare)
+                        ChatSendButton(
+                            onClick = { submitFollowUp() },
+                            enabled = canSendFollowUp,
+                            modifier = Modifier.padding(start = AndySpace.Space2),
+                        )
+                    }
+                },
+                footer = voiceError?.let { err ->
+                    {
+                        Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    }
+                },
+            )
         }
 
         // Same rule as change-summary: never steal height from a live terminal.
