@@ -419,7 +419,10 @@ internal fun HostFilesScreen(
                     }
                 }
                 }
-                AndyHorizontalDivider(color = Border)
+                AndyHorizontalDivider(
+                    color = Border,
+                    modifier = Modifier.padding(vertical = AndySpace.Space2),
+                )
                 Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space1)) {
                 workspaceState.recentHostFiles.forEach { recent ->
@@ -453,77 +456,81 @@ internal fun HostFilesScreen(
                 },
             )
             PanelCard(Modifier.width(localHostFileSearchPaneWidth.dp).fillMaxHeight()) {
-                Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
+                Column(
+                    Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
+                        TextField(
+                            selectedPath,
+                            { selectedPath = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Go") }
+                            OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Up") }
+                            Spacer(Modifier.weight(1f))
+                            OutlinedButton(onClick = {
+                                selectedRoot?.let { root ->
+                                    scope.launch {
+                                        var sawIndexing = false
+                                        state.service.indexRoot(root).first { status ->
+                                            state.statuses[root] = status
+                                            if (status.indexing) sawIndexing = true
+                                            sawIndexing && !status.indexing
+                                        }
+                                    }
+                                }
+                            }, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                                Text("Refresh index")
+                            }
+                        }
+                    }
                     TextField(
-                        selectedPath,
-                        { selectedPath = it },
+                        state.searchQuery,
+                        { state.searchQuery = it },
+                        placeholder = { Text("Search indexed files", color = TextSecondary) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight).focusRequester(state.searchFocusRequester),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Go") }
-                        OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Up") }
-                        Spacer(Modifier.weight(1f))
-                        OutlinedButton(onClick = {
-                            selectedRoot?.let { root ->
-                                scope.launch {
-                                    var sawIndexing = false
-                                    state.service.indexRoot(root).first { status ->
-                                        state.statuses[root] = status
-                                        if (status.indexing) sawIndexing = true
-                                        sawIndexing && !status.indexing
+                    Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                        SearchModePill("All", "ctrl shift A", state.searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
+                        SearchModePill("Names", "ctrl shift N", state.searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
+                        SearchModePill("Contents", "ctrl shift F", state.searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
+                    }
+                    if (state.message.isNotBlank()) Text(state.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (state.searchQuery.isNotBlank()) {
+                        LazyColumn(Modifier.weight(1f)) {
+                            items(state.searchResults) { result ->
+                                val icon = hostFileIconForPath(result.path, isDirectory = false)
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .clickable {
+                                            revealFileInTree(result.path)
+                                            openFile(result.path)
+                                        }
+                                        .padding(vertical = 8.dp),
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        HostFileIcon(icon)
+                                        Text(hostDisplayPath(result.path, result.root), color = if (result.kind == HostSearchMatchKind.FileName) Cyan else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                        if (dirtyPaths.contains(result.path)) {
+                                            Image(
+                                                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
+                                                contentDescription = "Unsaved",
+                                                modifier = Modifier.size(13.dp),
+                                            )
+                                        }
                                     }
+                                    Text(listOfNotNull(result.kind.name.lowercase(), result.lineNumber?.let { "line $it" }, result.preview.takeIf { it.isNotBlank() }).joinToString(" · "), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
-                        }, contentPadding = PaddingValues(horizontal = 10.dp)) {
-                            Text("Refresh index")
                         }
-                    }
-                }
-                TextField(
-                    state.searchQuery,
-                    { state.searchQuery = it },
-                    placeholder = { Text("Search indexed files", color = TextSecondary) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight).focusRequester(state.searchFocusRequester),
-                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
-                    SearchModePill("All", "ctrl shift A", state.searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
-                    SearchModePill("Names", "ctrl shift N", state.searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
-                    SearchModePill("Contents", "ctrl shift F", state.searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
-                }
-                if (state.message.isNotBlank()) Text(state.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (state.searchQuery.isNotBlank()) {
-                    LazyColumn(Modifier.weight(1f)) {
-                        items(state.searchResults) { result ->
-                            val icon = hostFileIconForPath(result.path, isDirectory = false)
-                            Column(
-                                Modifier.fillMaxWidth()
-                                    .clickable {
-                                        revealFileInTree(result.path)
-                                        openFile(result.path)
-                                    }
-                                    .padding(vertical = 8.dp),
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    HostFileIcon(icon)
-                                    Text(hostDisplayPath(result.path, result.root), color = if (result.kind == HostSearchMatchKind.FileName) Cyan else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                    if (dirtyPaths.contains(result.path)) {
-                                        Image(
-                                            painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
-                                            contentDescription = "Unsaved",
-                                            modifier = Modifier.size(13.dp),
-                                        )
-                                    }
-                                }
-                                Text(listOfNotNull(result.kind.name.lowercase(), result.lineNumber?.let { "line $it" }, result.preview.takeIf { it.isNotBlank() }).joinToString(" · "), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                } else {
-                    LazyColumn(Modifier.weight(1f), state = treeListState) {
+                    } else {
+                        LazyColumn(Modifier.weight(1f), state = treeListState) {
                         items(treeRows, key = { it.entry.path }) { row ->
                             HostTreeRowView(
                                 row = row,
@@ -537,6 +544,7 @@ internal fun HostFilesScreen(
                         }
                     }
                 }
+            }
             }
             PaneDivider(
                 onDrag = { dragX ->
@@ -720,4 +728,3 @@ private fun SearchModePill(text: String, shortcut: String, selected: Boolean, co
         }
     }
 }
-

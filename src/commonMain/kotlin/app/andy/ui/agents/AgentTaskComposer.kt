@@ -97,6 +97,7 @@ import app.andy.model.composerCommandName
 import app.andy.model.composerCommandToken
 import app.andy.model.defaultSandboxMode
 import app.andy.model.groupedByModelFamily
+import app.andy.model.hasAvailableAgentProvider
 import app.andy.model.HostSearchResult
 import app.andy.model.labelFor
 import app.andy.model.parseAgentGoalCommand
@@ -212,11 +213,17 @@ internal fun AgentTaskComposerPane(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                AgentMark(form.state.agent)
+                if (form.hasAvailableProvider) {
+                    AgentMark(form.state.agent)
+                }
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    projectContext?.let { "What do you want to work on in ${it.name}?" }
-                        ?: "What can I help you with?",
+                    if (form.hasAvailableProvider) {
+                        projectContext?.let { "What do you want to work on in ${it.name}?" }
+                            ?: "What can I help you with?"
+                    } else {
+                        "No chat providers are available"
+                    },
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.Medium,
@@ -225,15 +232,24 @@ internal fun AgentTaskComposerPane(
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Import thread from provider",
+                    if (form.hasAvailableProvider) {
+                        "Import thread from provider"
+                    } else {
+                        "Install a supported provider CLI, then refresh the check to start a chat."
+                    },
                     color = TextSecondary,
                     fontFamily = DisplayFont,
                     fontSize = 13.sp,
-                    modifier = Modifier.clickable(role = Role.Button) { importingThread = true },
+                    modifier = if (form.hasAvailableProvider) {
+                        Modifier.clickable(role = Role.Button) { importingThread = true }
+                    } else {
+                        Modifier
+                    },
                 )
             }
             AgentCliIssueNotices(
                 statuses = cliStatuses,
+                showUnavailableRefresh = !form.hasAvailableProvider && cliStatuses.isNotEmpty(),
                 onCopyRepairCommand = copyText,
                 onRefresh = { scope.launch { services.agentRuns.refreshCliStatuses() } },
             )
@@ -244,8 +260,10 @@ internal fun AgentTaskComposerPane(
                 voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) },
                 dictationActive = dictationActive,
                 onSubmit = {
-                    onSubmit(form.buildDraft())
-                    form.clearPrompt()
+                    if (form.canSubmit) {
+                        onSubmit(form.buildDraft())
+                        form.clearPrompt()
+                    }
                 },
             )
         }
@@ -255,11 +273,36 @@ internal fun AgentTaskComposerPane(
 @Composable
 private fun AgentCliIssueNotices(
     statuses: List<AgentCliStatus>,
+    showUnavailableRefresh: Boolean,
     onCopyRepairCommand: (String) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (showUnavailableRefresh) {
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.OrangeSubtle,
+                borderColor = AndyColors.OrangeBorder.copy(alpha = 0.65f),
+                contentPadding = PaddingValues(10.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    "No provider CLIs detected",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                )
+                Text(
+                    "Install a supported provider CLI, then refresh discovery to start a chat.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+                OutlinedButton(onClick = onRefresh) { Text("refresh check", fontSize = 10.sp) }
+            }
+        }
         statuses.mapNotNull { status -> status.issue?.let { status to it } }.forEach { (status, issue) ->
             PanelCard(
                 modifier = Modifier.fillMaxWidth(),
@@ -395,6 +438,10 @@ private fun rememberAgentTaskComposerForm(
     }
     val selectedOption = AgentPickerOption(state.agent, state.localRuntime.takeIf { state.agent.isLocalModelBackend })
     val selectedCliAvailable = selectedOption.comboReady(cliStatuses, localBackends)
+    // An empty status list means discovery has not completed yet, so preserve the optimistic
+    // initial composer state. Once discovery has reported every option unavailable, do not
+    // present the fallback agent as a usable selection.
+    val hasAvailableProvider = hasAvailableAgentProvider(cliStatuses, localBackends)
     val modelOptions = AgentModelCatalog.options(state.agent, providerModels)
     val selectedModel = AgentModelCatalog.option(state.agent, state.modelId, providerModels)
     val slashCommand = findComposerSlashCommand(state.prompt)
@@ -436,7 +483,8 @@ private fun rememberAgentTaskComposerForm(
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         (state.budgetText.isBlank() || validBudget != null) &&
         selectedCliAvailable &&
-        localModelChosen
+        localModelChosen &&
+        hasAvailableProvider
 
     LaunchedEffect(lastUsedAgent, cliStatuses, localBackends, projectKey, providerDefaults) {
         if (!state.providerChosenInComposer) {
@@ -535,6 +583,7 @@ private fun rememberAgentTaskComposerForm(
         fileMention = fileMention,
         mentionResults = mentionResults,
         selectedSkills = selectedSkills,
+        hasAvailableProvider = hasAvailableProvider,
         canSubmit = canSubmit,
         scope = scope,
     )
@@ -558,6 +607,7 @@ private class AgentTaskComposerForm(
     val fileMention: ComposerFileMention?,
     val mentionResults: List<HostSearchResult>,
     val selectedSkills: List<AgentSkill>,
+    val hasAvailableProvider: Boolean,
     val canSubmit: Boolean,
     val scope: CoroutineScope,
 ) {
@@ -677,6 +727,7 @@ private fun AgentChatComposer(
     var sandboxMenuExpanded by remember { mutableStateOf(false) }
     var voiceError by remember { mutableStateOf<String?>(null) }
     val canSubmit = form.canSubmit
+    val hasAvailableProvider = form.hasAvailableProvider
     val slashHighlight = rememberComposerSlashHighlight(form)
     val voiceController = rememberVoiceDictationController(
         voice = form.services.voiceDictation,
@@ -721,6 +772,7 @@ private fun AgentChatComposer(
                 singleLine = false,
                 minLines = 3,
                 maxLines = 7,
+                enabled = hasAvailableProvider,
                 modifier = Modifier.fillMaxWidth()
                     .heightIn(min = 88.dp, max = 180.dp)
                     .onVoiceDictationShortcut(voiceShortcut, voiceController)
@@ -768,6 +820,7 @@ private fun AgentChatComposer(
                 placeholder = {
                     ComposerPlaceholderHint(
                         text = when {
+                            !hasAvailableProvider -> "Install a provider CLI to start a chat"
                             state.imageDragActive -> "Release to attach images"
                             state.imagePaths.isNotEmpty() -> "Add a message, or send the attached images"
                             else -> "Message the agent, tag @files, or use /commands and /skills"
@@ -883,13 +936,18 @@ private fun AgentChatComposer(
         val leadingControls: @Composable () -> Unit = {
                     Box {
                         ComposerChip(
-                            text = AgentPickerOption(
-                                state.agent,
-                                state.localRuntime.takeIf { state.agent.isLocalModelBackend },
-                            ).label,
+                            text = if (hasAvailableProvider) {
+                                AgentPickerOption(
+                                    state.agent,
+                                    state.localRuntime.takeIf { state.agent.isLocalModelBackend },
+                                ).label
+                            } else {
+                                "No provider available"
+                            },
                             selected = true,
                             onClick = { agentMenuExpanded = true },
-                            leadingContent = { AgentPillIcon(state.agent) },
+                            enabled = hasAvailableProvider,
+                            leadingContent = if (hasAvailableProvider) ({ AgentPillIcon(state.agent) }) else null,
                         )
                         DropdownMenu(expanded = agentMenuExpanded, onDismissRequest = { agentMenuExpanded = false }) {
                             // Keep this in step with the expanded provider controls: an
@@ -921,7 +979,7 @@ private fun AgentChatComposer(
                             }
                         }
                     }
-                    Box {
+                    if (hasAvailableProvider) Box {
                         val modelLabel = when {
                             state.usesCustomModel -> "custom"
                             form.selectedModel != null -> form.selectedModel.label
@@ -987,7 +1045,7 @@ private fun AgentChatComposer(
                             )
                         }
                     }
-                    form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                    if (hasAvailableProvider) form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
                         Box {
                             ComposerChip(
                                 text = state.reasoningEffort?.label ?: "Effort",
@@ -1010,13 +1068,13 @@ private fun AgentChatComposer(
                             )
                         }
                     }
-                    ComposerChip(
+                    if (hasAvailableProvider) ComposerChip(
                         text = "Plan",
                         selected = state.planMode,
                         showChevron = false,
                         onClick = { state.planMode = !state.planMode },
                     )
-                    if (state.agent == AgentKind.OpenClaw) {
+                    if (hasAvailableProvider && state.agent == AgentKind.OpenClaw) {
                         ComposerChip(
                             text = if (state.openClawNewSession) "New session" else "Main session",
                             selected = state.openClawNewSession,
@@ -1024,7 +1082,7 @@ private fun AgentChatComposer(
                             onClick = { state.openClawNewSession = !state.openClawNewSession },
                         )
                     }
-                    Box {
+                    if (hasAvailableProvider) Box {
                         val sandbox = state.sandboxMode ?: state.autonomy.defaultSandboxMode()
                         ComposerChip(
                             text = sandbox.labelFor(state.agent.runtimeKind(state.localRuntime)),
@@ -1045,6 +1103,9 @@ private fun AgentChatComposer(
                     }
         }
         val trailingControls: @Composable () -> Unit = {
+            if (!hasAvailableProvider) {
+                ChatSendButton(onClick = onSubmit, enabled = false)
+            } else {
                 AgentQuotaMenu(services = form.services, agent = state.agent)
                 if (form.services.remoteSession.isRemote) {
                     var remoteImagePath by remember { mutableStateOf("") }
@@ -1076,6 +1137,7 @@ private fun AgentChatComposer(
                 }
                 ChatVoiceDictationButton(controller = voiceController)
                 ChatSendButton(onClick = onSubmit, enabled = canSubmit)
+            }
         }
         if (wrapComposerControls) {
             Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
