@@ -249,6 +249,7 @@ internal fun AgentTaskComposerPane(
             }
             AgentCliIssueNotices(
                 statuses = cliStatuses,
+                showUnavailableRefresh = !form.hasAvailableProvider && cliStatuses.isNotEmpty(),
                 onCopyRepairCommand = copyText,
                 onRefresh = { scope.launch { services.agentRuns.refreshCliStatuses() } },
             )
@@ -272,11 +273,36 @@ internal fun AgentTaskComposerPane(
 @Composable
 private fun AgentCliIssueNotices(
     statuses: List<AgentCliStatus>,
+    showUnavailableRefresh: Boolean,
     onCopyRepairCommand: (String) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (showUnavailableRefresh) {
+            PanelCard(
+                modifier = Modifier.fillMaxWidth(),
+                background = AndyColors.OrangeSubtle,
+                borderColor = AndyColors.OrangeBorder.copy(alpha = 0.65f),
+                contentPadding = PaddingValues(10.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    "No provider CLIs detected",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                )
+                Text(
+                    "Install a supported provider CLI, then refresh discovery to start a chat.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+                OutlinedButton(onClick = onRefresh) { Text("refresh check", fontSize = 10.sp) }
+            }
+        }
         statuses.mapNotNull { status -> status.issue?.let { status to it } }.forEach { (status, issue) ->
             PanelCard(
                 modifier = Modifier.fillMaxWidth(),
