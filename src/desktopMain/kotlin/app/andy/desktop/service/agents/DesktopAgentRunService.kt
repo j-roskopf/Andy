@@ -334,6 +334,15 @@ class DesktopAgentRunService(
     /** Push latest Settings terminal appearance into live agent sessions. */
     internal fun reloadTerminalAppearance() = terminals.reloadAppearance()
 
+    /** Remote SSH tmux forward for [AgentTerminalManager] — not process-global [TmuxAndy]. */
+    fun setForwardedTmuxSocket(path: File?) {
+        terminals.setForwardedTmuxSocket(path)
+    }
+
+    fun setRemoteTerminalTaskIds(ids: Collection<String>) {
+        terminals.setRemoteTerminalTaskIds(ids)
+    }
+
     /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the terminal mounts when the PTY appears. */
     internal val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
 
@@ -4450,7 +4459,25 @@ class DesktopAgentRunService(
         }
     }
 
+    private suspend fun ensureCompletedChangesCaptured(runId: String) {
+        val task = currentTask(runId) ?: return
+        if (task.completedChanges != null) return
+        val cwd = task.cwd ?: return
+        val baseline = task.changeBaselineTree ?: return
+        val completedChanges = withContext(Dispatchers.IO) {
+            worktrees.changeSnapshot(
+                cwd,
+                baseline,
+                touchedPaths(runId, cwd).takeIf { it.isNotEmpty() },
+            )
+        } ?: return
+        updateTask(runId) { t ->
+            if (t.completedChanges == null) t.copy(completedChanges = completedChanges) else t
+        }
+    }
+
     private suspend fun reconcileWorkflowRun(runId: String) {
+        ensureCompletedChangesCaptured(runId)
         val run = currentTask(runId) ?: return
         val projectTaskId = run.workflowTaskId ?: return
         val typedTask = projectTask(projectTaskId) ?: return
@@ -5496,21 +5523,6 @@ class DesktopAgentRunService(
             }
         }
         previousTaskStatuses.remove(taskId)
-        if (captureChanges) {
-            val cwd = checkNotNull(snapshotCwd)
-            val baseline = checkNotNull(snapshotBaseline)
-            scope.launch(Dispatchers.IO) {
-                val completedChanges = worktrees.changeSnapshot(
-                    cwd,
-                    baseline,
-                    touchedPaths(taskId, cwd).takeIf { it.isNotEmpty() },
-                ) ?: return@launch
-                updateTask(taskId) { task ->
-                    if (task.completedChanges == null) task.copy(completedChanges = completedChanges) else task
-                }
-                persist()
-            }
-        }
         if (status == AgentStatus.Done && queuedFollowUp != null && !stoppedByUser) {
             updateTask(taskId) { current -> current.copy(queuedFollowUps = current.queuedFollowUps.drop(1)) }
             resume(
@@ -5523,6 +5535,9 @@ class DesktopAgentRunService(
             )
         } else {
             scope.launch {
+                if (captureChanges) {
+                    ensureCompletedChangesCaptured(taskId)
+                }
                 persist()
                 reconcileWorkflowRun(taskId)
                 val workflowTaskId = currentTask(taskId)?.workflowTaskId

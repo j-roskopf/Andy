@@ -55,7 +55,7 @@ class SshRemoteProbes(
      */
     suspend fun discoverSkills(agent: AgentKind, directory: String?): List<AgentSkill> =
         withContext(Dispatchers.IO) {
-            val home = sshExec(listOf("printf", "%s", "\$HOME")).stdout.trim()
+            val home = sshShell("printf '%s' \"\$HOME\"").stdout.trim()
                 .takeIf { it.isNotBlank() } ?: return@withContext emptyList()
             val workspace = directory?.takeIf { it.isNotBlank() }
             val roots = remoteSkillRoots(agent, workspace, home)

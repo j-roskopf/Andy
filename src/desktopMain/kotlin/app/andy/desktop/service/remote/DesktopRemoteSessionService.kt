@@ -9,7 +9,6 @@ import app.andy.service.AutomationService
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
-import app.andy.terminal.TmuxAndy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -71,6 +71,7 @@ class DesktopRemoteSessionService(
     /** Authenticated remotes kept alive while the UI is on Local or another host. */
     private val warmByTarget = java.util.concurrent.ConcurrentHashMap<String, WarmSession>()
     private var watchJob: Job? = null
+    private var remoteTerminalTaskIdsJob: Job? = null
     private val idSeq = AtomicLong(1)
 
     private data class WarmSession(
@@ -116,7 +117,7 @@ class DesktopRemoteSessionService(
         }
         // Keep the current remote warm when hopping away (Local or another host).
         parkActiveIfAny()
-        TmuxAndy.useAbsoluteSocket(null)
+        clearRemoteTerminalBridge()
         agentBackend.switchTo(localAgentBackend)
         automationBackend.switchTo(localAutomations)
         androidBackend?.deactivateRemote()
@@ -138,7 +139,7 @@ class DesktopRemoteSessionService(
             val message = result.exceptionOrNull()?.message ?: "SSH remote connect failed"
             SshAskpassBroker.forget(trimmed)
             teardownTunnelOnly()
-            TmuxAndy.useAbsoluteSocket(null)
+            clearRemoteTerminalBridge()
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
             androidBackend?.deactivateRemote()
@@ -169,6 +170,10 @@ class DesktopRemoteSessionService(
                 watchJob = null
                 remoteClient.getAndSet(null)?.setSshProbeTarget(null)
                 teardownTunnelOnly()
+                clearRemoteTerminalBridge()
+                _state.update {
+                    it.copy(status = RemoteSessionStatus.Local, target = target, error = null)
+                }
             }
         }
         return connect(target)
@@ -228,7 +233,6 @@ class DesktopRemoteSessionService(
 
         awaitSocket(localAndyd, label = "andyd")
         // tmux socket may be absent until a session exists; still require andyd.
-        TmuxAndy.useAbsoluteSocket(localTmux)
 
         val missing = probeRequiredTools(localAndyd)
         if (missing.isNotEmpty()) {
@@ -248,6 +252,7 @@ class DesktopRemoteSessionService(
         agentBackend.switchTo(client)
         automationBackend.switchTo(client)
         activateAndroidBackend(handles)
+        configureRemoteTerminalBridge(client, localTmux)
 
         _remoteActionsConfig.value = loadRemoteActionsConfig(target, controlPath)
 
@@ -264,10 +269,10 @@ class DesktopRemoteSessionService(
         remoteClient.set(warm.client)
         warm.client.setSshProbeTarget(target, warm.handles.controlPath)
         warm.client.attachLocalTerminalBridge(attachBridge)
-        TmuxAndy.useAbsoluteSocket(warm.handles.localTmux)
         agentBackend.switchTo(warm.client)
         automationBackend.switchTo(warm.client)
         activateAndroidBackend(warm.handles)
+        configureRemoteTerminalBridge(warm.client, warm.handles.localTmux)
 
         _remoteActionsConfig.value = warm.actionsConfig
         addSavedTargetQuiet(target)
@@ -301,6 +306,25 @@ class DesktopRemoteSessionService(
         warmByTarget.put(handles.target, WarmSession(handles, client, actions))?.let { stale ->
             if (stale.handles !== handles) destroyHandles(stale.handles)
         }
+        clearRemoteTerminalBridge()
+    }
+
+    private fun configureRemoteTerminalBridge(client: McpAgentRunClient, localTmux: File) {
+        attachBridge.setForwardedTmuxSocket(localTmux)
+        attachBridge.setRemoteTerminalTaskIds(client.tasks.value.map { it.id })
+        remoteTerminalTaskIdsJob?.cancel()
+        remoteTerminalTaskIdsJob = scope.launch {
+            client.tasks.collect { tasks ->
+                attachBridge.setRemoteTerminalTaskIds(tasks.map { it.id })
+            }
+        }
+    }
+
+    private fun clearRemoteTerminalBridge() {
+        remoteTerminalTaskIdsJob?.cancel()
+        remoteTerminalTaskIdsJob = null
+        attachBridge.setForwardedTmuxSocket(null)
+        attachBridge.setRemoteTerminalTaskIds(emptyList())
     }
 
     private fun destroyWarm(target: String) {
@@ -376,7 +400,7 @@ class DesktopRemoteSessionService(
             teardownTunnelOnly()
         }
         _remoteActionsConfig.value = null
-        TmuxAndy.useAbsoluteSocket(null)
+        clearRemoteTerminalBridge()
         if (restoreLocal) {
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
