@@ -38,7 +38,12 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
+import app.andy.ui.components.TextButton
+import app.andy.ui.components.ChatBubbleGroup
+import app.andy.ui.components.ChatBubbleSender
+import app.andy.ui.components.ChatBubbleVariant
+import app.andy.ui.components.ChatMessageBubble
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -460,9 +465,12 @@ internal fun AgentTranscript(
                         modifier = Modifier.testTag("transcript-row-${transcriptDisplayItemKey(item)}"),
                     ) {
                         when (item) {
-                            is TranscriptDisplayItem.Event -> TranscriptEvent(
+                            is TranscriptDisplayItem.Event -> {
+                                val bubbleGroup = transcriptChatBubbleGroup(displayItems, itemIndex)
+                                TranscriptEvent(
                                 event = item.event,
                                 eventKey = transcriptEventKey(item.index, item.event),
+                                bubbleGroup = bubbleGroup,
                                 toolExpanded = transcriptActivityExpanded(
                                     transcriptEventKey(item.index, item.event),
                                     expandedToolKeys,
@@ -498,7 +506,10 @@ internal fun AgentTranscript(
                                 onToolFileOpen = onToolFileOpen,
                                 knownTasks = knownTasks,
                                 currentTaskId = currentTaskId,
+                                autoExpandThinkingSections = autoExpandThinkingSections,
+                                autoExpandToolSections = autoExpandToolSections,
                             )
+                            }
                             is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
                                 events = item.events,
                                 startIndex = item.startIndex,
@@ -547,7 +558,8 @@ internal fun AgentTranscript(
                     item(key = "original-prompt", contentType = "message") {
                         SelectionContainer {
                             ChatMessageBubble(
-                                alignEnd = true,
+                                sender = ChatBubbleSender.User,
+                                testTag = "user-message-bubble",
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
@@ -695,6 +707,42 @@ internal fun transcriptDisplayItems(
 internal fun AgentEvent.isTranscriptActivityEvent(): Boolean =
     this is AgentEvent.Thinking || this is AgentEvent.ToolCall || this is AgentEvent.ToolResult
 
+/** Whether this event renders as a user/assistant chat bubble in the transcript. */
+internal fun AgentEvent.chatBubbleSenderOrNull(): ChatBubbleSender? = when (this) {
+    is AgentEvent.UserMessage -> if (text.isSilentConnectionRecoveryPrompt()) null else ChatBubbleSender.User
+    is AgentEvent.AssistantText -> {
+        val stripped = stripDecisionCheckpointMarkup(text.stripTrailingConnectionStallError())
+        when {
+            stripped.isBlank() -> null
+            stripped.isRetriableConnectionStallMessage() -> null
+            else -> ChatBubbleSender.Assistant
+        }
+    }
+    else -> null
+}
+
+/** Astryx-style grouping for consecutive bubbles from the same sender. */
+internal fun transcriptChatBubbleGroup(
+    displayItems: List<TranscriptDisplayItem>,
+    itemIndex: Int,
+): ChatBubbleGroup {
+    val current = displayItems.getOrNull(itemIndex) as? TranscriptDisplayItem.Event
+        ?: return ChatBubbleGroup.Single
+    val sender = current.event.chatBubbleSenderOrNull() ?: return ChatBubbleGroup.Single
+    fun neighborSender(index: Int): ChatBubbleSender? {
+        val neighbor = displayItems.getOrNull(index) as? TranscriptDisplayItem.Event ?: return null
+        return neighbor.event.chatBubbleSenderOrNull()
+    }
+    val hasPrev = neighborSender(itemIndex - 1) == sender
+    val hasNext = neighborSender(itemIndex + 1) == sender
+    return when {
+        hasPrev && hasNext -> ChatBubbleGroup.Middle
+        hasPrev -> ChatBubbleGroup.Last
+        hasNext -> ChatBubbleGroup.First
+        else -> ChatBubbleGroup.Single
+    }
+}
+
 @Composable
 private fun AgentThinkingIndicator() {
     Row(
@@ -717,6 +765,7 @@ private fun TranscriptEvent(
     thinkingExpanded: Boolean,
     agentLabel: String,
     completedContent: (@Composable () -> Unit)?,
+    bubbleGroup: ChatBubbleGroup = ChatBubbleGroup.Single,
     awaitingPlanConfirmation: Boolean = false,
     activePermissionRequestId: String? = null,
     onToolExpandedChange: (String, Boolean) -> Unit,
@@ -725,6 +774,8 @@ private fun TranscriptEvent(
     onToolFileOpen: (ToolCallFileContent) -> Unit,
     knownTasks: List<AgentTask> = emptyList(),
     currentTaskId: String? = null,
+    autoExpandThinkingSections: Boolean = false,
+    autoExpandToolSections: Boolean = false,
 ) {
     when (event) {
         is AgentEvent.SessionStarted -> Unit
@@ -733,7 +784,7 @@ private fun TranscriptEvent(
                 event.text.stripTrailingConnectionStallError(),
             )
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
-            AgentResponse {
+            AgentResponse(group = bubbleGroup) {
                 ChatMarkdown(visibleText, lineHeight = 21.sp)
             }
         }
@@ -741,11 +792,14 @@ private fun TranscriptEvent(
             text = event.text,
             expanded = thinkingExpanded,
             onExpandedChange = { expanded -> onThinkingExpandedChange(eventKey, expanded) },
+            animateExpansion = !autoExpandThinkingSections,
         )
         is AgentEvent.UserMessage -> {
             if (event.text.isSilentConnectionRecoveryPrompt()) return
             ChatMessageBubble(
-                alignEnd = true,
+                sender = ChatBubbleSender.User,
+                group = bubbleGroup,
+                testTag = "user-message-bubble",
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (event.text.isNotBlank()) {
@@ -778,6 +832,7 @@ private fun TranscriptEvent(
                 ),
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                animateExpansion = !autoExpandToolSections,
                 knownTasks = knownTasks,
                 currentTaskId = currentTaskId,
             )
@@ -785,6 +840,7 @@ private fun TranscriptEvent(
             ToolBlock(
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                animateExpansion = !autoExpandToolSections,
                 marker = "▸",
                 name = event.toolName,
                 summary = event.summary,
@@ -801,6 +857,7 @@ private fun TranscriptEvent(
             ToolBlock(
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
+                animateExpansion = !autoExpandToolSections,
                 marker = if (event.isError) "✗" else "✓",
                 name = event.toolName,
                 summary = event.summary,
@@ -953,6 +1010,7 @@ private fun ThinkingStep(
     text: String,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    animateExpansion: Boolean = true,
 ) {
     val expandable = text.lineSequence().any { it.isNotBlank() }
     TranscriptExpandableRow(
@@ -960,6 +1018,7 @@ private fun ThinkingStep(
         expanded = expanded,
         onExpandedChange = onExpandedChange,
         expandable = expandable,
+        animateExpansion = animateExpansion,
         headlineColor = TextSecondary,
         indent = TranscriptAsideIndent,
     ) {
@@ -996,37 +1055,17 @@ private fun ChatUserText(text: String) {
 }
 
 @Composable
-private fun ChatMessageBubble(
-    alignEnd: Boolean,
-    content: @Composable () -> Unit,
-) {
-    // Traditional chat: user bubbles sit on the trailing edge and cap below full width.
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start,
-    ) {
-        Column(
-            modifier = Modifier
-                .then(if (alignEnd) Modifier.widthIn(max = 640.dp) else Modifier.fillMaxWidth())
-                .testTag(if (alignEnd) "user-message-bubble" else "agent-message-bubble")
-                .clip(RoundedCornerShape(AndyRadius.Control))
-                .background(AndyColors.SurfaceRaised)
-                .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
-            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            content = { content() },
-        )
-    }
-}
-
-@Composable
 private fun AgentResponse(
+    group: ChatBubbleGroup = ChatBubbleGroup.Single,
     content: @Composable () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        content = { content() },
-    )
+    ChatMessageBubble(
+        sender = ChatBubbleSender.Assistant,
+        variant = ChatBubbleVariant.Ghost,
+        group = group,
+    ) {
+        content()
+    }
 }
 
 @Composable
@@ -1373,6 +1412,7 @@ private fun CompactToolCallsBlock(
             sources = classification.spawnSources,
             expanded = expanded,
             onExpandedChange = onExpandedChange,
+            animateExpansion = !autoExpandToolSections,
             knownTasks = knownTasks,
             currentTaskId = currentTaskId,
         )
@@ -1385,6 +1425,7 @@ private fun CompactToolCallsBlock(
         headline = classification.headline,
         expanded = expanded,
         onExpandedChange = onExpandedChange,
+        animateExpansion = !autoExpandToolSections,
         headlineColor = headlineColor,
         indent = TranscriptAsideIndent,
     ) {
@@ -1400,6 +1441,7 @@ private fun CompactToolCallsBlock(
                         text = event.text,
                         expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandThinkingSections),
                         onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
+                        animateExpansion = !autoExpandThinkingSections,
                     )
                     is AgentEvent.ToolCall -> if (isSpawn) {
                         val source = AgentSpawnPresentation.spawnSources(listOf(event)).singleOrNull()
@@ -1414,6 +1456,7 @@ private fun CompactToolCallsBlock(
                         ToolBlock(
                             expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                            animateExpansion = !autoExpandToolSections,
                             marker = "▸",
                             name = event.toolName,
                             summary = event.summary,
@@ -1431,6 +1474,7 @@ private fun CompactToolCallsBlock(
                         ToolBlock(
                             expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
                             onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                            animateExpansion = !autoExpandToolSections,
                             marker = if (event.isError) "✗" else "✓",
                             name = event.toolName,
                             summary = event.summary,
@@ -1461,6 +1505,7 @@ private fun SpawningAgentsBlock(
     sources: List<AgentSpawnPresentation.SpawnSource>,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    animateExpansion: Boolean = true,
     knownTasks: List<AgentTask> = emptyList(),
     currentTaskId: String? = null,
 ) {
@@ -1469,6 +1514,7 @@ private fun SpawningAgentsBlock(
         headline = AgentSpawnPresentation.spawningHeadline(count),
         expanded = expanded,
         onExpandedChange = onExpandedChange,
+        animateExpansion = animateExpansion,
         headlineColor = TextSecondary,
         indent = TranscriptAsideIndent,
         headlineContent = { SpawningAgentsHeadline(count) },
@@ -1610,6 +1656,7 @@ internal fun agentSpawnNameColor(name: String): Color {
 private fun ToolBlock(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    animateExpansion: Boolean = true,
     marker: String,
     name: String?,
     summary: String,
@@ -1673,6 +1720,7 @@ private fun ToolBlock(
         headline = headline,
         expanded = expanded,
         onExpandedChange = onExpandedChange,
+        animateExpansion = animateExpansion,
         headlineColor = color.copy(alpha = 0.88f),
         indent = indent,
         headlineContent = openableContent?.let { content ->
@@ -1949,13 +1997,19 @@ private fun TranscriptExpandableRow(
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     expandable: Boolean = true,
+    animateExpansion: Boolean = true,
     headlineColor: Color = TextSecondary,
     indent: Dp = 0.dp,
     contentIndent: Dp = indent + 8.dp,
     headlineContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit = {},
 ) {
-    Column(modifier.fillMaxWidth().animateContentSize()) {
+    val columnModifier = if (animateExpansion) {
+        modifier.fillMaxWidth().animateContentSize()
+    } else {
+        modifier.fillMaxWidth()
+    }
+    Column(columnModifier) {
         DisableSelection {
             Row(
                 Modifier
@@ -1998,7 +2052,13 @@ private fun TranscriptExpandableRow(
             }
         }
         if (expandable) {
-            AnimatedVisibility(visible = expanded) {
+            if (animateExpansion) {
+                AnimatedVisibility(visible = expanded) {
+                    Column(Modifier.fillMaxWidth().padding(start = contentIndent)) {
+                        content()
+                    }
+                }
+            } else if (expanded) {
                 Column(Modifier.fillMaxWidth().padding(start = contentIndent)) {
                     content()
                 }

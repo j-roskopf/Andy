@@ -1,4 +1,6 @@
 package app.andy.ui.bugs
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,8 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import app.andy.ui.components.dangerOutlinedButtonColors
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -330,7 +331,7 @@ internal fun BugsScreen(
                                 }
                             }
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
+                        colors = dangerOutlinedButtonColors(),
                     ) { Text("Delete") }
                 }
                 report.videoCaptureWarning?.let { warning ->
@@ -414,7 +415,7 @@ internal fun BugsScreen(
                                     }
                                 } else if (state.isVideoLoading || state.playbackFrameCount > 0) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+                                        Spinner(spinnerSize = SpinnerSize.Xl)
                                         Text("Loading capture.mp4…", color = TextSecondary, fontSize = 12.sp)
                                     }
                                 } else {

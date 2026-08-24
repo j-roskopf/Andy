@@ -43,8 +43,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
+import app.andy.ui.components.dangerOutlinedButtonColors
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -145,6 +145,7 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
+import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -155,6 +156,7 @@ import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.andyTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
@@ -1082,11 +1084,13 @@ private fun ProjectsSidebarHeader(
             }
         }
         if (!searchVisible) {
+            val searchStubFill = andyTokens().neutralFill
             Row(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(AndyRadius.Control))
-                    .background(AndyColors.SurfaceHover.copy(alpha = 0.52f))
+                    .background(searchStubFill, RoundedCornerShape(AndyRadius.Control))
+                    .border(AndyStroke.Hairline, AndyColors.BorderEmphasized, RoundedCornerShape(AndyRadius.Control))
                     .clickable { onSearchExpandedChange(true) }
                     .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
                 verticalAlignment = Alignment.CenterVertically,
@@ -2134,7 +2138,7 @@ private fun ProjectRunbook(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Checkbox(
+                            AndyCheckbox(
                                 checked = note.completed,
                                 onCheckedChange = null,
                                 enabled = note.source != ConfigSource.Repo,
@@ -2236,7 +2240,7 @@ private fun ProjectDialog(
                 if (onDelete != null && project?.source != ConfigSource.Repo) {
                     OutlinedButton(
                         onClick = onDelete,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
+                        colors = dangerOutlinedButtonColors(),
                     ) { Text("Delete") }
                 }
                 OutlinedButton(onClick = onDismiss) { Text("Cancel") }

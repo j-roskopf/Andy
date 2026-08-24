@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -34,35 +35,33 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
-import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.andyTokens
 
 /**
- * Chat input shell: elevated surface + hairline border (Design DNA composer).
- * Stronger ring only while dragging images / focus-highlight.
+ * Chat input shell — Astryx ChatComposer: `--radius-chat`, popover surface, low elevation.
  */
 @Composable
 internal fun ChatComposerFrame(
     modifier: Modifier = Modifier,
     highlighted: Boolean = false,
-    contentPadding: PaddingValues = PaddingValues(
-        horizontal = AndySpace.Space4,
-        vertical = AndySpace.Space3,
-    ),
+    contentPadding: PaddingValues = PaddingValues(AndySpace.Space3),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = AndyShape.Sheet
-    val borderColor = if (highlighted) {
-        Cyan.copy(alpha = 0.42f)
-    } else {
-        Border
-    }
+    val shape = AndyShape.Chat
+    val tokens = andyTokens()
+    val borderColor = if (highlighted) tokens.accent else Border
     Column(
         modifier
+            .shadow(
+                elevation = if (highlighted) 4.dp else 2.dp,
+                shape = shape,
+                clip = false,
+            )
             .clip(shape)
-            .background(AndyColors.SurfaceRaised, shape)
+            .background(AndyColors.SurfacePopover, shape)
             .border(1.dp, borderColor, shape)
             .padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -81,26 +80,23 @@ internal fun ComposerChip(
     leadingContent: (@Composable () -> Unit)? = null,
     showChevron: Boolean = true,
 ) {
+    val tokens = andyTokens()
     val contentColor = when {
         !enabled -> AndyColors.TextDisabled
         selected -> TextSecondary
         else -> TextSecondary.copy(alpha = 0.70f)
     }
-    // DNA: controls sit on the elevated composer; hover/active are barely tonal fills.
     val container = when {
         !enabled -> Color.Transparent
-        selected -> if (AndyColors.isLight) {
-            Color.Black.copy(alpha = 0.06f)
-        } else {
-            Color.White.copy(alpha = 0.07f)
-        }
+        selected -> tokens.neutralFill
         else -> Color.Transparent
     }
+    val chipRadius = maxOf(AndyRadius.Interactive.value, AndyRadius.Chat.value - AndySpace.Space3.value).dp
     Row(
         modifier
             .height(AndyLayout.ControlHeightSm)
-            .clip(RoundedCornerShape(AndyRadius.Control))
-            .background(container, RoundedCornerShape(AndyRadius.Control))
+            .clip(RoundedCornerShape(chipRadius))
+            .background(container, RoundedCornerShape(chipRadius))
             .pointerHoverIcon(PointerIcon.Hand)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = AndySpace.Space2),
@@ -112,14 +108,13 @@ internal fun ComposerChip(
             text,
             color = contentColor,
             fontFamily = DisplayFont,
-            fontWeight = FontWeight.Normal,
-            fontSize = 13.sp,
-            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            fontSize = 14.sp,
+            lineHeight = 20.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         if (showChevron) {
-            // ⌄ sits optically low in its em-box; pin to a square and nudge up.
             Box(
                 Modifier.size(12.dp),
                 contentAlignment = Alignment.Center,
@@ -152,7 +147,7 @@ internal fun ComposerToolbarRow(
         Row(
             Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             content = leading,
         )
         Row(
@@ -170,6 +165,7 @@ internal fun ComposerPlaceholderHint(
     focusHint: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val tokens = andyTokens()
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
@@ -177,7 +173,7 @@ internal fun ComposerPlaceholderHint(
     ) {
         Text(
             text,
-            color = if (highlighted) Cyan else AndyColors.TextDisabled,
+            color = if (highlighted) tokens.accent else AndyColors.TextDisabled,
             fontFamily = DisplayFont,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -188,8 +184,8 @@ internal fun ComposerPlaceholderHint(
                 focusHint,
                 color = AndyColors.TextDisabled,
                 fontFamily = DisplayFont,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
+                fontSize = 12.sp,
+                lineHeight = 20.sp,
             )
         }
     }
@@ -200,9 +196,12 @@ internal fun ComposerStatusDot(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier
-            .size(8.dp)
-            .background(color, RoundedCornerShape(AndyRadius.Pill)),
-    )
+    val tokens = andyTokens()
+    val variant = when (color) {
+        tokens.success, AndyColors.Green -> StatusDotVariant.Success
+        tokens.warning, AndyColors.Warning -> StatusDotVariant.Warning
+        tokens.error, AndyColors.Error -> StatusDotVariant.Error
+        else -> StatusDotVariant.Info
+    }
+    StatusDot(modifier = modifier, variant = variant)
 }

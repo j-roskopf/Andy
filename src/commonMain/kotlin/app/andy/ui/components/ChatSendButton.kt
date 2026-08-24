@@ -1,20 +1,15 @@
 package app.andy.ui.components
 
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -22,100 +17,83 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.TextPrimary
-import kotlinx.coroutines.delay
+import app.andy.ui.theme.TextPrimary
+import app.andy.ui.theme.andyTokens
 
+/** Astryx ChatSendButton — primary icon-only md button, accent when sendable. */
 @Composable
 internal fun ChatSendButton(
     onClick: () -> Unit,
     enabled: Boolean,
     modifier: Modifier = Modifier,
     isSending: Boolean = false,
+    isStopShown: Boolean = false,
+    onStop: (() -> Unit)? = null,
 ) {
-    var launchAnim by remember { mutableStateOf(false) }
-    val sending = isSending || launchAnim
-
-    val sendProgress by animateFloatAsState(
-        targetValue = if (sending) 1f else 0f,
-        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
-        label = "sendProgress",
-    )
-    val pressScale by animateFloatAsState(
-        targetValue = if (sending) 0.92f else 1f,
-        animationSpec = spring(stiffness = 500f, dampingRatio = 0.72f),
-        label = "sendPressScale",
-    )
-
-    LaunchedEffect(launchAnim) {
-        if (launchAnim) {
-            delay(320)
-            launchAnim = false
-        }
-    }
-
+    val tokens = andyTokens()
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale = if (pressed) 0.98f else 1f
+    val active = isStopShown || (enabled && !isSending)
     val background = when {
-        !enabled -> AndyColors.SurfaceHover
-        sending -> AndyColors.OrangePressed
-        else -> AndyColors.SurfaceSelected
+        isStopShown -> tokens.neutralFill
+        !enabled || isSending -> AndyColors.SurfaceHover
+        else -> tokens.accent
     }
     val iconColor = when {
-        !enabled -> AndyColors.TextDisabled
-        else -> TextPrimary
+        isStopShown -> TextPrimary
+        !enabled || isSending -> AndyColors.TextDisabled
+        else -> tokens.onAccent
     }
-
     Box(
         modifier
             .size(AndyLayout.ControlHeightMd)
             .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
+                scaleX = scale
+                scaleY = scale
             }
             .clip(CircleShape)
             .background(background)
-            .clickable(enabled = enabled && !sending) {
-                launchAnim = true
-                onClick()
-            }
-            .semantics { contentDescription = "Send" },
+            .clickable(
+                enabled = active,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = {
+                    if (isStopShown) onStop?.invoke() else onClick()
+                },
+            )
+            .semantics { contentDescription = if (isStopShown) "Stop" else "Send" },
         contentAlignment = Alignment.Center,
     ) {
-        SendArrowIcon(
-            color = iconColor,
-            progress = sendProgress,
-            modifier = Modifier.size(AndyLayout.IconMd),
-        )
+        when {
+            isSending -> Spinner(spinnerSize = SpinnerSize.Sm, shade = SpinnerShade.Subtle)
+            isStopShown -> StopSquareIcon(color = iconColor, modifier = Modifier.size(AndyLayout.IconSm))
+            else -> SendArrowIcon(color = iconColor, modifier = Modifier.size(AndyLayout.IconMd))
+        }
     }
 }
 
 @Composable
 private fun SendArrowIcon(
     color: Color,
-    progress: Float,
     modifier: Modifier = Modifier,
 ) {
-    androidx.compose.foundation.Canvas(
-        modifier.graphicsLayer {
-            translationY = -progress * 6.dp.toPx()
-            alpha = 1f - progress * 0.9f
-        },
-    ) {
+    androidx.compose.foundation.Canvas(modifier) {
         val w = size.width
         val h = size.height
         val stemWidth = w * 0.24f
         val stemTop = h * 0.52f
         val stemBottom = h * 0.84f
         val corner = stemWidth / 2f
-
         drawRoundRect(
             color = color,
             topLeft = androidx.compose.ui.geometry.Offset((w - stemWidth) / 2f, stemTop),
             size = androidx.compose.ui.geometry.Size(stemWidth, stemBottom - stemTop),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner, corner),
         )
-
         val headPath = androidx.compose.ui.graphics.Path().apply {
             moveTo(w / 2f, h * 0.16f)
             lineTo(w * 0.84f, h * 0.56f)
@@ -123,5 +101,21 @@ private fun SendArrowIcon(
             close()
         }
         drawPath(headPath, color)
+    }
+}
+
+@Composable
+private fun StopSquareIcon(
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val inset = size.minDimension * 0.28f
+        drawRoundRect(
+            color = color,
+            topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+            size = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.minDimension * 0.08f),
+        )
     }
 }

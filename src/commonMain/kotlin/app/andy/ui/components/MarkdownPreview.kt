@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -347,7 +347,7 @@ private fun AndyMarkdown(
                     checkedIndicator = { checked, checkboxModifier ->
                         // Material's default 48dp touch target sits below the list text baseline.
                         CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
-                            Checkbox(
+                            AndyCheckbox(
                                 checked = checked,
                                 onCheckedChange = onTextChange?.let { update ->
                                     {

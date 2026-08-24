@@ -3,12 +3,11 @@ package app.andy.ui.agents
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,6 +41,10 @@ import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
+import app.andy.ui.components.Avatar
+import app.andy.ui.components.AvatarSize
+import app.andy.ui.components.StatusDotVariant
+import app.andy.ui.components.StatusDot as ComponentStatusDot
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
@@ -98,6 +101,19 @@ internal fun agentStatusColor(status: AgentStatus?): Color = when (status) {
     null -> Cyan
 }
 
+internal fun agentStatusVariant(
+    task: AgentTask,
+    planModeActive: Boolean = task.planMode,
+    hasPendingPlanEntries: Boolean = false,
+): StatusDotVariant = when {
+    isAwaitingPlanConfirmation(task, planModeActive, hasPendingPlanEntries) -> StatusDotVariant.Success
+    task.status == AgentStatus.Working -> StatusDotVariant.Info
+    task.status == AgentStatus.Done -> StatusDotVariant.Success
+    task.status == AgentStatus.Error -> StatusDotVariant.Error
+    task.status == AgentStatus.Blocked -> StatusDotVariant.Warning
+    else -> StatusDotVariant.Neutral
+}
+
 /**
  * True when a turn finished while still waiting on a plan — either Andy/ACP plan mode
  * is active, or the latest transcript PlanUpdate still has pending entries (Cursor
@@ -136,11 +152,18 @@ internal fun agentStatusLabel(
 }
 
 @Composable
-internal fun StatusDot(status: AgentStatus, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .size(6.dp)
-            .background(agentStatusColor(status), CircleShape),
+internal fun AgentStatusDot(
+    task: AgentTask,
+    planModeActive: Boolean = task.planMode,
+    hasPendingPlanEntries: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val variant = agentStatusVariant(task, planModeActive, hasPendingPlanEntries)
+    val pulsing = isSessionWorking(task)
+    ComponentStatusDot(
+        modifier = modifier,
+        variant = variant,
+        pulsing = pulsing,
     )
 }
 
@@ -148,26 +171,29 @@ internal fun StatusDot(status: AgentStatus, modifier: Modifier = Modifier) {
 internal fun AgentBadge(kind: AgentKind, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium), RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, agentColor(kind).copy(alpha = 0.4f), RoundedCornerShape(AndyRadius.Control))
-            .padding(5.dp),
+            .border(2.dp, agentColor(kind).copy(alpha = 0.4f), CircleShape)
+            .padding(2.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(agentIconResource(kind)),
-            contentDescription = kind.label,
-            modifier = Modifier.size(16.dp),
-        )
+        Avatar(size = AvatarSize.Sm, name = kind.label) {
+            Image(
+                painter = painterResource(agentIconResource(kind)),
+                contentDescription = kind.label,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
 @Composable
 internal fun AgentMark(kind: AgentKind, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(agentIconResource(kind)),
-        contentDescription = kind.label,
-        modifier = modifier.size(32.dp),
-    )
+    Avatar(modifier = modifier, size = AvatarSize.Md, name = kind.label) {
+        Image(
+            painter = painterResource(agentIconResource(kind)),
+            contentDescription = kind.label,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
 }
 
 @Composable
@@ -243,7 +269,16 @@ internal fun ChatSessionSidebarRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AgentPillIcon(task.agent, Modifier.size(14.dp))
+        Avatar(
+            size = AvatarSize.Xsm,
+            name = task.agent.label,
+        ) {
+            Image(
+                painter = painterResource(agentIconResource(task.agent)),
+                contentDescription = task.agent.label,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
         // Marked in every rail, not just the Agents Temporary section — a project chat list
         // shows temporary chats inline, and closing one is unrecoverable.
         if (task.temporary) {

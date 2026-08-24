@@ -51,6 +51,7 @@ import app.andy.service.DhuReadiness
 import app.andy.service.DhuService
 import app.andy.service.DhuSession
 import app.andy.service.DhuSessionPhase
+import app.andy.ui.components.AndyCheckbox
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
@@ -248,7 +249,7 @@ internal fun AndroidAutoToggle(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        androidx.compose.material3.Checkbox(
+        AndyCheckbox(
             checked = enabled,
             onCheckedChange = onEnabledChange,
         )

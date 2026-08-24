@@ -98,6 +98,7 @@ import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
@@ -384,13 +385,14 @@ internal fun HostFilesScreen(
                 if (workspaceState.hostFileRoots.isEmpty()) {
                     Text("Add a folder to start indexing files on this computer.", color = TextSecondary, fontSize = 12.sp)
                 }
+                Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                 workspaceState.hostFileRoots.forEach { root ->
                     val status = state.statuses[root]
                     Row(
                         Modifier.fillMaxWidth()
                             .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.Control))
                             .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.Control))
-                            .padding(8.dp),
+                            .padding(AndySpace.Space3),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(
@@ -416,8 +418,10 @@ internal fun HostFilesScreen(
                         )
                     }
                 }
+                }
                 AndyHorizontalDivider(color = Border)
                 Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space1)) {
                 workspaceState.recentHostFiles.forEach { recent ->
                     val recentRoot = resolveHostRootForPath(recent, workspaceState.hostFileRoots)
                     val relativePath = recentRoot?.let { hostDisplayPath(recent, it) } ?: recent
@@ -427,7 +431,7 @@ internal fun HostFilesScreen(
                                 revealFileInTree(recent)
                                 openFile(recent)
                             }
-                            .padding(vertical = 5.dp),
+                            .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -437,6 +441,7 @@ internal fun HostFilesScreen(
                             Text(relativePath, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
+                }
                 }
             }
             PaneDivider(
@@ -448,7 +453,7 @@ internal fun HostFilesScreen(
                 },
             )
             PanelCard(Modifier.width(localHostFileSearchPaneWidth.dp).fillMaxHeight()) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
                     TextField(
                         selectedPath,
                         { selectedPath = it },
@@ -456,7 +461,7 @@ internal fun HostFilesScreen(
                         modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2), verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = { loadPath() }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Go") }
                         OutlinedButton(onClick = { loadPath(hostParentPath(selectedPath)) }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Up") }
                         Spacer(Modifier.weight(1f))
@@ -484,7 +489,7 @@ internal fun HostFilesScreen(
                     modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight).focusRequester(state.searchFocusRequester),
                     textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                     SearchModePill("All", "ctrl shift A", state.searchMode == HostSearchMode.Combined, Rust) { setSearchModeAndFocus(HostSearchMode.Combined) }
                     SearchModePill("Names", "ctrl shift N", state.searchMode == HostSearchMode.FileName, Cyan) { setSearchModeAndFocus(HostSearchMode.FileName) }
                     SearchModePill("Contents", "ctrl shift F", state.searchMode == HostSearchMode.Content, Green) { setSearchModeAndFocus(HostSearchMode.Content) }
@@ -500,7 +505,7 @@ internal fun HostFilesScreen(
                                         revealFileInTree(result.path)
                                         openFile(result.path)
                                     }
-                                    .padding(vertical = 7.dp),
+                                    .padding(vertical = 8.dp),
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                                     HostFileIcon(icon)
@@ -600,11 +605,11 @@ private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boole
     val icon = hostFileIconForPath(entry.path, entry.isDirectory)
     Row(
         Modifier.fillMaxWidth()
-            .heightIn(min = 24.dp)
+            .heightIn(min = 28.dp)
             .background(if (selected) AndyColors.OrangeSubtle else Color.Transparent, RoundedCornerShape(AndyRadius.Control))
             .then(if (selected) Modifier.border(1.dp, AndyColors.OrangeBorder.copy(alpha = 0.42f), RoundedCornerShape(AndyRadius.Control)) else Modifier)
             .clickable(onClick = onClick)
-            .padding(start = (row.depth * 16).dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+            .padding(start = (row.depth * 16).dp, end = AndySpace.Space3, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

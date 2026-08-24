@@ -30,7 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
+import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -1167,7 +1167,7 @@ private fun CorporateUpstreamSettings(
             lineHeight = 16.sp,
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Checkbox(checked = sslInsecure, onCheckedChange = onSslInsecureChange)
+            AndyCheckbox(checked = sslInsecure, onCheckedChange = onSslInsecureChange)
             Text("Insecure upstream (--ssl-insecure)", color = TextPrimary, fontSize = 12.sp)
         }
         LabeledField(
@@ -1337,7 +1337,7 @@ private fun RulesPaneContent(
                 modifier = if (isBeingEdited) Modifier.border(1.dp, Rust, RoundedCornerShape(AndyRadius.Control)) else Modifier
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Checkbox(rule.enabled, { checked ->
+                    AndyCheckbox(rule.enabled, { checked ->
                         onRulesChange(rules.mapIndexed { i, item -> if (i == index) item.copy(enabled = checked) else item })
                     })
                     Column(Modifier.weight(1f)) {

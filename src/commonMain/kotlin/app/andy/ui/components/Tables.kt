@@ -205,47 +205,30 @@ internal fun HeaderTrailingLabel(
 
 @Composable
 internal fun LogLevelBadge(level: LogLevel, modifier: Modifier = Modifier) {
-    val foreground = logLevelForeground(level)
-    val background = foreground.copy(alpha = 0.16f)
-    Box(
-        modifier
-            .background(background, RoundedCornerShape(4.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            logLevelLabel(level),
-            color = foreground,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center,
-        )
+    val variant = when (level) {
+        LogLevel.Error, LogLevel.Fatal -> BadgeVariant.Error
+        LogLevel.Warn -> BadgeVariant.Yellow
+        LogLevel.Info -> BadgeVariant.Blue
+        LogLevel.Debug, LogLevel.Verbose, LogLevel.Silent -> BadgeVariant.Neutral
     }
+    Badge(
+        label = logLevelLabel(level),
+        modifier = modifier,
+        variant = variant,
+    )
 }
 
 @Composable
 internal fun StatusBadge(
     text: String,
-    color: Color,
+    @Suppress("UNUSED_PARAMETER") color: Color,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier
-            .background(color.copy(alpha = 0.14f), RoundedCornerShape(4.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text,
-            color = color,
-            fontFamily = MonoFont,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+    Badge(
+        label = text,
+        modifier = modifier,
+        variant = BadgeVariant.Neutral,
+    )
 }
 
 internal fun logLevelForeground(level: LogLevel): Color = when (level) {

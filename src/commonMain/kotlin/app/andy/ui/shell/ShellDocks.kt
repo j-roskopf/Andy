@@ -934,7 +934,10 @@ internal fun ShellDockDrawer(
                 .padding(
                     start = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     end = if (edgeToEdge) 0.dp else AndySpace.Space5,
-                    top = if (edgeToEdge) 0.dp else AndySpace.Space4,
+                    top = when (active?.kind) {
+                        DockTabKind.Live -> AndySpace.Space2
+                        else -> if (edgeToEdge) 0.dp else AndySpace.Space4
+                    },
                     // Browser clips itself to the card's rounded bottom; other kinds keep a
                     // hairline inset so Compose content doesn't sit on the corner arc.
                     // Chat sits on the same canvas as the main transcript, so keep the composer

@@ -1,11 +1,56 @@
 package app.andy.terminal.rust
 
+import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(InternalComposeUiApi::class)
 class RustTerminalCanvasSupportTest {
+    @Test
+    fun metaChordsAreNotEncodedAsTerminalInput() {
+        assertNull(encodeTerminalKey(keyEvent(Key.V, meta = true)))
+        assertNull(encodeTerminalKey(keyEvent(Key.C, meta = true)))
+    }
+
+    @Test
+    fun ctrlVPasteChordIsRecognized() {
+        assertTrue(isTerminalPasteChord(keyEvent(Key.V, ctrl = true)))
+        assertTrue(isTerminalPasteChord(keyEvent(Key.V, meta = true)))
+    }
+
+    @Test
+    fun ctrlCEncodesSigintWhenNotMeta() {
+        assertEquals(listOf(0x03), encodeTerminalKey(keyEvent(Key.C, ctrl = true))?.map { it.toInt() and 0xFF })
+    }
+
+    @Test
+    fun formatTerminalPasteWrapsMultilineWhenBracketed() {
+        val bytes = formatTerminalPaste("line1\nline2", bracketedPaste = true)
+        assertEquals("\u001B[200~line1\nline2\u001B[201~", bytes.decodeToString())
+    }
+
+    @Test
+    fun formatTerminalPasteLeavesSingleLineUntouched() {
+        val bytes = formatTerminalPaste("hello", bracketedPaste = true)
+        assertEquals("hello", bytes.decodeToString())
+    }
+
+    private fun keyEvent(
+        key: Key,
+        ctrl: Boolean = false,
+        meta: Boolean = false,
+    ): KeyEvent = KeyEvent(
+        key = key,
+        type = KeyEventType.KeyDown,
+        isCtrlPressed = ctrl,
+        isMetaPressed = meta,
+    )
+
     @Test
     fun sgrMouseReportsUseOneBasedCells() {
         val press = RustTerminalMouse.encodeClick(

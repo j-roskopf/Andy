@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyPress
 import app.andy.ui.components.KeyCombo
+import app.andy.ui.theme.AndyTheme
 import org.junit.Rule
 import org.junit.Test
 
@@ -28,14 +29,16 @@ class VoiceDictationShortcutRowTest {
     fun bareModifierKeepsCapturingUntilARealKeyArrives() {
         var captured: KeyCombo? = null
         composeRule.setContent {
-            var shortcut by remember { mutableStateOf<KeyCombo?>(null) }
-            VoiceDictationShortcutRow(
-                shortcut = shortcut,
-                onChange = {
-                    captured = it
-                    shortcut = it
-                },
-            )
+            AndyTheme {
+                var shortcut by remember { mutableStateOf<KeyCombo?>(null) }
+                VoiceDictationShortcutRow(
+                    shortcut = shortcut,
+                    onChange = {
+                        captured = it
+                        shortcut = it
+                    },
+                )
+            }
         }
 
         pill().performClick()
@@ -62,7 +65,9 @@ class VoiceDictationShortcutRowTest {
     @Test
     fun escapeCancelsCapture() {
         composeRule.setContent {
-            VoiceDictationShortcutRow(shortcut = null, onChange = {})
+            AndyTheme {
+                VoiceDictationShortcutRow(shortcut = null, onChange = {})
+            }
         }
 
         pill().performClick()

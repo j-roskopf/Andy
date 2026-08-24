@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,11 +42,14 @@ import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.theme.Yellow
 
 internal fun Modifier.rightBorder(color: Color): Modifier = drawBehind {
     val strokeWidth = AndyStroke.Hairline.toPx()
@@ -104,7 +108,14 @@ internal fun StatusRow(label: String, value: String, ok: Boolean) {
 }
 
 @Composable
-internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifier) {
+internal fun StatusTag(
+    label: String,
+    variant: StatusDotVariant,
+    modifier: Modifier = Modifier,
+    pulsing: Boolean = false,
+    accentColor: Color? = null,
+) {
+    val color = accentColor ?: statusTagColor(variant)
     Row(
         modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -117,7 +128,7 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            Box(Modifier.size(6.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
+            StatusDot(variant = variant, pulsing = pulsing)
             Text(
                 label,
                 color = color,
@@ -131,6 +142,32 @@ internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifie
             )
         }
     }
+}
+
+@Composable
+internal fun StatusTag(label: String, color: Color, modifier: Modifier = Modifier) {
+    StatusTag(
+        label = label,
+        variant = statusDotVariantForColor(color),
+        modifier = modifier,
+        accentColor = color,
+    )
+}
+
+private fun statusTagColor(variant: StatusDotVariant): Color = when (variant) {
+    StatusDotVariant.Success -> Green
+    StatusDotVariant.Warning -> Rust
+    StatusDotVariant.Error -> Red
+    StatusDotVariant.Info -> Cyan
+    StatusDotVariant.Neutral -> TextSecondary
+}
+
+private fun statusDotVariantForColor(color: Color): StatusDotVariant = when (color) {
+    Green -> StatusDotVariant.Success
+    Rust, Yellow -> StatusDotVariant.Warning
+    Red -> StatusDotVariant.Error
+    Cyan -> StatusDotVariant.Info
+    else -> StatusDotVariant.Neutral
 }
 
 @Composable
@@ -172,45 +209,25 @@ internal fun PanelCard(
     background: Color = AndyColors.SurfaceRaised,
     accent: Color? = null,
     borderColor: Color? = null,
-    /** Boxy chrome (composer, header) should pass [AndyShape.Interactive]; default stays soft for sheets/menus. */
-    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(AndyRadius.Sheet),
+    /** Boxy chrome (composer, header) should pass [AndyShape.Interactive]; cards/menus use [AndyShape.Menu]. */
+    shape: Shape = AndyShape.Menu,
     contentPadding: PaddingValues = PaddingValues(AndySpace.Space5),
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(AndySpace.Space4),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val resolvedBorder = borderColor ?: accent?.copy(alpha = 0.35f)
-    Column(
-        modifier
-            .background(background, shape)
-            .clip(shape)
-            .then(
-                if (resolvedBorder != null) Modifier.border(1.dp, resolvedBorder, shape)
-                else Modifier,
-            )
-            .padding(contentPadding),
-        verticalArrangement = verticalArrangement,
-        content = content,
-    )
-}
-
-@Composable
-internal fun EmptyState(
-    text: String,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(120.dp)
-            .padding(horizontal = AndySpace.Space7, vertical = AndySpace.Space5),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text,
-            color = TextSecondary,
-            fontFamily = DisplayFont,
-            fontSize = 13.sp,
-            textAlign = TextAlign.Center,
+    val variant = when (background) {
+        Color.Transparent -> CardVariant.Transparent
+        else -> CardVariant.Default
+    }
+    Column(modifier, verticalArrangement = verticalArrangement) {
+        Card(
+            variant = variant,
+            shape = shape,
+            backgroundColor = background,
+            borderColor = resolvedBorder ?: Color.Transparent,
+            contentPadding = contentPadding,
+            content = content,
         )
     }
 }
@@ -246,7 +263,7 @@ internal fun FilterPill(
             onClick = onClick,
             enabled = enabled,
             shape = shape,
-            colors = ButtonDefaults.outlinedButtonColors(
+            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                 containerColor = containerColor,
                 contentColor = contentColor,
                 disabledContainerColor = containerColor,

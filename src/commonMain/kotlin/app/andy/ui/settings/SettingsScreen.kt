@@ -33,14 +33,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.LinearProgressIndicator
+import app.andy.ui.components.ProgressBar
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -125,11 +124,16 @@ import app.andy.service.WebServices
 import app.andy.updates.AndyBuildInfo
 import app.andy.ui.components.AndySwitch
 import app.andy.ui.components.Button
+import app.andy.ui.components.ChoicePill
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.ComponentGallery
 import app.andy.ui.components.PanelCard
+import app.andy.ui.components.TextButton
 import app.andy.ui.components.TextField
+import app.andy.ui.components.accentTextButtonColors
 import app.andy.ui.components.fieldColors
+import app.andy.ui.components.mutedTextButtonColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.theme.AndyShape
@@ -417,21 +421,12 @@ private fun SettingsCategoryPills(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         categories.forEachIndexed { index, (label, _) ->
-            val selected = index == selectedIndex
-            TextButton(
+            ChoicePill(
+                label = label,
+                selected = index == selectedIndex,
+                contentDescription = "$label settings",
                 onClick = { onSelect(index) },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = if (selected) TextPrimary else TextSecondary,
-                ),
-                modifier = Modifier
-                    .background(
-                        if (selected) AndyColors.SurfaceSelected else Color.Transparent,
-                        RoundedCornerShape(AndyRadius.Row),
-                    )
-                    .semantics { contentDescription = "$label settings" },
-            ) {
-                Text(label, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal)
-            }
+            )
         }
     }
 }
@@ -491,37 +486,6 @@ private fun SettingsGroup(
                 .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
             content = content,
-        )
-    }
-}
-
-@Composable
-private fun SettingsChoicePill(
-    label: String,
-    selected: Boolean,
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    menu: Boolean = false,
-) {
-    val shape = RoundedCornerShape(AndyRadius.Control)
-    val filled = selected || menu
-    Box(
-        modifier
-            .height(AndyLayout.ControlHeightSm)
-            .background(if (filled) AndyColors.SurfaceHover else Color.Transparent, shape)
-            .clickable(onClick = onClick)
-            .semantics { this.contentDescription = contentDescription }
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Text(
-            if (menu) "$label ▾" else label,
-            color = if (selected || menu) TextPrimary else TextSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -616,7 +580,7 @@ private fun AppearancePanel(
         ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AndySurfaceMode.entries.forEach { mode ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = mode.label,
                     selected = mode == selectedSurface,
                     contentDescription = "${mode.label} background",
@@ -637,7 +601,7 @@ private fun AppearancePanel(
         ) {
             val selectedTheme = EditorSyntaxTheme.fromId(workspace.editorSyntaxThemeId)
             EditorSyntaxTheme.entries.forEach { theme ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = theme.label,
                     selected = theme == selectedTheme,
                     contentDescription = "${theme.label} editor theme",
@@ -652,6 +616,12 @@ private fun AppearancePanel(
         )
     }
     TerminalAppearancePanel(workspace, update)
+    SettingsGroup(
+        title = "Design system",
+        description = "Live preview of Astryx-aligned Andy components.",
+    ) {
+        ComponentGallery()
+    }
 }
 
 @Composable
@@ -722,7 +692,7 @@ private fun TerminalAppearancePanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TerminalThemePreset.entries.forEach { preset ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = preset.label,
                     selected = preset.id == selectedPresetId,
                     contentDescription = "${preset.label} terminal theme",
@@ -738,7 +708,7 @@ private fun TerminalAppearancePanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TerminalFontFamily.entries.forEach { font ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = font.label,
                     selected = font == selectedFont,
                     contentDescription = "${font.label} terminal font",
@@ -754,7 +724,7 @@ private fun TerminalAppearancePanel(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TerminalThemePreset.FontSizes.forEach { size ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = size.toInt().toString(),
                     selected = size == selectedSize,
                     contentDescription = "Terminal font size ${size.toInt()}",
@@ -917,7 +887,7 @@ private fun OrchestrationPreferencesPanel(
                     modifier = Modifier.width(172.dp),
                 )
                 Box(Modifier.weight(1f)) {
-                    SettingsChoicePill(
+                    ChoicePill(
                         label = pickerLabel,
                         selected = true,
                         contentDescription = "${role.label} provider",
@@ -956,7 +926,7 @@ private fun OrchestrationPreferencesPanel(
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    SettingsChoicePill(
+                    ChoicePill(
                         label = modelLabel,
                         selected = true,
                         contentDescription = "${role.label} model",
@@ -989,7 +959,7 @@ private fun OrchestrationPreferencesPanel(
                     }
                 }
                 Box(Modifier.weight(1f)) {
-                    SettingsChoicePill(
+                    ChoicePill(
                         label = prefs.autonomyFor(role)?.label ?: "inherit parent",
                         selected = true,
                         contentDescription = "${role.label} permissions",
@@ -1074,7 +1044,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
                 )
                 Box(Modifier.width(128.dp), contentAlignment = Alignment.CenterStart) {
                     if (agent.acpSupported) {
-                        SettingsChoicePill(
+                        ChoicePill(
                             label = "ACP",
                             selected = selectedLane == AgentLaneKind.Acp,
                             contentDescription = "Use ACP for ${agent.label}",
@@ -1084,7 +1054,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
                         Text("ACP unavailable", color = TextSecondary, fontSize = 12.sp, maxLines = 1)
                     }
                 }
-                SettingsChoicePill(
+                ChoicePill(
                     label = "Terminal",
                     selected = selectedLane == AgentLaneKind.Terminal,
                     contentDescription = "Use terminal for ${agent.label}",
@@ -1178,7 +1148,7 @@ private fun AgentChatMessagingPanel(
         ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AgentMessageDeliveryMode.entries.forEach { mode ->
-                SettingsChoicePill(
+                ChoicePill(
                     label = mode.label,
                     selected = mode == workspace.agentMessageDeliveryMode,
                     contentDescription = mode.label,
@@ -1319,7 +1289,7 @@ private fun AgentRetentionPanel(
                 colors = primaryButtonColors(),
             ) {
                 if (sweepInProgress) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spinner(spinnerSize = SpinnerSize.Md)
                     Spacer(Modifier.width(8.dp))
                     Text("Cleaning up…")
                 } else {
@@ -1381,7 +1351,7 @@ private fun AgentNotificationsPanel(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("When to notify", color = TextSecondary, fontSize = 13.sp)
             Box {
-                SettingsChoicePill(
+                ChoicePill(
                     label = if (workspace.agentNotificationTiming == AgentNotificationTiming.Always) "Always" else "Background only",
                     selected = true,
                     contentDescription = "When to notify",
@@ -1400,7 +1370,7 @@ private fun AgentNotificationsPanel(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Sound", color = if (workspace.agentNotificationSoundEnabled) TextSecondary else TextSecondary.copy(alpha = .5f), fontSize = 13.sp)
             Box {
-                SettingsChoicePill(
+                ChoicePill(
                     label = sound.label,
                     selected = workspace.agentNotificationSoundEnabled,
                     contentDescription = "Notification sound",
@@ -1415,7 +1385,7 @@ private fun AgentNotificationsPanel(
                     AgentNotificationSound.entries.forEach { option -> DropdownMenuItem({ Text(option.label) }, { update { it.copy(agentNotificationSoundId = option.id) }; soundExpanded = false }) }
                 }
             }
-            SettingsChoicePill(
+            ChoicePill(
                 label = "Preview",
                 selected = false,
                 contentDescription = "Preview notification sound",
@@ -1457,9 +1427,9 @@ private fun VoiceDictationPanel(
             is VoiceSetupState.Downloading -> {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Downloading ${s.what}…", color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
-                    LinearProgressIndicator(
-                        progress = { s.progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    ProgressBar(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = s.progress.coerceIn(0f, 1f) * 100f,
                     )
                 }
             }
@@ -1490,7 +1460,7 @@ private fun VoiceDictationPanel(
                 enabled = canResetVoice && !deleting,
             ) {
                 if (deleting) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Spinner(spinnerSize = SpinnerSize.Md)
                     Spacer(Modifier.width(8.dp))
                     Text("Resetting…")
                 } else {
@@ -1565,7 +1535,7 @@ internal fun VoiceDictationShortcutRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Toggle mic shortcut", color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
-        SettingsChoicePill(
+                ChoicePill(
             label = when {
                 capturing && heldModifiers.isNotEmpty() -> "$heldModifiers…"
                 capturing -> "press keys…"
@@ -1708,9 +1678,9 @@ private fun UpdatesPanel(
             if (updateState is AppUpdateState.Installing) {
                 val progress = (updateState as AppUpdateState.Installing).progress
                 if (progress != null) {
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    ProgressBar(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = progress.coerceIn(0f, 1f) * 100f,
                     )
                 }
             }
@@ -1763,9 +1733,9 @@ private fun RuntimeBundlePanel(
             is RuntimeBundleState.Installing -> {
                 Text(state.message, color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
                 state.progress?.let { progress ->
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                    ProgressBar(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = progress.coerceIn(0f, 1f) * 100f,
                     )
                 }
             }
@@ -2257,7 +2227,7 @@ private fun McpClientsPanel(
         ) {
             Text("Client:", color = TextSecondary, fontSize = 13.sp)
             Box {
-                SettingsChoicePill(
+                ChoicePill(
                     label = selectedClientLabel,
                     selected = true,
                     contentDescription = "MCP client",
@@ -2494,8 +2464,16 @@ private fun WebDestructiveConfirmation(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Text(message) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmLabel, color = Rust) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) } },
+        confirmButton = {
+            TextButton(onClick = onConfirm, colors = accentTextButtonColors()) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, colors = mutedTextButtonColors()) {
+                Text("Cancel")
+            }
+        },
         containerColor = PanelSoft,
     )
 }

@@ -145,6 +145,10 @@ impl TerminalEngine {
     }
 
     /// Mouse reporting capability flags for the host pointer path.
+    pub fn bracketed_paste_enabled(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     pub fn mouse_flags(&self) -> u32 {
         let mode = self.term.mode();
         let mut flags = 0u32;

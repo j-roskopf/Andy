@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -291,11 +290,7 @@ private fun VoiceDictationIndicator(
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(13.dp),
-                strokeWidth = 1.5.dp,
-                color = TextPrimary,
-            )
+            Spinner(spinnerSize = SpinnerSize.Md, shade = SpinnerShade.Subtle)
             Text(
                 text = "Transcribing…",
                 style = MaterialTheme.typography.labelSmall,

@@ -78,6 +78,11 @@ class RustTerminalEngine(
         return nativeMouseFlags(handle)
     }
 
+    fun bracketedPasteEnabled(): Boolean {
+        checkOpen()
+        return nativeBracketedPasteEnabled(handle)
+    }
+
     fun displayOffset(): Int {
         checkOpen()
         return nativeDisplayOffset(handle)
@@ -167,6 +172,7 @@ class RustTerminalEngine(
         @JvmStatic external fun nativeStopSync(handle: Long)
         @JvmStatic external fun nativeScrollDisplay(handle: Long, delta: Int)
         @JvmStatic external fun nativeScrollToBottom(handle: Long)
+        @JvmStatic external fun nativeBracketedPasteEnabled(handle: Long): Boolean
         @JvmStatic external fun nativeMouseFlags(handle: Long): Int
         @JvmStatic external fun nativeDisplayOffset(handle: Long): Int
         @JvmStatic external fun nativeViewportText(handle: Long): String

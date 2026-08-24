@@ -42,6 +42,7 @@ import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.TerminalFontFamily
 import app.andy.model.panelBackgroundArgb
 import app.andy.rememberCopyText
+import app.andy.rememberReadClipboardText
 import org.jetbrains.skia.Font
 import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.FontStyle
@@ -89,6 +90,8 @@ fun RustTerminalCanvas(
     var selection by remember { mutableStateOf<CellRange?>(null) }
     var selecting by remember { mutableStateOf(false) }
     val copyText = rememberCopyText()
+    val readClipboardText = rememberReadClipboardText()
+    var pasteInFlight by remember { mutableStateOf(false) }
     val wheel = remember(backend) {
         RustWheelAccumulator { bytes -> backend.write(bytes) }
     }
@@ -163,22 +166,36 @@ fun RustTerminalCanvas(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val copyChord = (event.isMetaPressed || event.isCtrlPressed) &&
-                    event.key == Key.C &&
-                    selection != null
-                if (copyChord) {
-                    val text = selectedText()
-                    if (text.isNotEmpty()) {
-                        copyText(text)
-                        return@onPreviewKeyEvent true
+                if (isTerminalCopyChord(event)) {
+                    if (selection != null) {
+                        val text = selectedText()
+                        if (text.isNotEmpty()) {
+                            copyText(text)
+                            return@onPreviewKeyEvent true
+                        }
                     }
+                    // Cmd+C without a selection is a no-op — don't inject junk into the PTY.
+                    if (event.isMetaPressed) return@onPreviewKeyEvent true
+                    // Ctrl+C without a selection falls through as SIGINT (0x03).
                 }
+                if (isTerminalPasteChord(event)) {
+                    if (!readOnly && !pasteInFlight) {
+                        pasteInFlight = true
+                        readClipboardText { text ->
+                            selection = null
+                            backend.write(formatTerminalPaste(text, backend.bracketedPasteEnabled()))
+                            pasteInFlight = false
+                        }
+                    }
+                    return@onPreviewKeyEvent true
+                }
+                if (pasteInFlight) return@onPreviewKeyEvent true
                 if (event.key == Key.Escape && selection != null) {
                     selection = null
                     return@onPreviewKeyEvent true
                 }
                 if (readOnly) return@onPreviewKeyEvent false
-                val bytes = encodeTerminalKey(event) ?: return@onPreviewKeyEvent false
+                val bytes = encodeTerminalKey(event) ?: return@onPreviewKeyEvent event.isMetaPressed
                 selection = null
                 backend.write(bytes)
                 true

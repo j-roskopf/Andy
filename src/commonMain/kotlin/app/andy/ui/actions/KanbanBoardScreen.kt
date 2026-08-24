@@ -29,12 +29,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
+import app.andy.ui.components.Button
+import app.andy.ui.components.IconButton
+import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.TextField
+import app.andy.ui.components.dangerOutlinedButtonColors
+import app.andy.ui.components.fieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -344,6 +347,7 @@ internal fun KanbanBoardScreen(
                 val cardWidth = with(density) { drag.cardSize.width.toDp() }
                 KanbanCardView(
                     card = card,
+                    suppressHover = true,
                     modifier = Modifier
                         .graphicsLayer {
                             translationX = drag.pointerPositionInBoard.x - GrabOffset.x
@@ -490,9 +494,9 @@ private fun KanbanLaneColumn(
     // Dark keeps a soft translucent pane so lanes sit lightly on the deep content bg.
     val idleLane = if (AndyColors.isLight) AndyColors.PaneBg else AndyColors.PaneBg.copy(alpha = 0.62f)
     val dropLane = if (AndyColors.isLight) {
-        AndyColors.SurfaceSelected
+        AndyColors.SurfaceHover
     } else {
-        AndyColors.SurfaceSelected.copy(alpha = 0.68f)
+        AndyColors.PaneBg.copy(alpha = 0.72f)
     }
     val laneBackground by animateColorAsState(
         targetValue = if (isDropTarget) dropLane else idleLane,
@@ -542,11 +546,14 @@ private fun KanbanLaneColumn(
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
             )
-            KanbanIconButton(
-                contentDescription = "Actions for ${lane.name}",
-                onClick = { menuExpanded = true },
-            ) {
-                Text("⋯", color = TextSecondary, fontSize = 16.sp)
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(28.dp),
+                    contentDescription = "Actions for ${lane.name}",
+                ) {
+                    Text("⋯", color = TextSecondary, fontSize = 16.sp)
+                }
                 DropdownMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
@@ -594,6 +601,7 @@ private fun KanbanLaneColumn(
                 KanbanCardView(
                     card = card,
                     activeChat = card.activeChatTaskId?.let { id -> agentTasks.firstOrNull { it.id == id } },
+                    suppressHover = dragState != null,
                     onClick = { if (!isDragging) onCardClick(card) },
                     onAssign = { onAssignCard(card) },
                     onCreateSpec = { onCreateSpecCard(card) },
@@ -701,47 +709,6 @@ private fun KanbanTextAction(
 }
 
 @Composable
-private fun KanbanIconButton(
-    contentDescription: String,
-    onClick: () -> Unit,
-    content: @Composable () -> Unit,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    val pressed by interactionSource.collectIsPressedAsState()
-    val background by animateColorAsState(
-        targetValue = if (hovered) AndyColors.SurfaceHover else Color.Transparent,
-        animationSpec = tween(KanbanMotionMs),
-        label = "kanbanIconButtonBackground",
-    )
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.96f else 1f,
-        animationSpec = tween(KanbanMotionMs),
-        label = "kanbanIconButtonScale",
-    )
-    Box(
-        Modifier
-            .size(28.dp)
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .clip(AndyShape.Interactive)
-            .background(background, AndyShape.Interactive)
-            .hoverable(interactionSource)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            )
-            .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.Center,
-    ) {
-        content()
-    }
-}
-
-@Composable
 internal fun KanbanAddLaneDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -769,6 +736,7 @@ private fun KanbanInsertionIndicator() {
 private fun KanbanCardView(
     card: KanbanCard,
     activeChat: AgentTask? = null,
+    suppressHover: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     onAssign: () -> Unit = {},
@@ -778,13 +746,14 @@ private fun KanbanCardView(
     val interactionSource = remember(card.id) { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
+    val showHover = hovered && !suppressHover
     val cardBackground by animateColorAsState(
-        targetValue = if (hovered) AndyColors.SurfaceHover else AndyColors.SurfaceRaised,
+        targetValue = if (showHover) AndyColors.SurfaceHover else AndyColors.SurfaceRaised,
         animationSpec = tween(KanbanMotionMs),
         label = "kanbanCardBackground",
     )
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed && onClick != null) 0.97f else 1f,
+        targetValue = if (pressed && onClick != null && !suppressHover) 0.97f else 1f,
         animationSpec = tween(KanbanMotionMs),
         label = "kanbanCardScale",
     )
@@ -808,7 +777,9 @@ private fun KanbanCardView(
                     Modifier
                 },
             )
-            .hoverable(interactionSource)
+            .then(
+                if (!suppressHover) Modifier.hoverable(interactionSource) else Modifier,
+            )
             .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
@@ -1134,8 +1105,8 @@ private fun KanbanCardDialog(
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                 if (onDelete != null) {
-                    OutlinedButton(onClick = onDelete) {
-                        Text("Delete card", color = Red)
+                    OutlinedButton(onClick = onDelete, colors = dangerOutlinedButtonColors()) {
+                        Text("Delete card")
                     }
                 }
                 OutlinedButton(onClick = onDismiss) { Text("Cancel") }

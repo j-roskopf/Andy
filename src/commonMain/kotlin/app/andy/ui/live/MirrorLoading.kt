@@ -1,4 +1,6 @@
 package app.andy.ui.live
+import app.andy.ui.components.Spinner
+import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -6,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -79,7 +80,7 @@ internal fun MirrorLoadingOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = Rust)
+            Spinner(spinnerSize = SpinnerSize.Xl)
             Text(label, color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
         }
     }

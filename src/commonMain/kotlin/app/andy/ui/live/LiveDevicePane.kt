@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -68,6 +69,8 @@ import app.andy.ui.controls.FoldablePosture
 import app.andy.ui.controls.foldablePostureForAngle
 import app.andy.ui.controls.sizeForPosture
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyShape
+import app.andy.ui.theme.andyPressScale
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.shell.LocalWindowResizing
@@ -943,12 +946,19 @@ internal fun LiveHardwareToolbar(
 @Composable
 internal fun ToolbarButton(icon: HardwareIcon, label: String, enabled: Boolean, onClick: () -> Unit) {
     val contentColor = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.38f)
+    val interactionSource = remember { MutableInteractionSource() }
     Column(
         modifier = Modifier
             .width(54.dp)
             .height(44.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .andyPressScale(interactionSource, enabled)
+            .clip(AndyShape.Interactive)
+            .clickable(
+                enabled = enabled,
+                onClick = onClick,
+                interactionSource = interactionSource,
+                indication = null,
+            )
             .padding(vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

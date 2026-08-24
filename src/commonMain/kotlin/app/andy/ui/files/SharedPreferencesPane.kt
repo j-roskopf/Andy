@@ -46,6 +46,7 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
+import app.andy.ui.components.EmptyState
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 
@@ -323,13 +324,7 @@ internal fun SharedPreferencesPane(
 
 @Composable
 internal fun InspectorEmptyState(message: String) {
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(message, color = TextSecondary, fontSize = 14.sp)
-    }
+    EmptyState(title = message, compact = true, modifier = Modifier.fillMaxSize())
 }
 
 @Composable

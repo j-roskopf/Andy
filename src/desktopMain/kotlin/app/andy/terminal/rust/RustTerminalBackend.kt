@@ -122,6 +122,8 @@ class RustTerminalBackend(
 
     override fun mouseFlags(): Int = mouseFlagsCached.get()
 
+    override fun bracketedPasteEnabled(): Boolean = engine.bracketedPasteEnabled()
+
     override fun scrollDisplay(delta: Int) {
         engine.scrollDisplay(delta)
         dirty.set(true)

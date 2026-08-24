@@ -1,6 +1,8 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.ui.components.ChatBubbleGroup
+import app.andy.ui.components.ChatBubbleSender
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentToolKind
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
@@ -15,6 +17,42 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class AgentTranscriptTest {
+    @Test
+    fun chatBubbleSenderIgnoresSilentRecoveryPrompts() {
+        assertEquals(null, AgentEvent.UserMessage(atMillis = 1, text = CONNECTION_STALL_RETRY_PROMPT).chatBubbleSenderOrNull())
+        assertEquals(ChatBubbleSender.User, AgentEvent.UserMessage(atMillis = 1, text = "hello").chatBubbleSenderOrNull())
+        assertEquals(ChatBubbleSender.Assistant, AgentEvent.AssistantText(atMillis = 1, text = "hi").chatBubbleSenderOrNull())
+    }
+
+    @Test
+    fun transcriptChatBubbleGroupClustersConsecutiveSameSenderMessages() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "one"),
+            AgentEvent.UserMessage(atMillis = 2, text = "two"),
+            AgentEvent.AssistantText(atMillis = 3, text = "reply"),
+            AgentEvent.UserMessage(atMillis = 4, text = "solo"),
+        )
+        val items = transcriptDisplayItems(events)
+
+        assertEquals(ChatBubbleGroup.First, transcriptChatBubbleGroup(items, 0))
+        assertEquals(ChatBubbleGroup.Last, transcriptChatBubbleGroup(items, 1))
+        assertEquals(ChatBubbleGroup.Single, transcriptChatBubbleGroup(items, 2))
+        assertEquals(ChatBubbleGroup.Single, transcriptChatBubbleGroup(items, 3))
+    }
+
+    @Test
+    fun transcriptChatBubbleGroupBreaksAcrossToolActivity() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "one"),
+            AgentEvent.ToolCall(atMillis = 2, toolName = "Read", summary = "file.kt"),
+            AgentEvent.UserMessage(atMillis = 3, text = "two"),
+        )
+        val items = transcriptDisplayItems(events)
+
+        assertEquals(ChatBubbleGroup.Single, transcriptChatBubbleGroup(items, 0))
+        assertEquals(ChatBubbleGroup.Single, transcriptChatBubbleGroup(items, 2))
+    }
+
     @Test
     fun storedPromptIsHiddenWhenTranscriptAlreadyContainsUserTurn() {
         assertFalse(

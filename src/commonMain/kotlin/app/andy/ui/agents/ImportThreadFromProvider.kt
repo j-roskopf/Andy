@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
+import app.andy.ui.components.contrastPrimaryButtonColors
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -193,12 +193,7 @@ internal fun ImportThreadFromProviderPane(
                     onClick = { onImport(agent, sessionId.trim()) },
                     enabled = canImport,
                     shape = RoundedCornerShape(AndyRadius.Pill),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = TextPrimary,
-                        contentColor = AndyColors.WindowBg,
-                        disabledContainerColor = AndyColors.SurfaceHover,
-                        disabledContentColor = AndyColors.TextDisabled,
-                    ),
+                    colors = contrastPrimaryButtonColors(),
                 ) {
                     Text("Import", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }

@@ -22,6 +22,8 @@ actual suspend fun Clipboard.setPlainText(text: String) {
     writeClipboardText(text)
 }
 
+actual suspend fun Clipboard.readPlainText(): String? = null
+
 private fun writeClipboardText(text: String): Unit =
     js("{ if (navigator.clipboard) navigator.clipboard.writeText(text); }")
 
