@@ -77,6 +77,8 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.TabBar
 import app.andy.ui.components.LabeledField
+import app.andy.ui.components.FormLayout
+import app.andy.ui.components.FormLayoutRow
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
@@ -1251,30 +1253,35 @@ private fun CreateVirtualDeviceDialog(
                             )
                         }
                     }
-                    else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            LabeledField("Name", name, { name = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }, Modifier.width(220.dp))
-                            LabeledField("Locale", locale, { locale = it }, Modifier.width(120.dp))
-                            LabeledField("GPU", gpuMode, { gpuMode = it }, Modifier.width(110.dp))
+                    else -> FormLayout(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        FormLayoutRow {
+                            LabeledField(
+                                "Name",
+                                name,
+                                { name = it.filter { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } },
+                                Modifier.weight(1f),
+                            )
+                            LabeledField("Locale", locale, { locale = it }, Modifier.weight(1f))
+                            LabeledField("GPU", gpuMode, { gpuMode = it }, Modifier.weight(1f))
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                             FilterPill("Portrait", orientation == "portrait", Cyan) { orientation = "portrait" }
                             FilterPill("Landscape", orientation == "landscape", Cyan) { orientation = "landscape" }
                             FilterPill("Keyboard", keyboard, Green) { keyboard = !keyboard }
                             FilterPill("Start after create", startAfterCreate, Yellow) { startAfterCreate = !startAfterCreate }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            LabeledField("RAM MB", ram, { ram = it.filter(Char::isDigit) }, Modifier.width(110.dp))
-                            LabeledField("Storage MB", storage, { storage = it.filter(Char::isDigit) }, Modifier.width(130.dp))
-                            LabeledField("CPU cores", cores, { cores = it.filter(Char::isDigit) }, Modifier.width(110.dp))
+                        FormLayoutRow {
+                            LabeledField("RAM MB", ram, { ram = it.filter(Char::isDigit) }, Modifier.weight(1f))
+                            LabeledField("Storage MB", storage, { storage = it.filter(Char::isDigit) }, Modifier.weight(1f))
+                            LabeledField("CPU cores", cores, { cores = it.filter(Char::isDigit) }, Modifier.weight(1f))
                         }
                         Text("Cameras", color = TextSecondary, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                             AvdCameraOption.entries.forEach { option ->
                                 FilterPill("Back ${option.name}", backCamera == option, Rust) { backCamera = option }
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
                             AvdCameraOption.entries.forEach { option ->
                                 FilterPill("Front ${option.name}", frontCamera == option, Rust) { frontCamera = option }
                             }

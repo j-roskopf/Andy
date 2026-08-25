@@ -311,7 +311,6 @@ internal fun AndyShell(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .padding(top = contentTopPadding)
                     .background(AndyColors.ContentBg)
             ) {
                 TopChrome(

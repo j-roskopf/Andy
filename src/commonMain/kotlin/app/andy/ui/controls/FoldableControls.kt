@@ -29,7 +29,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -46,11 +45,8 @@ internal fun FoldableControlsPanel(
     modifier: Modifier = Modifier,
 ) {
     val selectedPosture = foldablePostureForAngle(hingeAngle)
-    PanelCard(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        background = AndyColors.Neutral900.copy(alpha = 0.44f),
-        borderColor = Color.Transparent,
-        contentPadding = PaddingValues(AndySpace.Space5),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
         Text(

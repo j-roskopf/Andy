@@ -163,10 +163,9 @@ private fun ChatComposerDrawer(
     Column(
         modifier
             .shadow(elevation = 1.dp, shape = shape, clip = false)
-            .clip(shape)
             .background(AndyColors.Neutral850, shape)
             .border(1.dp, Border.copy(alpha = 0.65f), shape)
-            .padding(top = AndySpace.Space2, bottom = DrawerOverlap + AndySpace.Space3)
+            .padding(top = AndySpace.Space3, bottom = DrawerOverlap + AndySpace.Space3)
             .padding(horizontal = AndySpace.Space3),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -218,14 +217,13 @@ private fun ChatComposerDrawerImageChip(
             .clip(chipShape)
             .background(AndyColors.Neutral800, chipShape)
             .border(1.dp, Border.copy(alpha = 0.55f), chipShape)
-            .padding(start = AndySpace.Space1, end = AndySpace.Space1)
-            .height(AndyLayout.ControlHeightSm + 4.dp),
+            .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Box(
             Modifier
-                .size(32.dp)
+                .size(28.dp)
                 .clip(RoundedCornerShape(6.dp))
                 .background(AndyColors.Neutral900.copy(alpha = 0.65f)),
             contentAlignment = Alignment.Center,
@@ -235,8 +233,10 @@ private fun ChatComposerDrawerImageChip(
                 Image(
                     bitmap = image,
                     contentDescription = label,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(1.dp),
+                    contentScale = ContentScale.Fit,
                 )
             } else {
                 Text(

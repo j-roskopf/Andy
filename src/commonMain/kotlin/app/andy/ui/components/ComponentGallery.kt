@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentKind
 import app.andy.ui.agents.AgentMark
+import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.TextPrimary
@@ -151,11 +153,45 @@ internal fun ComponentGallery(modifier: Modifier = Modifier) {
                 },
             )
         }
+        GallerySection("Form layout") {
+            var first by remember { mutableStateOf("Priya") }
+            var last by remember { mutableStateOf("Sharma") }
+            var email by remember { mutableStateOf("priya@example.com") }
+            FormLayout(modifier = Modifier.widthIn(max = 420.dp)) {
+                FormLayoutRow {
+                    LabeledField("First Name", first, { first = it }, Modifier.weight(1f))
+                    LabeledField("Last Name", last, { last = it }, Modifier.weight(1f))
+                }
+                LabeledField("Email", email, { email = it }, Modifier.fillMaxWidth())
+            }
+        }
+        GallerySection("Top nav") {
+            TopNav(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 560.dp)
+                    .background(AndyColors.SurfaceRaised),
+                heading = { TopNavHeading(title = "Andy", subtitle = "Device · API 34") },
+                startContent = {
+                    TopNavItem(label = "Live", selected = true, onClick = {})
+                    TopNavItem(label = "Logcat", selected = false, onClick = {})
+                },
+                endContent = {
+                    GhostButton(onClick = {}) { Text("Refresh", fontSize = 12.sp) }
+                },
+            )
+        }
         GallerySection("Chat") {
             Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space1 + ChatBubbleGroupPullUp)) {
                 ChatMessageBubble(
                     sender = ChatBubbleSender.User,
                     group = ChatBubbleGroup.First,
+                    metadata = {
+                        ChatMessageMetadata(
+                            reverse = true,
+                            footer = { ChatMessageCopyAction("Grouped user bubble") },
+                        )
+                    },
                 ) {
                     ChatBubbleText("Grouped user bubble")
                 }
@@ -165,7 +201,15 @@ internal fun ComponentGallery(modifier: Modifier = Modifier) {
                 ) {
                     ChatBubbleText("Second message in stack")
                 }
-                ChatMessageBubble(sender = ChatBubbleSender.Assistant, variant = ChatBubbleVariant.Ghost) {
+                ChatMessageBubble(
+                    sender = ChatBubbleSender.Assistant,
+                    variant = ChatBubbleVariant.Ghost,
+                    metadata = {
+                        ChatMessageMetadata(
+                            footer = { ChatMessageCopyAction("Assistant reply without heavy chrome") },
+                        )
+                    },
+                ) {
                     ChatBubbleText("Assistant reply without heavy chrome")
                 }
             }
