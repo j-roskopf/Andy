@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit
 data class AcpProcess(
     val process: Process,
     val command: List<String>,
+    /** Recent stderr lines (capped) for enriching opaque transport failures. */
+    val stderrSnippet: () -> String = { "" },
 )
 
 /** Spawns ACP over stdio and continuously drains stderr so a noisy agent cannot deadlock. */
@@ -58,6 +60,7 @@ class AcpProcessLauncher(
         env: Map<String, String>,
     ): AcpProcess = withContext(Dispatchers.IO) {
         val prepared = prepareCommand(spec, binary, preflight = false)
+        val stderrBuffer = StringBuilder()
         val process = ProcessBuilder(prepared.command)
             .directory(File(cwd))
             .redirectError(ProcessBuilder.Redirect.PIPE)
@@ -66,14 +69,27 @@ class AcpProcessLauncher(
         Thread({
             runCatching {
                 process.errorStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line -> onDiagnostics("stderr: $line\n") }
+                    lines.forEach { line ->
+                        synchronized(stderrBuffer) {
+                            if (stderrBuffer.length < 4_000) {
+                                stderrBuffer.appendLine(line)
+                            }
+                        }
+                        onDiagnostics("stderr: $line\n")
+                    }
                 }
             }
         }, "andy-acp-stderr-${File(cwd).name}").apply {
             isDaemon = true
             start()
         }
-        AcpProcess(process, prepared.command)
+        AcpProcess(
+            process = process,
+            command = prepared.command,
+            stderrSnippet = {
+                synchronized(stderrBuffer) { stderrBuffer.toString().trim() }
+            },
+        )
     }
 
     private fun prepareCommand(spec: AcpLaunchSpec, binary: String?, preflight: Boolean): PreparedAcpCommand =

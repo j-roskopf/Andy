@@ -220,16 +220,16 @@ internal fun PanelCard(
         Color.Transparent -> CardVariant.Transparent
         else -> CardVariant.Default
     }
-    Column(modifier, verticalArrangement = verticalArrangement) {
-        Card(
-            variant = variant,
-            shape = shape,
-            backgroundColor = background,
-            borderColor = resolvedBorder ?: Color.Transparent,
-            contentPadding = contentPadding,
-            content = content,
-        )
-    }
+    Card(
+        modifier = modifier,
+        variant = variant,
+        shape = shape,
+        backgroundColor = background,
+        borderColor = resolvedBorder ?: Color.Transparent,
+        contentPadding = contentPadding,
+        verticalArrangement = verticalArrangement,
+        content = content,
+    )
 }
 
 @Composable

@@ -80,6 +80,9 @@ class RemoteMcpDeviceService(
         return shell(serial, listOf("emu") + command)
     }
 
+    override suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        CommandResult.failure("Emulator display rotation is unavailable over remote MCP")
+
     override suspend fun pair(host: String, port: Int, code: String): CommandResult =
         CommandResult.failure("Wi‑Fi pairing must be done on the remote host")
 

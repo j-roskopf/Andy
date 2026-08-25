@@ -50,6 +50,10 @@ Opt into multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, e
 
 On macOS, the Devices screen also lists iOS Simulators for basic management: boot, shut down, open in Simulator.app, and jump into Live.
 
+### Remote Sessions
+
+Connect Andy Desktop to another Mac or Linux host over SSH (sidebar host switcher). Andy tunnels the remote `andyd` socket and tmux sessions, routes ADB through SSH for mirroring and device tools, and swaps the agent backend to the remote machine — credentials go through the system SSH askpass; Andy does not store secrets. Saved hosts reconnect with one click; remote mirror tuning presets help over high-latency links. While connected, local-only panes (Catalog, Computer Files, Network, Snapshots, Performance, Tracing, Design, Inspector, Bugs, Recordings) stay hidden. Desktop only.
+
 ### Virtual Device Creation
 
 Create new Android Virtual Devices from SDK profiles and system images. Andy can install the selected image, configure orientation, RAM, storage, CPU, GPU, locale, cameras, hardware keyboard, and optionally launch the emulator after creation.
@@ -68,7 +72,7 @@ Stream a selected Android device or emulator into Andy with an embedded H.264 mi
 
 Grid mode mirrors up to four batch targets at once (lower resolution/FPS), with optional synchronized input scaled per device. Bug capture, network proxy, and Perfetto tracing remain single-target.
 
-Dock Live, Logcat, or a project Terminal beside or below the main content when you want the mirror and another workspace open at once. On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
+Dock Live, Logcat, a project Terminal, or an embedded Browser beside or below the main content when you want the mirror and another workspace open at once. Terminal docks support recursive row/column splits. The Browser pane (macOS WKWebView) loads URLs with back/forward/refresh, element inspection, and annotation — select a DOM node, add a comment, and drop the snapshot into the active chat composer. A Local Servers flyout in the top chrome scans localhost listeners, opens them in the Browser dock, and can stop the process. On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
 
 ### Recordings
 
@@ -118,19 +122,27 @@ Create ordered network rewrite rules that match URL patterns and optional HTTP m
 
 ### Projects
 
-Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Each project canvas has tabs for chats, workflow tasks, runbook shell actions, a markdown scratchpad, and nested git worktrees. Start agent chats that inherit the project's context, run actions in a docked Terminal, and keep per-project agent profiles (provider, model, autonomy) for workflow stages. The Projects screen also includes a Kanban tab for a lightweight board alongside your project spaces.
+Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Each project canvas has tabs for chats, workflow tasks, artifacts, automations, kanban, runbook shell actions, a markdown scratchpad, and nested git worktrees. Start agent chats that inherit the project's context, run actions in a docked Terminal, and keep per-project agent profiles (provider, model, autonomy) for workflow stages.
 
 ### Project Workflows
 
 Drive Spec → Build ↔ Review ↔ Verification from the project tasks tab. Create or refine specs (optional grill-me pass), open plan snapshots into builds, gate review verdicts, track verification criteria and attempt history, and jump into the related agent runs. Desktop only.
 
+### Artifacts
+
+Browse a per-project Artifacts + Media catalog from the Artifacts tab under Projects. Workflow outputs, uploads, and pinned files land in Media or Documents views; preview text, reveal on disk, pin/unpin, upload new files, and open entries from workflow tasks. An unscoped Agents catalog collects artifacts not tied to a project. Desktop only.
+
+### Automations
+
+Schedule recurring agent work from the Automations tab under Projects. Create paused-until-resume automations with once, hourly, daily, weekday, weekly, interval, or cron schedules; choose standalone, dedicated-thread, or heartbeat mode; set failure policy, max iterations, and notifications. Arm with Resume, run manually, or drive from MCP `automation.*` tools while `andyd` is up. Desktop only.
+
 ### Kanban
 
-Track work on a drag-and-drop board from the Kanban tab under Projects. Andy starts you with To-Do, Doing, and Done lanes; add, rename, reorder, or delete lanes; and create cards with a title, description, and tags. Drag cards between lanes or reorder within a lane. The board persists locally with Andy's agent store. Desktop only — unavailable while Andy is connected to a running `andyd` (quit the daemon and restart Andy to edit the board).
+Track work on a per-project drag-and-drop board from the Kanban tab under Projects. Andy starts you with To-Do, Doing, and Done lanes; add, rename, reorder, or delete lanes; and create cards with a title, description, and tags. Drag cards between lanes or reorder within a lane, assign cards to agent chats, and start a spec from a card. The board persists locally with Andy's agent store. Desktop only — unavailable while Andy is connected to a running `andyd` (quit the daemon and restart Andy to edit the board).
 
 ### Agents
 
-Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, or Goose from Andy. Compose prompts with images and `/` skills, choose model, autonomy, and provider sandbox/approvals, optionally isolate the run in a git worktree, toggle plan mode, set a persistent `/goal` (Codex and Claude Code), and attach Andy MCP so the agent can drive devices and emulators. Follow the live transcript (thinking, tools, cost/tokens), review file diffs when the task finishes, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
+Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, or local Ollama/LM Studio backends (via OpenCode, Pi, or Goose runtimes) from Andy. Compose prompts with images, `@file` mentions, and `/` skills; choose model, autonomy, and provider sandbox/approvals; optionally isolate the run in a git worktree; toggle plan mode; set a persistent `/goal` (Codex and Claude Code); import a vendor thread/session id to resume an existing provider conversation; and attach Andy MCP so the agent can drive devices and emulators. Start temporary chats that never persist (filtered from MCP, web, automations, and kanban) or promote them when ready. Open side chats docked beside a parent task for read-only second opinions without handing off the work. Pin priority chats (working, blocked, unread, queued, or recently failed) at the top of project and agent inboxes. Follow the live transcript (thinking, tools, inline tool images, mermaid diagram previews, cost/tokens), review file diffs when the task finishes, open file links in Andy's code viewer, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
 
 ### Controls
 
@@ -166,7 +178,7 @@ An "Explain…" action sits beside a selected crash, network exchange, hierarchy
 
 ### Settings
 
-Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf.
+Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf. Optional Network Access serves a static web chat PWA for ACP-lane chats from other devices (Tailscale Serve or LAN bind, bearer-token auth, Web Push notifications) — see [docs/ANDYD.md](docs/ANDYD.md#network-access-optional-web-client).
 
 ### Updates
 
@@ -174,7 +186,7 @@ Check for desktop app updates and confirm installation from inside Andy. Version
 
 ### Computer File Browsing
 
-Browse the host filesystem from multi-root folders, open files in a syntax-themed editor, and search across indexed roots without leaving Andy.
+Browse the host filesystem from multi-root folders, open files in a syntax-themed editor with an inline find bar (Cmd/Ctrl+F, next/prev), and search across indexed roots without leaving Andy. File changes under watched roots refresh via FSEvents (macOS) or directory watching.
 
 ### Andy for web
 
@@ -307,7 +319,7 @@ andy tool list   # full MCP catalog; `andy tool call <name>` for any tool
 ```
 
 Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`,
-`Hermes`, `OpenClaw`.
+`Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`.
 
 `andy tui` groups chats by project (`n` new chat, `a` / Enter attach). `andy attach`
 opens the ACP viewer or a tmux pane by lane — detach with Esc/`q` (ACP) or F12 /
@@ -317,7 +329,8 @@ Alt+d / Ctrl-b then d (tmux) without stopping the agent. Chat start also accepts
 Device targeting: `--serial` on a command, or `ANDY_SERIAL`. Use global `--json`
 for machine-readable output. Curated groups cover `device`, `emulator`, `avd`,
 `system-image`, `snapshot`, `input`, `app`, `intent`, `file`, and `network`.
-Agent/workflow MCP tools stay under `andy tool call` (beyond the curated
+Automation MCP tools (`automation.list`, `automation.create`, `automation.run`, …)
+and other agent/workflow tools stay under `andy tool call` (beyond the curated
 `andy chat` commands).
 
 See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
@@ -354,7 +367,7 @@ Open a new terminal after install if `cargo` is still not found.
 - Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
   managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
   or the desktop app). Override with `ANDY_TMUX` if needed.
-- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`).
+- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`). Ollama and LM Studio work as OpenAI-compatible backends when a server is running and configured in Settings.
 
 ## Icon Attribution
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>

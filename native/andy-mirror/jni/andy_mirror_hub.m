@@ -1423,6 +1423,27 @@ int andy_hub_inspect_pixel(int64_t decoder_id, float normalized_x, float normali
     return (int) (0xff000000u | ((unsigned) rgb[0] << 16) | ((unsigned) rgb[1] << 8) | (unsigned) rgb[2]);
 }
 
+bool andy_hub_latest_frame_size(int64_t decoder_id, int32_t *out_width, int32_t *out_height) {
+    if (!out_width || !out_height) return false;
+    *out_width = 0;
+    *out_height = 0;
+    GpuDecoder *decoder = find_decoder(decoder_id);
+    if (!decoder) return false;
+    pthread_mutex_lock(&decoder->latest_pixels_lock);
+    CVPixelBufferRef pixels = decoder->latest_pixels;
+    if (pixels) CVPixelBufferRetain(pixels);
+    pthread_mutex_unlock(&decoder->latest_pixels_lock);
+    if (!pixels) return false;
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
+    CVPixelBufferRelease(pixels);
+    if (!width || !height || width > 8192 || height > 8192) return false;
+    *out_width = (int32_t) width;
+    *out_height = (int32_t) height;
+    return true;
+}
+
 int32_t *andy_hub_copy_latest_frame_argb(int64_t decoder_id, int32_t *out_width, int32_t *out_height) {
     if (!out_width || !out_height) return NULL;
     *out_width = 0;
@@ -1802,4 +1823,16 @@ JNIEXPORT jintArray JNICALL GPU_JNI_METHOD(nativeCopyLatestFrameArgb)(
     jint size_values[2] = { (jint) width, (jint) height };
     (*env)->SetIntArrayRegion(env, out_size, 0, 2, size_values);
     return result;
+}
+
+JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeLatestFrameSize)(
+        JNIEnv *env, jclass clazz, jlong decoder_id, jintArray out_size) {
+    (void) clazz;
+    if (!out_size || (*env)->GetArrayLength(env, out_size) < 2) return JNI_FALSE;
+    int32_t width = 0;
+    int32_t height = 0;
+    if (!andy_hub_latest_frame_size((int64_t) decoder_id, &width, &height)) return JNI_FALSE;
+    jint values[2] = { (jint) width, (jint) height };
+    (*env)->SetIntArrayRegion(env, out_size, 0, 2, values);
+    return JNI_TRUE;
 }

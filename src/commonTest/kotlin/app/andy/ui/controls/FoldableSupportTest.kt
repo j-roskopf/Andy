@@ -161,4 +161,17 @@ class FoldableSupportTest {
             parseWmSizePx("Hinge 0° · folded · 1080×2364"),
         )
     }
+
+    @Test
+    fun parseDisplay0CurrentSizeFollowsRotation() {
+        val output = """
+            Display: mDisplayId=7
+              cur=1080x674
+            Display: mDisplayId=0 (organized)
+              init=1200x1920 320dpi cur=1920x1200 app=1920x1200
+            Display: mDisplayId=1
+              cur=10x10
+        """.trimIndent()
+        assertEquals(1920 to 1200, parseDisplay0CurrentSize(output))
+    }
 }

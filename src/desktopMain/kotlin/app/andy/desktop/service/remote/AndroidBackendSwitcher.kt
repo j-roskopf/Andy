@@ -146,6 +146,10 @@ class TunneledRemoteDeviceService(
         inner.shell(serial, command)
     override suspend fun emu(serial: String, command: List<String>): CommandResult =
         inner.emu(serial, command)
+    override suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        inner.applyEmulatorDisplayRotation(serial, quarterTurn)
+    override suspend fun readEmulatorDisplayRotation(serial: String): Int? =
+        inner.readEmulatorDisplayRotation(serial)
     override suspend fun pair(host: String, port: Int, code: String): CommandResult =
         CommandResult.failure("Wi‑Fi pairing must be done on the remote host")
     override suspend fun connect(host: String, port: Int): CommandResult =

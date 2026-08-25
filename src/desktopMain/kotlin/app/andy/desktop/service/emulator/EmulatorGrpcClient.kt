@@ -151,6 +151,51 @@ internal class EmulatorGrpcClient(
         displaySize = next
     }
 
+    /**
+     * Rotates the emulator via gRPC PhysicalModel ROTATION, turning the device about the
+     * screen normal (Z) — the axis a user turns a phone around to go portrait -> landscape.
+     * X and Y tilt the device without changing orientation, so writing the angle there
+     * leaves the screen where it was.
+     */
+    fun setPhysicalRotation(quarterTurn: Int): CommandResult {
+        val turn = quarterTurn.coerceIn(0, 3)
+        return setPhysicalModel(
+            physicalType = PHYSICAL_TYPE_ROTATION,
+            values = listOf(0f, 0f, ROTATION_DEGREES[turn]),
+        )
+    }
+
+    /**
+     * Reads the virtual accelerometer's current quarter turn (0–3), or null when the call
+     * fails. `wm user-rotation` cannot stand in for this: Andy drives rotation through the
+     * sensor, and WindowManager reports `free` regardless of which way the device is held.
+     */
+    fun getPhysicalRotation(): Int? {
+        return runCatching {
+            val response = ClientCalls.blockingUnaryCall(
+                channel,
+                GET_PHYSICAL_MODEL_METHOD,
+                CallOptions.DEFAULT,
+                PhysicalModelRequest(PHYSICAL_TYPE_ROTATION, emptyList()),
+            )
+            quarterTurnForRoll(response.values.getOrNull(2) ?: return@runCatching null)
+        }.getOrNull()
+    }
+
+    private fun setPhysicalModel(physicalType: Int, values: List<Float>): CommandResult {
+        return runCatching {
+            ClientCalls.blockingUnaryCall(
+                channel,
+                SET_PHYSICAL_MODEL_METHOD,
+                CallOptions.DEFAULT,
+                PhysicalModelRequest(physicalType, values),
+            )
+            CommandResult.success("Rotated emulator framebuffer")
+        }.getOrElse { error ->
+            CommandResult.failure("Emulator gRPC rotation failed: ${error.message ?: error::class.simpleName}")
+        }
+    }
+
     private class EmulatorGrpcAuthInterceptor(private val token: String) : ClientInterceptor {
         override fun <ReqT : Any?, RespT : Any?> interceptCall(
             method: MethodDescriptor<ReqT, RespT>,
@@ -205,7 +250,46 @@ internal class EmulatorGrpcClient(
                 .setRequestMarshaller(EmulatorKeyEventMarshaller)
                 .setResponseMarshaller(EmulatorEmptyMarshaller)
                 .build()
+        private val SET_PHYSICAL_MODEL_METHOD: MethodDescriptor<PhysicalModelRequest, Unit> =
+            MethodDescriptor.newBuilder<PhysicalModelRequest, Unit>()
+                .setType(MethodDescriptor.MethodType.UNARY)
+                .setFullMethodName(
+                    MethodDescriptor.generateFullMethodName(
+                        "android.emulation.control.EmulatorController",
+                        "setPhysicalModel",
+                    ),
+                )
+                .setRequestMarshaller(PhysicalModelRequestMarshaller)
+                .setResponseMarshaller(EmulatorEmptyMarshaller)
+                .build()
+        private val GET_PHYSICAL_MODEL_METHOD: MethodDescriptor<PhysicalModelRequest, PhysicalModelValue> =
+            MethodDescriptor.newBuilder<PhysicalModelRequest, PhysicalModelValue>()
+                .setType(MethodDescriptor.MethodType.UNARY)
+                .setFullMethodName(
+                    MethodDescriptor.generateFullMethodName(
+                        "android.emulation.control.EmulatorController",
+                        "getPhysicalModel",
+                    ),
+                )
+                .setRequestMarshaller(PhysicalModelRequestMarshaller)
+                .setResponseMarshaller(PhysicalModelValueMarshaller)
+                .build()
     }
+}
+
+/** `PhysicalModelValue.PhysicalType.ROTATION`. */
+internal const val PHYSICAL_TYPE_ROTATION = 1
+
+/**
+ * Z angle for each Android quarter turn. The emulator reports roll in (-180, 180], so
+ * rotation 3 is -90 rather than 270 and a set/read round trip stays on the same turn.
+ */
+internal val ROTATION_DEGREES = listOf(0f, 90f, 180f, -90f)
+
+/** Maps a Z angle in degrees to the nearest Android quarter turn (0–3). */
+internal fun quarterTurnForRoll(roll: Float): Int {
+    val turns = Math.round(roll / 90f)
+    return ((turns % 4) + 4) % 4
 }
 
 private const val KEY_EVENT_KEYDOWN = 0
@@ -223,6 +307,31 @@ internal data class EmulatorImage(
 internal data class EmulatorTouch(val x: Int, val y: Int, val pressure: Int)
 internal data class EmulatorTouchEvent(val touches: List<EmulatorTouch>, val display: Int = 0)
 internal data class EmulatorKeyEvent(val eventType: Int = KEY_EVENT_KEYDOWN, val key: String = "", val text: String = "")
+
+internal data class PhysicalModelRequest(val physicalType: Int, val values: List<Float>)
+
+internal data class PhysicalModelValue(val physicalType: Int, val values: List<Float>)
+
+private object PhysicalModelValueMarshaller : MethodDescriptor.Marshaller<PhysicalModelValue> {
+    override fun stream(value: PhysicalModelValue): InputStream {
+        return ByteArrayInputStream(EmulatorGrpcProto.physicalModelValue(value.physicalType, value.values))
+    }
+
+    override fun parse(stream: InputStream): PhysicalModelValue {
+        return EmulatorGrpcProto.parsePhysicalModelValue(stream.readAllBytes())
+    }
+}
+
+private object PhysicalModelRequestMarshaller : MethodDescriptor.Marshaller<PhysicalModelRequest> {
+    override fun stream(value: PhysicalModelRequest): InputStream {
+        return ByteArrayInputStream(EmulatorGrpcProto.physicalModelValue(value.physicalType, value.values))
+    }
+
+    override fun parse(stream: InputStream): PhysicalModelRequest {
+        stream.readAllBytes()
+        return PhysicalModelRequest(0, emptyList())
+    }
+}
 
 private object EmulatorImageFormatMarshaller : MethodDescriptor.Marshaller<EmulatorImageFormat> {
     override fun stream(value: EmulatorImageFormat): InputStream {
@@ -312,6 +421,73 @@ internal object EmulatorGrpcProto {
         if (event.key.isNotEmpty()) writer.string(4, event.key)
         if (event.text.isNotEmpty()) writer.string(5, event.text)
         return writer.toByteArray()
+    }
+
+    fun physicalModelValue(physicalType: Int, values: List<Float>): ByteArray {
+        val floatBytes = ByteArrayOutputStream()
+        values.forEach { value ->
+            val bits = value.toBits()
+            floatBytes.write(bits and 0xFF)
+            floatBytes.write((bits shr 8) and 0xFF)
+            floatBytes.write((bits shr 16) and 0xFF)
+            floatBytes.write((bits shr 24) and 0xFF)
+        }
+        val paramWriter = ProtoWriter()
+        paramWriter.bytes(1, floatBytes.toByteArray())
+        val writer = ProtoWriter()
+        writer.varint(1, physicalType.toLong())
+        writer.bytes(3, paramWriter.toByteArray())
+        return writer.toByteArray()
+    }
+
+    // PhysicalModelValue { target=1 (enum), value=3 (ParameterValue { data=1 repeated float }) }
+    fun parsePhysicalModelValue(bytes: ByteArray): PhysicalModelValue {
+        val reader = ProtoReader(bytes)
+        var physicalType = 0
+        var values = emptyList<Float>()
+        while (!reader.isAtEnd()) {
+            val tag = reader.readTag()
+            when (tag ushr 3) {
+                1 -> physicalType = reader.readVarint().toInt()
+                3 -> values = parseParameterValue(reader.readBytes())
+                else -> reader.skip(tag)
+            }
+        }
+        return PhysicalModelValue(physicalType, values)
+    }
+
+    private fun parseParameterValue(bytes: ByteArray): List<Float> {
+        val reader = ProtoReader(bytes)
+        val floats = mutableListOf<Float>()
+        while (!reader.isAtEnd()) {
+            val tag = reader.readTag()
+            if (tag ushr 3 != 1) {
+                reader.skip(tag)
+                continue
+            }
+            // `repeated float` is packed by default in proto3, but accept the
+            // unpacked fixed32 encoding too rather than silently reading nothing.
+            if (tag and 0x7 == 5) {
+                floats += Float.fromBits(reader.readFixed32())
+            } else {
+                floats += decodeFloats(reader.readBytes())
+            }
+        }
+        return floats
+    }
+
+    private fun decodeFloats(packed: ByteArray): List<Float> {
+        val floats = mutableListOf<Float>()
+        var index = 0
+        while (index + 4 <= packed.size) {
+            val bits = (packed[index].toInt() and 0xff) or
+                ((packed[index + 1].toInt() and 0xff) shl 8) or
+                ((packed[index + 2].toInt() and 0xff) shl 16) or
+                ((packed[index + 3].toInt() and 0xff) shl 24)
+            floats += Float.fromBits(bits)
+            index += 4
+        }
+        return floats
     }
 
     fun parseImage(bytes: ByteArray): EmulatorImage {
@@ -419,6 +595,18 @@ internal object EmulatorGrpcProto {
             val size = readVarint().toInt().coerceAtLeast(0)
             val end = (offset + size).coerceAtMost(bytes.size)
             return bytes.copyOfRange(offset, end).also { offset = end }
+        }
+
+        fun readFixed32(): Int {
+            if (offset + 4 > bytes.size) {
+                offset = bytes.size
+                return 0
+            }
+            return ((bytes[offset].toInt() and 0xff) or
+                ((bytes[offset + 1].toInt() and 0xff) shl 8) or
+                ((bytes[offset + 2].toInt() and 0xff) shl 16) or
+                ((bytes[offset + 3].toInt() and 0xff) shl 24))
+                .also { offset += 4 }
         }
 
         fun skip(tag: Int) {

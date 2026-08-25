@@ -174,7 +174,7 @@ class LiveMirrorSourceSizeTest {
     }
 
     @Test
-    fun prefersCaptureHintOverStaleFrameAndSession() {
+    fun foldableCaptureHintOverridesStaleFrameAndSession() {
         // After Closed/Opened, keep the Live host on the expected geometry until the
         // restarted mirror session matches — otherwise open/close looks like a no-op.
         val device = device(screenSize = "2076x2152")
@@ -190,7 +190,44 @@ class LiveMirrorSourceSizeTest {
 
         assertEquals(
             hint,
-            liveMirrorSourceSize(device, frame, session, captureHint = hint),
+            liveMirrorSourceSize(
+                device = device,
+                frame = frame,
+                session = session,
+                captureHint = hint,
+                foldableProfile = foldProfile,
+                foldableHingeAngle = FoldablePosture.Closed.defaultAngle,
+            ),
+        )
+    }
+
+    @Test
+    fun confirmedLogicalOrientationHintLeadsAStaleNonFoldableStream() {
+        val device = device(screenSize = "1080x2400")
+        val stalePortraitFrame = MirrorFrame(480, 1080, IntArray(0), frameNumber = 10)
+        val stalePortraitSession = MirrorSession(
+            serial = "emulator-5554",
+            requestedMode = MirrorRendererMode.Auto,
+            backend = MirrorBackend(MirrorBackendKind.NativeHardware),
+            width = 480,
+            height = 1080,
+            readyForPresentation = true,
+        )
+        val confirmedLandscapeFrame = MirrorSourceSize(1080, 480)
+
+        assertEquals(
+            confirmedLandscapeFrame,
+            liveMirrorSourceSize(
+                device = device,
+                frame = stalePortraitFrame,
+                session = stalePortraitSession,
+                captureHint = confirmedLandscapeFrame,
+            ),
+        )
+        assertEquals(
+            MirrorSourceSize(480, 1080),
+            liveMirrorFrameSize(stalePortraitFrame, stalePortraitSession),
+            "the mirror surface keeps the real buffer size so it can fit without stretching",
         )
     }
 

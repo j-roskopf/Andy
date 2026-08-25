@@ -27,6 +27,7 @@ import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OpenInvestigationRequest
 import app.andy.service.TargetCapabilities
 import app.andy.transfer.DeviceTransferCoordinator
+import app.andy.ui.controls.ensureEmulatorOrientation
 import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
@@ -735,6 +736,9 @@ internal class ShellState(
                     // adb Online is not boot_completed. Opening Live too early leaves a black,
                     // too-wide mirror until a manual reconnect.
                     val booted = awaitDeviceBootCompleted(started.serial)
+                    if (booted) {
+                        applyAvdInitialOrientation(avdName, started.serial)
+                    }
                     val refreshed = refreshDevicesNow()
                     val ready = refreshed.firstOrNull { it.serial == started.serial } ?: started
                     selectDevice(ready.serial)
@@ -772,6 +776,28 @@ internal class ShellState(
         }
         return false
     }
+
+    /**
+     * Landscape AVDs store `hw.initialOrientation=landscape`, but Andy's hidden emulator
+     * window often still boots a portrait framebuffer. Rotate via the emulator console so
+     * Live opens with the requested display frame.
+     */
+    private suspend fun applyAvdInitialOrientation(avdName: String, serial: String) {
+        val orientation = runCatching {
+            services.avd.listVirtualDevices()
+                .firstOrNull { namesMatchAvd(it.name, avdName) }
+                ?.config
+                ?.get("hw.initialOrientation")
+        }.getOrNull() ?: return
+        if (!orientation.equals("landscape", ignoreCase = true)) return
+        emulatorStartStatus = "Orienting $avdName to landscape…"
+        runCatching {
+            services.devices.ensureEmulatorOrientation(serial, orientation)
+        }
+    }
+
+    private fun namesMatchAvd(left: String, right: String): Boolean =
+        left.replace('_', ' ').trim().equals(right.replace('_', ' ').trim(), ignoreCase = true)
 
     suspend fun initialize() {
         val saved = services.workspaceStore.load()

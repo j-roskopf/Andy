@@ -90,6 +90,8 @@ internal fun ChatComposerLayout(
     highlighted: Boolean = false,
     drawerItems: List<ChatComposerDrawerItem> = emptyList(),
     contextFraction: Float? = null,
+    /** Hover label for the context-window gauge; omitted when blank or null. */
+    contextTooltip: String? = null,
     onMentionClick: (() -> Unit)? = null,
     onAttachClick: (() -> Unit)? = null,
     attachEnabled: Boolean = true,
@@ -130,6 +132,7 @@ internal fun ChatComposerLayout(
                 attachEnabled = attachEnabled,
                 mentionEnabled = mentionEnabled,
                 contextFraction = contextFraction,
+                contextTooltip = contextTooltip,
                 trailing = topBarTrailing,
             )
             input()
@@ -308,6 +311,7 @@ private fun ChatComposerTopBar(
     attachEnabled: Boolean,
     mentionEnabled: Boolean,
     contextFraction: Float?,
+    contextTooltip: String?,
     trailing: (@Composable RowScope.() -> Unit)?,
 ) {
     Row(
@@ -344,10 +348,24 @@ private fun ChatComposerTopBar(
         }
         Box(Modifier.weight(1f))
         if (contextFraction != null) {
-            ChatComposerContextProgress(
-                fraction = contextFraction,
-                modifier = Modifier.widthIn(min = 72.dp, max = 140.dp),
-            )
+            // Vertical padding widens the hover target; the fill itself is only 6.dp tall.
+            val progressModifier = Modifier
+                .widthIn(min = 72.dp, max = 140.dp)
+                .padding(vertical = AndySpace.Space2)
+            val tooltip = contextTooltip?.takeIf { it.isNotBlank() }
+            if (tooltip != null) {
+                Tooltip(text = tooltip) {
+                    ChatComposerContextProgress(
+                        fraction = contextFraction,
+                        modifier = progressModifier,
+                    )
+                }
+            } else {
+                ChatComposerContextProgress(
+                    fraction = contextFraction,
+                    modifier = progressModifier,
+                )
+            }
         }
         trailing?.invoke(this)
     }
@@ -470,6 +488,24 @@ internal fun ComposerModelChip(
 /** Permissions / access selector chip. */
 @Composable
 internal fun ComposerPermissionsChip(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    ComposerChip(
+        text = text,
+        selected = true,
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        showBackground = false,
+    )
+}
+
+/** Reasoning effort selector chip. */
+@Composable
+internal fun ComposerEffortChip(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,

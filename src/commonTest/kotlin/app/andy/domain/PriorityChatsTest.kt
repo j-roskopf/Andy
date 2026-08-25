@@ -85,21 +85,24 @@ class PriorityChatsTest {
             expanded = false,
             limit = 2,
         )
-        assertEquals(listOf("p2", "p1", "p0"), visible.map { it.id })
+        // All 3 priority + 2 non-priority (limit), even though priority alone exceeds limit.
+        assertEquals(listOf("p2", "p1", "p0", "r0", "r1"), visible.map { it.id })
     }
 
     @Test
-    fun fillsRemainingSlotsWithRecentsWhenPriorityIsPinned() {
+    fun appliesLimitOnlyToNonPriorityRecentsWhenPinned() {
         val working = task("working", AgentStatus.Working, createdAtMillis = 1)
         val older = task("older", createdAtMillis = 10)
+        val mid = task("mid", createdAtMillis = 15)
         val newer = task("newer", createdAtMillis = 20)
         val visible = visibleChatSessions(
-            sessions = listOf(newer, older, working),
+            sessions = listOf(newer, mid, older, working),
             pinPriority = true,
             expanded = false,
             limit = 2,
         )
-        assertEquals(listOf("working", "newer"), visible.map { it.id })
+        // All priority chats, plus [limit] non-priority — priority does not consume the budget.
+        assertEquals(listOf("working", "newer", "mid"), visible.map { it.id })
     }
 
     @Test

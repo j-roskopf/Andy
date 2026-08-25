@@ -519,7 +519,8 @@ internal fun AgentTaskDetail(
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        if (task.status == AgentStatus.Error) {
+        // Only guess at an app restart when we have no concrete provider error to show.
+        if (task.status == AgentStatus.Error && task.errorMessage.isNullOrBlank()) {
             Text(
                 "interrupted by an app restart — retry for a fresh run, or continue interactively to pick the session back up",
                 color = TextSecondary,
@@ -852,6 +853,7 @@ internal fun AgentTaskDetail(
                 highlighted = followUpImageDragActive,
                 drawerItems = followUpDrawerItems,
                 contextFraction = contextStatus?.fraction,
+                contextTooltip = contextStatus?.let { agentContextUsageSummary(it) },
                 onMentionClick = if (task.userInputRequest == null) {
                     {
                         followUpValue = insertTextAtCursor(followUpValue, "@")

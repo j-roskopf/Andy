@@ -28,6 +28,7 @@ import app.andy.model.groupedByModelFamily
 import app.andy.model.isLocalModelBackend
 import app.andy.model.labelFor
 import app.andy.model.runtimeKind
+import app.andy.ui.components.ComposerEffortChip
 import app.andy.ui.components.ComposerModelChip
 import app.andy.ui.components.ComposerPermissionsChip
 import app.andy.ui.components.ComposerProviderChip
@@ -156,6 +157,34 @@ internal fun ComposerProfileChips(
             )
         }
     }
+    selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
+        Box {
+            ComposerEffortChip(
+                text = reasoningEffort?.label ?: "Effort",
+                onClick = { effortMenuExpanded = true },
+            )
+            DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                if (agent != AgentKind.Cursor) {
+                    DropdownMenuItem(
+                        text = { Text("provider default", color = TextPrimary) },
+                        onClick = {
+                            onReasoningEffortChange(null)
+                            effortMenuExpanded = false
+                        },
+                    )
+                }
+                model.efforts.forEach { effort ->
+                    DropdownMenuItem(
+                        text = { Text(effort.label, color = TextPrimary) },
+                        onClick = {
+                            onReasoningEffortChange(effort)
+                            effortMenuExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
     Box {
         ComposerPermissionsChip(
             text = permissionsLabel,
@@ -168,34 +197,6 @@ internal fun ComposerProfileChips(
                     onClick = {
                         onSandboxChange(mode)
                         permissionsMenuExpanded = false
-                    },
-                )
-            }
-            selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
-                DropdownMenuItem(
-                    text = { Text("Effort: ${reasoningEffort?.label ?: "default"}", color = TextPrimary) },
-                    onClick = { effortMenuExpanded = true; permissionsMenuExpanded = false },
-                )
-            }
-        }
-    }
-    selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { model ->
-        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-            if (agent != AgentKind.Cursor) {
-                DropdownMenuItem(
-                    text = { Text("provider default", color = TextPrimary) },
-                    onClick = {
-                        onReasoningEffortChange(null)
-                        effortMenuExpanded = false
-                    },
-                )
-            }
-            model.efforts.forEach { effort ->
-                DropdownMenuItem(
-                    text = { Text(effort.label, color = TextPrimary) },
-                    onClick = {
-                        onReasoningEffortChange(effort)
-                        effortMenuExpanded = false
                     },
                 )
             }

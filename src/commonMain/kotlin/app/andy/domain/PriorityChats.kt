@@ -50,7 +50,7 @@ fun splitPriorityChats(
 
 /**
  * Visible slice of a project chat list. When [pinPriority] is on, every priority chat
- * stays visible even if that exceeds [limit]; remaining slots fill with recents.
+ * stays visible (they do not consume [limit]); [limit] applies only to non-priority recents.
  */
 fun visibleChatSessions(
     sessions: List<AgentTask>,
@@ -62,6 +62,5 @@ fun visibleChatSessions(
     if (!pinPriority) return if (expanded) sessions else sessions.take(limit)
     val split = splitPriorityChats(sessions, nowMillis)
     if (expanded) return split.priority + split.rest
-    val restSlots = (limit - split.priority.size).coerceAtLeast(0)
-    return split.priority + split.rest.take(restSlots)
+    return split.priority + split.rest.take(limit)
 }

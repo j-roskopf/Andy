@@ -30,6 +30,10 @@ class SwappableDeviceService(
         svc().shell(serial, command)
     override suspend fun emu(serial: String, command: List<String>): CommandResult =
         svc().emu(serial, command)
+    override suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        svc().applyEmulatorDisplayRotation(serial, quarterTurn)
+    override suspend fun readEmulatorDisplayRotation(serial: String): Int? =
+        svc().readEmulatorDisplayRotation(serial)
     override suspend fun pair(host: String, port: Int, code: String): CommandResult =
         svc().pair(host, port, code)
     override suspend fun connect(host: String, port: Int): CommandResult = svc().connect(host, port)

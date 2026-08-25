@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.parser.AndroidParsers
+import app.andy.desktop.service.emulator.applyEmulatorGrpcDisplayRotation
+import app.andy.desktop.service.emulator.readEmulatorGrpcDisplayRotation
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
@@ -63,6 +65,12 @@ class DesktopDeviceService(
         val adb = discoverSdk().adbPath ?: return CommandResult.failure("ADB not found")
         return runner.run(listOf(adb, "-s", serial, "emu") + command, 8)
     }
+
+    override suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        applyEmulatorGrpcDisplayRotation(serial, quarterTurn)
+
+    override suspend fun readEmulatorDisplayRotation(serial: String): Int? =
+        readEmulatorGrpcDisplayRotation(serial)
 
     override suspend fun pair(host: String, port: Int, code: String): CommandResult {
         val adb = discoverSdk().adbPath ?: return CommandResult.failure("ADB not found")

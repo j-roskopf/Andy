@@ -1,6 +1,4 @@
 package app.andy.ui.catalog
-import app.andy.ui.components.Spinner
-import app.andy.ui.components.SpinnerSize
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,17 +15,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import app.andy.ui.components.AndyCheckbox
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.RangeSlider
-import androidx.compose.material3.Text
 import androidx.compose.material3.Text
 import app.andy.ui.components.TextButton
 import app.andy.ui.components.accentTextButtonColors
@@ -62,10 +57,12 @@ import app.andy.ui.components.Button
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.mutedTextButtonColors
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TableHeader
 import app.andy.ui.components.TableRow
 import app.andy.ui.components.TextField
+import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
@@ -74,6 +71,7 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
@@ -163,15 +161,22 @@ internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null
         )
         if (status.isNotBlank()) Text(status, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (showInitialLoading) {
-            PanelCard(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Spinner(spinnerSize = SpinnerSize.Xl)
-                        Text("Loading system image catalog…", color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
-                    }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ThinkingOrb(
+                        size = 48.dp,
+                        color = Cyan,
+                        contentDescription = "Loading catalog",
+                    )
+                    Text(
+                        "Loading system image catalog…",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 12.sp,
+                    )
                 }
             }
         } else {
@@ -211,7 +216,7 @@ internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null
                                 MonoCell(if (image.installed) "Installed" else "Available", 120.dp, if (image.installed) Green else TextSecondary)
                                 Box(Modifier.width(116.dp), contentAlignment = Alignment.CenterStart) {
                                     if (image.installed) {
-                                        OutlinedButton(
+                                        TextButton(
                                             onClick = {
                                                 val refs = avds.filter { it.referencesImage(image) }
                                                 if (refs.isNotEmpty()) {
@@ -226,9 +231,10 @@ internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null
                                                     }
                                                 }
                                             },
+                                            colors = mutedTextButtonColors(),
                                         ) { Text("Delete", fontSize = 12.sp) }
                                     } else {
-                                        Button(
+                                        TextButton(
                                             onClick = {
                                                 scope.launch {
                                                     status = "Downloading ${image.packageId}..."
@@ -237,7 +243,7 @@ internal fun CatalogScreen(avd: AvdService, iosDevices: IosDeviceService? = null
                                                     refresh()
                                                 }
                                             },
-                                            colors = primaryButtonColors(),
+                                            colors = accentTextButtonColors(),
                                         ) { Text("Download", fontSize = 12.sp) }
                                     }
                                 }

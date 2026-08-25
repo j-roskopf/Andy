@@ -46,6 +46,7 @@ internal fun Card(
     backgroundColor: Color? = null,
     borderColor: Color? = null,
     contentPadding: PaddingValues = PaddingValues(AndySpace.Space5),
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = andyTokens()
@@ -71,6 +72,7 @@ internal fun Card(
             .background(background, shape)
             .then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
             .padding(contentPadding),
+        verticalArrangement = verticalArrangement,
         content = content,
     )
 }

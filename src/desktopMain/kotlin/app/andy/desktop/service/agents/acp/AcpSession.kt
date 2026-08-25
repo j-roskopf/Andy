@@ -7,6 +7,7 @@ import app.andy.desktop.service.agents.AndyMcpEndpoint
 import app.andy.desktop.service.agents.acpEndpointUrl
 import app.andy.desktop.service.agents.AgentWorkflowArtifacts
 import app.andy.desktop.service.agents.gooseProviderAndModel
+import app.andy.desktop.service.agents.looksLikeProviderAuthFailure
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentSessionMode
@@ -84,6 +85,11 @@ class AcpSession(
     var lastStopReason: String? = null
         private set
 
+    /** Most recent prompt failure detail (auth / transport), cleared on each prompt attempt. */
+    @Volatile
+    var lastPromptError: String? = null
+        private set
+
     @Volatile
     private var closed = false
 
@@ -106,6 +112,24 @@ class AcpSession(
         writer = BufferedWriter(OutputStreamWriter(launched.process.outputStream))
         onDiagnostics("ACP command: ${launched.command.joinToString(" ")}\n")
 
+        try {
+            openConnected(cwd, launched)
+        } catch (error: Throwable) {
+            val stderr = launched.stderrSnippet().takeIf { it.isNotBlank() }
+            // Prefer stderr when it carries a clearer auth/login hint than the transport error.
+            if (
+                stderr != null &&
+                looksLikeProviderAuthFailure(stderr) &&
+                !looksLikeProviderAuthFailure(error.message)
+            ) {
+                val hint = stderr.lineSequence().firstOrNull { it.isNotBlank() } ?: stderr
+                throw IllegalStateException(hint, error)
+            }
+            throw error
+        }
+    }
+
+    private suspend fun openConnected(cwd: File, launched: AcpProcess) {
         val input: Flow<String> = flow {
             launched.process.inputStream.bufferedReader().use { reader ->
                 while (true) {
@@ -214,6 +238,7 @@ class AcpSession(
     suspend fun prompt(text: String, imagePaths: List<String>): Boolean = promptMutex.withLock {
         val current = session ?: return@withLock false
         if (!alive) return@withLock false
+        lastPromptError = null
         suppressHistoryReplay = false
         onStatus(AcpStatusModel.working())
         val blocks = buildList {
@@ -247,7 +272,8 @@ class AcpSession(
             }
             true
         }.onFailure { error ->
-            onDiagnostics("ACP prompt failed: ${error.message}\n")
+            lastPromptError = error.message?.takeIf { it.isNotBlank() } ?: error::class.java.simpleName
+            onDiagnostics("ACP prompt failed: ${lastPromptError}\n")
             onStatus(AcpStatusModel.error())
         }.getOrDefault(false)
     }

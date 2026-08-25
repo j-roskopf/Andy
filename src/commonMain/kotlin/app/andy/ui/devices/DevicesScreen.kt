@@ -322,12 +322,19 @@ internal fun DevicesScreen(
         if (allowAvdManagement && state.showCreateWizard) {
             CreateVirtualDeviceDialog(
                 avd = state.avd,
+                onlineEmulatorSerials = devices
+                    .filter { it.kind == DeviceKind.Emulator && it.state == DeviceConnectionState.Online }
+                    .map { it.serial }
+                    .toSet(),
                 onDismiss = { state.showCreateWizard = false },
-                onCreated = {
-                    state.avdStatus = it
+                onCreated = { message, startedAvdName, serialsBeforeStart ->
+                    state.avdStatus = message
                     state.showCreateWizard = false
                     refreshAvds()
                     onRefresh()
+                    if (startedAvdName != null) {
+                        onEmulatorStarted(serialsBeforeStart, startedAvdName)
+                    }
                 },
             )
         }
@@ -1170,8 +1177,9 @@ private fun SetLabelDialog(currentLabel: String, subtitle: String, onDismiss: ()
 @Composable
 private fun CreateVirtualDeviceDialog(
     avd: AvdService,
+    onlineEmulatorSerials: Set<String>,
     onDismiss: () -> Unit,
-    onCreated: (String) -> Unit,
+    onCreated: (message: String, startedAvdName: String?, serialsBeforeStart: Set<String>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var profiles by remember { mutableStateOf<List<AvdProfile>>(emptyList()) }
@@ -1285,6 +1293,7 @@ private fun CreateVirtualDeviceDialog(
                     onClick = {
                         val profile = selectedProfile ?: return@Button
                         val image = selectedImage ?: return@Button
+                        val serialsBeforeStart = onlineEmulatorSerials
                         scope.launch {
                             status = if (image.installed) "Creating $name..." else "Installing ${image.packageId}..."
                             if (!image.installed) {
@@ -1311,7 +1320,15 @@ private fun CreateVirtualDeviceDialog(
                                     startAfterCreate = startAfterCreate,
                                 ),
                             )
-                            if (result.isSuccess) onCreated(result.stdout.ifBlank { "Created $name" }) else status = result.stderr.ifBlank { result.stdout }
+                            if (result.isSuccess) {
+                                onCreated(
+                                    result.stdout.ifBlank { "Created $name" },
+                                    name.takeIf { startAfterCreate },
+                                    serialsBeforeStart,
+                                )
+                            } else {
+                                status = result.stderr.ifBlank { result.stdout }
+                            }
                         }
                     },
                     enabled = selectedProfile != null && selectedImage != null && name.isNotBlank(),

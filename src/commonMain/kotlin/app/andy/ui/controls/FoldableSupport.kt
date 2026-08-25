@@ -65,6 +65,31 @@ internal fun parseWmSizePx(stdout: String): Pair<Int, Int>? {
     return width to height
 }
 
+/**
+ * Logical size of the default display (`mDisplayId=0`), including rotation.
+ * `wm size` often only reports Physical size (unrotated panel), which leaves Live stuck in
+ * portrait after `adb emu rotate` even though scrcpy has already switched to landscape.
+ */
+internal fun parseDisplay0CurrentSize(stdout: String): Pair<Int, Int>? {
+    val display0 = Regex(
+        """Display:\s*mDisplayId=0\b[\s\S]*?(?=Display:\s*mDisplayId=|\z)""",
+        RegexOption.IGNORE_CASE,
+    ).find(stdout)?.value ?: return null
+    val match = Regex("""\bcur=(\d+)x(\d+)\b""", RegexOption.IGNORE_CASE).find(display0) ?: return null
+    val width = match.groupValues[1].toIntOrNull() ?: return null
+    val height = match.groupValues[2].toIntOrNull() ?: return null
+    if (width <= 0 || height <= 0) return null
+    return width to height
+}
+
+/** Reads the current logical display size, preferring rotation-aware dumpsys over `wm size`. */
+internal suspend fun DeviceService.readLogicalDisplaySize(serial: String): Pair<Int, Int>? {
+    val dumpsys = shell(serial, listOf("dumpsys", "window", "displays"))
+    parseDisplay0CurrentSize(dumpsys.stdout.ifBlank { dumpsys.stderr })?.let { return it }
+    val wm = shell(serial, listOf("wm", "size"))
+    return parseWmSizePx(wm.stdout.ifBlank { wm.stderr })
+}
+
 /** Expected physical pixels for [posture] from an AVD profile, when known. */
 fun FoldableDisplayProfile.sizeForPosture(posture: FoldablePosture): Pair<Int, Int> =
     if (posture == FoldablePosture.Closed) {
