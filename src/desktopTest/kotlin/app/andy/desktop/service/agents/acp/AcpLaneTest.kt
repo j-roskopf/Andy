@@ -586,6 +586,24 @@ class AcpLaneTest {
     }
 
     @Test
+    fun transcriptStoreCoalescesStreamDeltasOnDisk() {
+        val root = createTempDirectory("andy-acp-coalesce").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.append("task-1", AgentEvent.AssistantText(1, "Hey", isStreamDelta = true))
+            store.append("task-1", AgentEvent.AssistantText(2, " there", isStreamDelta = true))
+            store.append("task-1", AgentEvent.UserMessage(3, "next turn"))
+            val loaded = store.load("task-1")
+            assertEquals(2, loaded.size)
+            assertEquals("Hey there", (loaded[0] as AgentEvent.AssistantText).text)
+            assertEquals("next turn", (loaded[1] as AgentEvent.UserMessage).text)
+            assertEquals(2, root.resolve("task-1/transcript.jsonl").readLines().size)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun transcriptStoreRoundTripsAndUpsertsToolCalls() {
         val root = createTempDirectory("andy-acp-transcript").toFile()
         try {

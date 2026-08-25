@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isTertiaryPressed
@@ -496,20 +499,20 @@ private fun PaneToggle(
     label: String,
     onClick: () -> Unit,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val background = when {
+        selected -> AndyColors.SurfaceSelected
+        hovered -> AndyColors.SurfaceHover
+        else -> Color.Transparent
+    }
     Box(
         Modifier
             .size(28.dp)
-            .background(
-                if (selected) AndyColors.Neutral800 else AndyColors.Neutral850,
-                RoundedCornerShape(AndyRadius.Control),
-            )
-            .border(
-                1.dp,
-                if (selected) TextSecondary.copy(alpha = 0.55f) else Border,
-                RoundedCornerShape(AndyRadius.Control),
-            )
+            .clip(RoundedCornerShape(AndyRadius.Control))
+            .background(background, RoundedCornerShape(AndyRadius.Control))
             .semantics { contentDescription = label; role = Role.Button }
-            .clickable(onClick = onClick),
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.size(15.dp)) {

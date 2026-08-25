@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents.acp
 
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
+import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentSkill
@@ -23,10 +24,7 @@ class AcpTranscriptStore(
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     fun append(taskId: String, event: AgentEvent) = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
-        val file = fileFor(taskId)
-        file.parentFile?.mkdirs()
-        file.appendText(json.encodeToString(TranscriptEvent.serializer(), event.toDto()) + "\n")
-        trim(file)
+        persistEvent(fileFor(taskId), event)
     }
 
     fun upsert(taskId: String, event: AgentEvent) = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
@@ -37,7 +35,7 @@ class AcpTranscriptStore(
             return@synchronized
         }
         val file = fileFor(taskId)
-        val entries = loadUnlocked(file).toMutableList()
+        val entries = coalesceLoaded(loadUnlocked(file)).map { it.toDto() }.toMutableList()
         val index = entries.indexOfLast { (it.toModel() as? AgentEvent.ToolCall)?.toolCallId == id }
         if (index < 0) {
             entries += incoming.toDto()
@@ -51,17 +49,15 @@ class AcpTranscriptStore(
             entries[index] = merged.toDto()
         }
         writeUnlocked(file, entries)
+        trim(file)
     }
 
     fun load(taskId: String): List<AgentEvent> = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
-        loadUnlocked(fileFor(taskId)).mapNotNull { it.toModel() }
+        coalesceLoaded(loadUnlocked(fileFor(taskId)))
     }
 
     private fun appendUnlocked(taskId: String, event: AgentEvent) {
-        val file = fileFor(taskId)
-        file.parentFile?.mkdirs()
-        file.appendText(json.encodeToString(TranscriptEvent.serializer(), event.toDto()) + "\n")
-        trim(file)
+        persistEvent(fileFor(taskId), event)
     }
 
     private fun loadUnlocked(file: File): List<TranscriptEvent> {
@@ -74,7 +70,28 @@ class AcpTranscriptStore(
         file.writeText(entries.joinToString(separator = "\n", postfix = if (entries.isNotEmpty()) "\n" else "") {
             json.encodeToString(TranscriptEvent.serializer(), it)
         })
+    }
+
+    private fun coalesceLoaded(entries: List<TranscriptEvent>): List<AgentEvent> =
+        coalesceAgentStreamDeltas(emptyList(), entries.mapNotNull { it.toModel() })
+
+    /**
+     * Append stream deltas in O(1) and compact to coalesced rows when a turn boundary arrives.
+     * Rewriting the accumulated response on every token was quadratic; compaction keeps disk usage
+     * bounded without paying that cost per delta.
+     */
+    private fun persistEvent(file: File, event: AgentEvent) {
+        file.parentFile?.mkdirs()
+        appendLine(file, event)
+        if (!isStreamDeltaEvent(event)) {
+            compactUnlocked(file)
+        }
         trim(file)
+    }
+
+    private fun compactUnlocked(file: File) {
+        val coalesced = coalesceLoaded(loadUnlocked(file))
+        writeUnlocked(file, coalesced.map { it.toDto() })
     }
 
     private fun trim(file: File) {
@@ -85,6 +102,17 @@ class AcpTranscriptStore(
         val retained = bytes.copyOfRange(start + aligned + 1, bytes.size)
         file.writeBytes(retained)
     }
+
+    private fun isStreamDeltaEvent(event: AgentEvent): Boolean = when (event) {
+        is AgentEvent.AssistantText -> event.isStreamDelta
+        is AgentEvent.Thinking -> event.isStreamDelta
+        else -> false
+    }
+
+    private fun appendLine(file: File, event: AgentEvent) {
+        file.appendText(json.encodeToString(TranscriptEvent.serializer(), event.toDto()) + "\n")
+    }
+
 }
 
 @Serializable

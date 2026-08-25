@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,14 +15,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import app.andy.andy.generated.resources.Res
+import app.andy.andy.generated.resources.chat_stop
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.TextPrimary
-import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.andyTokens
+import org.jetbrains.compose.resources.painterResource
 
 /** Astryx ChatSendButton — primary icon-only md button, accent when sendable. */
 @Composable
@@ -70,7 +74,12 @@ internal fun ChatSendButton(
     ) {
         when {
             isSending -> Spinner(spinnerSize = SpinnerSize.Sm, shade = SpinnerShade.Subtle)
-            isStopShown -> StopSquareIcon(color = iconColor, modifier = Modifier.size(AndyLayout.IconSm))
+            isStopShown -> Image(
+                painter = painterResource(Res.drawable.chat_stop),
+                contentDescription = null,
+                modifier = Modifier.size(AndyLayout.IconMd),
+                colorFilter = ColorFilter.tint(iconColor),
+            )
             else -> SendArrowIcon(color = iconColor, modifier = Modifier.size(AndyLayout.IconMd))
         }
     }
@@ -104,18 +113,3 @@ private fun SendArrowIcon(
     }
 }
 
-@Composable
-private fun StopSquareIcon(
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val inset = size.minDimension * 0.28f
-        drawRoundRect(
-            color = color,
-            topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
-            size = androidx.compose.ui.geometry.Size(size.width - inset * 2, size.height - inset * 2),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.minDimension * 0.08f),
-        )
-    }
-}

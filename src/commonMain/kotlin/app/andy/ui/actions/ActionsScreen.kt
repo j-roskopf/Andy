@@ -71,7 +71,15 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -115,7 +123,10 @@ import app.andy.domain.visibleChatSessions
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.ui.components.PowerSearchField
 import app.andy.ui.components.Button
+import app.andy.ui.components.CommandPalette
+import app.andy.ui.components.CommandPaletteItem
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
@@ -127,14 +138,10 @@ import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceRail
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.agents.AgentHeaderAction
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
-import app.andy.ui.agents.agentStatusColor
-import app.andy.ui.agents.agentStatusLabel
-import app.andy.ui.agents.isChatTerminalInteractive
 import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
@@ -215,7 +222,6 @@ private fun ProjectCockpit(
     onViewedTaskChange: (String?) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val copyText = rememberCopyText()
     val agentCliStatuses by services.agentRuns.cliStatuses.collectAsState()
     val outdatedCliUpdates by services.cliUpdates.outdated.collectAsState()
     val updatingCliKinds by services.cliUpdates.updating.collectAsState()
@@ -231,9 +237,7 @@ private fun ProjectCockpit(
         )
     }
     var selectedArtifactId by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
-    var searchExpanded by remember { mutableStateOf(false) }
-    val searchFocusRequester = remember { FocusRequester() }
+    var commandPaletteOpen by remember { mutableStateOf(false) }
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
     var editingAction by remember { mutableStateOf<EditingAction?>(null) }
     var specEditorOpen by remember { mutableStateOf(false) }
@@ -338,9 +342,6 @@ private fun ProjectCockpit(
         }
     }
 
-    LaunchedEffect(searchExpanded) {
-        if (searchExpanded) searchFocusRequester.requestFocus()
-    }
     // cliStatuses load asynchronously after Actions can already be active; include them so
     // the first non-empty discovery (and later version changes) re-trigger the check.
     val cliUpdateProbeKey = remember(agentCliStatuses) {
@@ -357,7 +358,7 @@ private fun ProjectCockpit(
         }
     }
 
-    val searchActive = query.isNotBlank()
+    val searchActive = false
     val unreadProjectIds = remember(agentTasks, config.projects) {
         val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
@@ -376,20 +377,35 @@ private fun ProjectCockpit(
                 )
             }
     }
-    val sidebarEntries = remember(config.projects, query, projectChatLists) {
-        val trimmed = query.trim()
-        if (trimmed.isBlank()) {
-            config.projects.map { ProjectSidebarEntry(it) }
-        } else {
-            config.projects.mapNotNull { project ->
+    val sidebarEntries = remember(config.projects) {
+        config.projects.map { ProjectSidebarEntry(it) }
+    }
+    val commandPaletteItems = remember(config.projects, projectChatLists) {
+        buildList {
+            config.projects.forEach { project ->
+                add(
+                    CommandPaletteItem(
+                        id = "project:${project.id}",
+                        label = project.name,
+                        group = "Projects",
+                        supporting = project.contextDir.takeIf { it.isNotBlank() },
+                        keywords = listOf(project.contextDir) + project.actions.map { it.name },
+                    ),
+                )
                 val chats = projectChatLists[project.id] ?: ProjectChatLists(emptyList(), emptyList())
-                val matchingSessions = (chats.active + chats.archived)
-                    .filter { projectSidebarTaskMatches(trimmed, it) }
-                    .distinctBy { it.id }
-                when {
-                    !projectSidebarProjectMatches(trimmed, project) && matchingSessions.isEmpty() -> null
-                    matchingSessions.isNotEmpty() -> ProjectSidebarEntry(project, matchingSessions)
-                    else -> ProjectSidebarEntry(project)
+                (chats.active + chats.archived).distinctBy { it.id }.forEach { task ->
+                    add(
+                        CommandPaletteItem(
+                            id = "chat:${task.id}",
+                            label = task.title.ifBlank { "Untitled chat" },
+                            group = "Chats",
+                            supporting = project.name,
+                            keywords = listOfNotNull(
+                                task.prompt.takeIf { it.isNotBlank() },
+                                task.agent.name,
+                            ),
+                        ),
+                    )
                 }
             }
         }
@@ -428,7 +444,17 @@ private fun ProjectCockpit(
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (event.key != Key.K) return@onPreviewKeyEvent false
+                if (!(event.isMetaPressed || event.isCtrlPressed)) return@onPreviewKeyEvent false
+                commandPaletteOpen = true
+                true
+            },
+    ) {
         val chatMinWidth = 620.dp
         var projectPaneWidth by remember(workspaceState.projectListPaneWidth) {
             mutableStateOf(workspaceState.projectListPaneWidth)
@@ -449,22 +475,13 @@ private fun ProjectCockpit(
                         contentSpacing = AndySpace.Space2,
                     ) {
                     ProjectsSidebarHeader(
-                        query = query,
-                        onQueryChange = { query = it },
-                        searchExpanded = searchExpanded,
-                        onSearchExpandedChange = { expanded ->
-                            searchExpanded = expanded
-                            if (!expanded) query = ""
-                        },
-                        searchFocusRequester = searchFocusRequester,
+                        onOpenSearch = { commandPaletteOpen = true },
                         onNew = { editingProject = EditingProject(null) },
                     )
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         if (sidebarEntries.isEmpty()) {
                             item {
-                                EmptyState(
-                                    if (query.isBlank()) "Create a project to start" else "No projects or chats match your search",
-                                )
+                                EmptyState("Create a project to start")
                             }
                         }
                         items(sidebarEntries, key = { entry -> entry.project.id }) { entry ->
@@ -588,66 +605,7 @@ private fun ProjectCockpit(
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
                             },
-                            chatActions = {
-                                val selected = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }
-                                // Keep a fixed trailing slot so Chat ↔ Tasks does not shift the tab bar.
-                                Box(
-                                    Modifier.height(28.dp),
-                                    contentAlignment = Alignment.CenterEnd,
-                                ) {
-                                    if (selected != null) {
-                                        Row(
-                                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            AgentHeaderAction("delete", TextSecondary) {
-                                                requestDeleteChat(selected)
-                                            }
-                                            AgentHeaderAction("copy prompt", TextSecondary) {
-                                                copyText(selected.prompt)
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            tabTrailing = {
-                                val selected = selectedProjectTask?.takeIf { canvas == ProjectCanvas.Chat }
-                                val interactiveTerminalIds by
-                                    services.agentRuns.interactiveTerminalTaskIds.collectAsState()
-                                if (selected != null) {
-                                    val sessionLive = if (selected.lane == AgentLaneKind.Acp) {
-                                        selected.isActive || services.agentRuns.isLaneLive(selected.id)
-                                    } else {
-                                        isChatTerminalInteractive(
-                                            selected,
-                                            selected.id in interactiveTerminalIds,
-                                        )
-                                    }
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        StatusTag(
-                                            agentStatusLabel(selected),
-                                            agentStatusColor(selected),
-                                        )
-                                        if (sessionLive) {
-                                            AgentHeaderAction(
-                                                label = if (selected.status == AgentStatus.Blocked) {
-                                                    "cancel"
-                                                } else {
-                                                    "stop"
-                                                },
-                                                color = Rust,
-                                            ) {
-                                                scope.launch(Dispatchers.Default) {
-                                                    services.agentRuns.stop(selected.id)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            },
+                            tabTrailing = {},
                         )
                         Box(
                             Modifier
@@ -854,6 +812,32 @@ private fun ProjectCockpit(
             )
         }
     }
+    CommandPalette(
+        isOpen = commandPaletteOpen,
+        onOpenChange = { commandPaletteOpen = it },
+        items = commandPaletteItems,
+        placeholder = "Search projects and chats",
+        title = "Jump to",
+        onSelect = { item ->
+            when {
+                item.id.startsWith("project:") -> {
+                    val projectId = item.id.removePrefix("project:")
+                    selectProject(projectId)
+                    selectedWorkflowTaskId = null
+                    canvas = ProjectCanvas.Chat
+                }
+                item.id.startsWith("chat:") -> {
+                    val chatId = item.id.removePrefix("chat:")
+                    val task = agentTasks.firstOrNull { it.id == chatId } ?: return@CommandPalette
+                    val projectId = task.projectId ?: return@CommandPalette
+                    selectProject(projectId)
+                    selectedTaskId = chatId
+                    selectedWorkflowTaskId = null
+                    canvas = ProjectCanvas.Chat
+                }
+            }
+        },
+    )
     editingProject?.let { edit ->
         ProjectDialog(
             project = edit.project,
@@ -1041,14 +1025,9 @@ private fun ProjectSectionHeader(
 
 @Composable
 private fun ProjectsSidebarHeader(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    searchExpanded: Boolean,
-    onSearchExpandedChange: (Boolean) -> Unit,
-    searchFocusRequester: FocusRequester,
+    onOpenSearch: () -> Unit,
     onNew: () -> Unit,
 ) {
-    val searchVisible = searchExpanded || query.isNotBlank()
     Column(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
@@ -1071,68 +1050,17 @@ private fun ProjectsSidebarHeader(
                 horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
             ) {
                 SearchGlyphButton(
-                    active = searchVisible,
-                    onClick = {
-                        if (searchVisible && query.isBlank()) {
-                            onSearchExpandedChange(false)
-                        } else {
-                            onSearchExpandedChange(true)
-                        }
-                    },
+                    active = false,
+                    onClick = onOpenSearch,
                 )
                 PlusGlyphButton(onClick = onNew)
             }
         }
-        if (!searchVisible) {
-            val searchStubFill = andyTokens().neutralFill
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(AndyRadius.Control))
-                    .background(searchStubFill, RoundedCornerShape(AndyRadius.Control))
-                    .border(AndyStroke.Hairline, AndyColors.BorderEmphasized, RoundedCornerShape(AndyRadius.Control))
-                    .clickable { onSearchExpandedChange(true) }
-                    .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            ) {
-                SearchGlyph(TextSecondary.copy(alpha = 0.64f))
-                Text(
-                    "Search projects and chats",
-                    color = TextSecondary.copy(alpha = 0.66f),
-                    fontFamily = DisplayFont,
-                    fontSize = 11.sp,
-                )
-            }
-        }
-        AnimatedVisibility(
-            visible = searchVisible,
-            enter = fadeIn(tween(120)) + expandVertically(tween(160)),
-            exit = fadeOut(tween(90)) + shrinkVertically(tween(140)),
-        ) {
-            TextField(
-                query,
-                onQueryChange,
-                Modifier
-                    .fillMaxWidth()
-                    .focusRequester(searchFocusRequester),
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        "Search",
-                        color = TextSecondary,
-                        fontFamily = DisplayFont,
-                        fontSize = 12.sp,
-                    )
-                },
-                textStyle = LocalTextStyle.current.copy(
-                    color = TextPrimary,
-                    fontFamily = DisplayFont,
-                    fontSize = 12.sp,
-                ),
-                colors = fieldColors(),
-            )
-        }
+        PowerSearchField(
+            placeholder = "Search projects and chats",
+            onClick = onOpenSearch,
+            shortcutHint = "⌘K",
+        )
     }
 }
 
@@ -1588,7 +1516,13 @@ private fun ProjectSessionRow(
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth()) {
+    val interactionSource = remember(task.id) { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .hoverable(interactionSource),
+    ) {
         ChatSessionSidebarRow(
             task = task,
             selected = selected,
@@ -1608,14 +1542,20 @@ private fun ProjectSessionRow(
                         }
                     }
                 },
-            trailing = when {
-                task.status == AgentStatus.Blocked -> {
-                    { StatusTag("blocked", Red) }
+            trailing = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                ) {
+                    if (hovered) {
+                        SessionRowDeleteButton(onClick = onDelete)
+                    } else {
+                        when {
+                            task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
+                            task.worktreePath != null || task.branchName != null -> WorktreeBranchGlyph()
+                        }
+                    }
                 }
-                task.worktreePath != null || task.branchName != null -> {
-                    { WorktreeBranchGlyph() }
-                }
-                else -> null
             },
         )
         DropdownMenu(
@@ -1656,7 +1596,6 @@ private fun ProjectChatToolbar(
     canvas: ProjectCanvas,
     tasksNeedAttention: Boolean,
     onCanvasChange: (ProjectCanvas) -> Unit,
-    chatActions: (@Composable () -> Unit)? = null,
     tabTrailing: (@Composable () -> Unit)? = null,
 ) {
     val uriHandler = LocalUriHandler.current
@@ -1665,89 +1604,101 @@ private fun ProjectChatToolbar(
         githubUrl = detectGithubRepositoryUrl(project.contextDir)
     }
 
-    Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),
+    TabBarRow(
+        modifier = Modifier.fillMaxWidth(),
+        scrollTabs = true,
+        trailing = tabTrailing,
     ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(44.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
-        ) {
-            ProjectMonogram(project.name, selected = true)
-            Column(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-                ) {
-                    Text(
-                        project.name,
-                        color = TextPrimary,
-                        fontFamily = DisplayFont,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 15.sp,
-                        lineHeight = 19.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        if (project.source == ConfigSource.Repo) "REPOSITORY" else "LOCAL",
-                        color = Cyan.copy(alpha = 0.78f),
-                        fontFamily = MonoFont,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.6.sp,
-                    )
-                }
-                Text(
-                    project.contextDir,
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            chatActions?.invoke()
+        ProjectCanvas.entries.forEach { item ->
+            TabBarItem(
+                label = item.label,
+                selected = item == canvas,
+                onClick = { onCanvasChange(item) },
+                trailing = if (item == ProjectCanvas.Tasks && tasksNeedAttention) {
+                    {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .background(Red, CircleShape)
+                                .semantics { contentDescription = "Task waiting for input" },
+                        )
+                    }
+                } else {
+                    null
+                },
+            )
         }
-        TabBarRow(
-            scrollTabs = true,
-            trailing = tabTrailing,
-        ) {
-            ProjectCanvas.entries.forEach { item ->
-                TabBarItem(
-                    label = item.label,
-                    selected = item == canvas,
-                    onClick = { onCanvasChange(item) },
-                    trailing = if (item == ProjectCanvas.Tasks && tasksNeedAttention) {
-                        {
-                            Box(
-                                Modifier
-                                    .size(6.dp)
-                                    .background(Red, CircleShape)
-                                    .semantics { contentDescription = "Task waiting for input" },
-                            )
-                        }
-                    } else {
-                        null
-                    },
-                )
-            }
-            githubUrl?.let { url ->
-                TabBarItem(
-                    label = "GitHub",
-                    selected = false,
-                    onClick = { uriHandler.openUri(url) },
-                    trailing = { ExternalLinkTabIcon() },
-                )
-            }
+        githubUrl?.let { url ->
+            TabBarItem(
+                label = "GitHub",
+                selected = false,
+                onClick = { uriHandler.openUri(url) },
+                trailing = { ExternalLinkTabIcon() },
+            )
         }
+    }
+}
+
+@Composable
+private fun SessionRowDeleteButton(onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val tint = when {
+        hovered -> Red.copy(alpha = 0.92f)
+        else -> TextSecondary.copy(alpha = 0.72f)
+    }
+    Box(
+        Modifier
+            .size(20.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .semantics {
+                contentDescription = "Delete chat"
+                role = Role.Button
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        TrashGlyph(color = tint)
+    }
+}
+
+@Composable
+private fun TrashGlyph(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(12.dp)) {
+        val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val inset = size.minDimension * 0.12f
+        val left = inset
+        val right = size.width - inset
+        val top = inset + size.height * 0.12f
+        val bottom = size.height - inset
+        val lidY = top
+        val bodyTop = top + size.height * 0.14f
+        drawLine(color, Offset(left, lidY), Offset(right, lidY), strokeWidth = 1.2f, cap = StrokeCap.Round)
+        drawLine(
+            color,
+            Offset(size.width / 2f - size.width * 0.08f, lidY - size.height * 0.1f),
+            Offset(size.width / 2f + size.width * 0.08f, lidY - size.height * 0.1f),
+            strokeWidth = 1.2f,
+            cap = StrokeCap.Round,
+        )
+        drawPath(
+            Path().apply {
+                moveTo(left + size.width * 0.08f, bodyTop)
+                lineTo(left + size.width * 0.14f, bottom)
+                lineTo(right - size.width * 0.14f, bottom)
+                lineTo(right - size.width * 0.08f, bodyTop)
+                close()
+            },
+            color = color,
+            style = stroke,
+        )
+        val midX = size.width / 2f
+        drawLine(color, Offset(midX, bodyTop + size.height * 0.06f), Offset(midX, bottom - size.height * 0.06f), strokeWidth = 1f, cap = StrokeCap.Round)
     }
 }
 

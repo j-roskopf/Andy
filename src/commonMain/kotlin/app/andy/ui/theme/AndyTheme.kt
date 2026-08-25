@@ -464,7 +464,7 @@ internal object AndyShape {
 
 /** Harness layout + control metrics. */
 internal object AndyLayout {
-    val ToolbarHeight = 56.dp
+    val ToolbarHeight = 48.dp
     val SidebarWidth = 220.dp
     val SidebarCollapsedWidth = 52.dp
     val ListWidth = 300.dp

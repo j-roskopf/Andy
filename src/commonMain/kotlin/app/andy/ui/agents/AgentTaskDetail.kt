@@ -235,6 +235,10 @@ internal fun AgentTaskDetail(
     var composerFieldCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
     var flyingMessage by remember(task.id) { mutableStateOf<FlyingChatMessage?>(null) }
     var flyingMessageSeq by remember(task.id) { mutableStateOf(0L) }
+    val hasStagedImages = followUpImagePaths.isNotEmpty()
+    LaunchedEffect(hasStagedImages) {
+        if (hasStagedImages) scrollToLatestRequest++
+    }
     LaunchedEffect(task.id, task.isActive, task.status) {
         if (!task.isActive) {
             changeSummary = task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
@@ -515,7 +519,7 @@ internal fun AgentTaskDetail(
 
     CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
     Box(modifier.onGloballyPositioned { detailRootCoordinates = it }) {
-    Column(Modifier.fillMaxSize().clipToBounds(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -531,13 +535,10 @@ internal fun AgentTaskDetail(
         if (showHeader) {
             AgentTaskHeader(
                 task = task,
-                planModeActive = planModeActive,
-                hasPendingPlanEntries = hasPendingPlanEntries,
                 terminalLive = sessionActive,
                 showDeleteDetailsActions = showDeleteDetailsActions,
                 detailsExpanded = detailsExpanded,
                 onDetailsExpandedChange = onDetailsExpandedChange,
-                onStop = { scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) } },
                 onCompleteBuild = if (task.workflowStage == ProjectWorkflowStage.Build && task.isActive) {
                     { services.agentRuns.completeWorkflowRun(task.id) }
                 } else {
@@ -616,7 +617,13 @@ internal fun AgentTaskDetail(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .heightIn(min = if (!acpTask && changedFilesExpanded) 96.dp else 280.dp)
+                .heightIn(
+                    min = when {
+                        hasStagedImages -> 120.dp
+                        !acpTask && changedFilesExpanded -> 96.dp
+                        else -> 280.dp
+                    },
+                )
                 .clipToBounds()
                 .onGloballyPositioned { transcriptCoordinates = it },
         ) {
@@ -1151,11 +1158,27 @@ internal fun AgentTaskDetail(
                 bottomBarTrailing = {
                     if (task.userInputRequest == null) {
                         ChatVoiceDictationButton(controller = voiceController, style = VoiceDictationButtonStyle.Bare)
-                        ChatSendButton(
-                            onClick = { submitFollowUp() },
-                            enabled = canSendFollowUp,
-                            modifier = Modifier.padding(start = AndySpace.Space2),
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (sessionActive && canSendFollowUp) {
+                                ChatSendButton(
+                                    onClick = { submitFollowUp() },
+                                    enabled = true,
+                                    modifier = Modifier.padding(start = AndySpace.Space2),
+                                )
+                            }
+                            ChatSendButton(
+                                onClick = { submitFollowUp() },
+                                enabled = canSendFollowUp,
+                                isStopShown = sessionActive,
+                                onStop = {
+                                    scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) }
+                                },
+                                modifier = Modifier.padding(start = AndySpace.Space2),
+                            )
+                        }
                     }
                 },
                 footer = voiceError?.let { err ->
@@ -1346,13 +1369,10 @@ private fun FileLinkPreviewPane(
 @Composable
 private fun AgentTaskHeader(
     task: AgentTask,
-    planModeActive: Boolean,
-    hasPendingPlanEntries: Boolean,
     terminalLive: Boolean,
     showDeleteDetailsActions: Boolean = true,
     detailsExpanded: Boolean? = null,
     onDetailsExpandedChange: ((Boolean) -> Unit)? = null,
-    onStop: () -> Unit,
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
@@ -1379,9 +1399,7 @@ private fun AgentTaskHeader(
             delay(1_000)
         }
     }
-    val statusColor = agentStatusColor(task, planModeActive, hasPendingPlanEntries)
-    val statusLabel = agentStatusLabel(task, planModeActive, hasPendingPlanEntries)
-    val hasSessionActions = terminalLive || task.status == AgentStatus.Error
+    val hasSessionActions = (terminalLive && onCompleteBuild != null) || task.status == AgentStatus.Error
     Column(
         Modifier
             .fillMaxWidth()
@@ -1430,12 +1448,6 @@ private fun AgentTaskHeader(
             }
             // The chat is unrecoverable once closed, so say so where it cannot be missed.
             if (task.temporary) StatusTag("temporary", StatusDotVariant.Warning, accentColor = Yellow)
-            StatusTag(
-                statusLabel,
-                agentStatusVariant(task, planModeActive, hasPendingPlanEntries),
-                pulsing = isSessionWorking(task),
-                accentColor = statusColor,
-            )
         }
 
         if (hasSessionActions || showDeleteDetailsActions) {
@@ -1448,11 +1460,6 @@ private fun AgentTaskHeader(
                     onCompleteBuild?.let { complete ->
                         AgentHeaderAction("complete", Green, complete)
                     }
-                    AgentHeaderAction(
-                        label = if (task.status == AgentStatus.Blocked) "cancel" else "stop",
-                        color = Rust,
-                        onClick = onStop,
-                    )
                 }
                 if (task.status == AgentStatus.Error) {
                     AgentHeaderAction("retry", Cyan, onRetry)

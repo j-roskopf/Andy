@@ -65,6 +65,19 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun storedPromptStillVisibleWhenFollowUpExistsButOriginalMissing() {
+        assertTrue(
+            shouldDisplayOriginalPrompt(
+                events = listOf(
+                    AgentEvent.UserMessage(atMillis = 1, text = "Implement the plan."),
+                ),
+                originalPrompt = "1. can we redo the top chrome nav",
+                originalImagePaths = emptyList(),
+            ),
+        )
+    }
+
+    @Test
     fun completionOwnsDuplicateFinalAssistantText() {
         val events = listOf(
             AgentEvent.AssistantText(atMillis = 1, text = "All set."),

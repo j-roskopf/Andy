@@ -43,9 +43,6 @@ import app.andy.ui.theme.TextSecondary
  * no Popup layer, so heavyweight occlusion is unnecessary for these menus.
  */
 internal enum class ChromeFlyoutKind {
-    Project,
-    Action,
-    Device,
     LocalServers,
     DockLanding,
 }

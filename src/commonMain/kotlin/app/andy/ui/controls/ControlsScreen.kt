@@ -45,8 +45,10 @@ import app.andy.service.IosDeviceService
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
 import app.andy.ui.components.Button
+import app.andy.ui.components.FormLayout
+import app.andy.ui.components.FormLayoutRow
+import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
 import app.andy.ui.components.fieldColors
@@ -284,7 +286,7 @@ internal fun ControlsScreen(
             },
         )
 
-        PanelCard(borderColor = Color.Transparent) {
+        Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
             ControlSectionHeader(
                 title = "Hardware navigation",
                 description = "Send a key event directly through the active mirror connection.",
@@ -327,14 +329,9 @@ private fun ControlSection(
     @Suppress("UNUSED_PARAMETER") accent: Color? = null,
     content: @Composable () -> Unit,
 ) {
-    PanelCard(borderColor = Color.Transparent) {
+    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
         ControlSectionHeader(title, description)
-        @OptIn(ExperimentalLayoutApi::class)
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        FormLayout {
             content()
         }
     }
@@ -434,39 +431,30 @@ private fun ValueCommandTile(
     actionLabel: String,
     onApply: () -> Unit,
 ) {
-    ControlTile(label) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                colors = fieldColors(),
+    FormLayoutRow {
+        LabeledField(label, value, onValueChange, Modifier.weight(1f))
+        Button(
+            onClick = onApply,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.padding(top = 22.dp),
+        ) {
+            Text(
+                actionLabel,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                softWrap = false,
             )
-            Button(
-                onClick = onApply,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            ) {
-                Text(
-                    actionLabel,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
         }
     }
 }
 
 @Composable
 internal fun ControlTile(label: String, content: @Composable () -> Unit) {
-    PanelCard(
-        modifier = Modifier.widthIn(min = 260.dp, max = 300.dp).heightIn(min = 72.dp),
-        background = AndyColors.Neutral900.copy(alpha = 0.44f),
-        borderColor = Color.Transparent,
-        contentPadding = PaddingValues(AndySpace.Space3),
+    Column(
+        modifier = Modifier
+            .widthIn(min = 260.dp, max = 300.dp)
+            .heightIn(min = 72.dp),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         Text(label, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)

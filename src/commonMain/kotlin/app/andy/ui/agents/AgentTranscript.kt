@@ -38,12 +38,14 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.material3.Text
-import app.andy.ui.components.TextButton
 import app.andy.ui.components.ChatBubbleGroup
 import app.andy.ui.components.ChatBubbleSender
 import app.andy.ui.components.ChatBubbleVariant
 import app.andy.ui.components.ChatMessageBubble
+import app.andy.ui.components.ChatMessageCopyAction
+import app.andy.ui.components.ChatMessageMetadata
+import app.andy.ui.components.PlatformLazyListScrollbar
+import app.andy.ui.components.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -111,7 +113,6 @@ import app.andy.ui.shell.LocalOpenAgentTask
 import app.andy.ui.shell.ReportContentScrollBusy
 import app.andy.ui.components.AndyMarkdownDensity
 import app.andy.ui.components.ChatMarkdown
-import app.andy.ui.components.DraggableScrollbar
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TextField
@@ -560,6 +561,14 @@ internal fun AgentTranscript(
                             ChatMessageBubble(
                                 sender = ChatBubbleSender.User,
                                 testTag = "user-message-bubble",
+                                metadata = originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                    {
+                                        ChatMessageMetadata(
+                                            reverse = true,
+                                            footer = { ChatMessageCopyAction(prompt) },
+                                        )
+                                    }
+                                },
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
@@ -575,10 +584,9 @@ internal fun AgentTranscript(
                     item(key = "task-header", contentType = "header") { headerContent() }
                 }
             }
-            DraggableScrollbar(
+            PlatformLazyListScrollbar(
                 listState = listState,
                 reverseLayout = true,
-                onScroll = { stickToBottom = false },
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
             )
             AnimatedVisibility(
@@ -610,8 +618,12 @@ internal fun shouldDisplayOriginalPrompt(
     events: List<AgentEvent>,
     originalPrompt: String?,
     originalImagePaths: List<String>,
-): Boolean = events.none { it is AgentEvent.UserMessage } &&
-    (!originalPrompt.isNullOrBlank() || originalImagePaths.isNotEmpty())
+): Boolean {
+    val prompt = originalPrompt?.trim().orEmpty()
+    val recordedInTranscript = prompt.isNotBlank() &&
+        events.filterIsInstance<AgentEvent.UserMessage>().any { it.text.trim() == prompt }
+    return !recordedInTranscript && (prompt.isNotBlank() || originalImagePaths.isNotEmpty())
+}
 
 /** Bottom is an invariant instead of a layout estimate in the reverse transcript. */
 internal fun transcriptIsAtBottom(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int): Boolean =
@@ -784,7 +796,7 @@ private fun TranscriptEvent(
                 event.text.stripTrailingConnectionStallError(),
             )
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
-            AgentResponse(group = bubbleGroup) {
+            AgentResponse(group = bubbleGroup, copyText = visibleText) {
                 ChatMarkdown(visibleText, lineHeight = 21.sp)
             }
         }
@@ -800,6 +812,14 @@ private fun TranscriptEvent(
                 sender = ChatBubbleSender.User,
                 group = bubbleGroup,
                 testTag = "user-message-bubble",
+                metadata = event.text.takeIf { it.isNotBlank() }?.let { text ->
+                    {
+                        ChatMessageMetadata(
+                            reverse = true,
+                            footer = { ChatMessageCopyAction(text) },
+                        )
+                    }
+                },
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (event.text.isNotBlank()) {
@@ -1057,12 +1077,20 @@ private fun ChatUserText(text: String) {
 @Composable
 private fun AgentResponse(
     group: ChatBubbleGroup = ChatBubbleGroup.Single,
+    copyText: String? = null,
     content: @Composable () -> Unit,
 ) {
     ChatMessageBubble(
         sender = ChatBubbleSender.Assistant,
         variant = ChatBubbleVariant.Ghost,
         group = group,
+        metadata = copyText?.takeIf { it.isNotBlank() }?.let { text ->
+            {
+                ChatMessageMetadata(
+                    footer = { ChatMessageCopyAction(text) },
+                )
+            }
+        },
     ) {
         content()
     }
@@ -1099,7 +1127,7 @@ private fun AgentCompletion(
             }
         }
         event.finalText?.takeIf { it.isNotBlank() }?.let {
-            AgentResponse {
+            AgentResponse(copyText = stripDecisionCheckpointMarkup(it)) {
                 ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
             }
         }

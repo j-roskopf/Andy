@@ -1,6 +1,7 @@
 package app.andy.ui.controls
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -34,13 +35,16 @@ import app.andy.service.AppService
 import app.andy.service.DeviceService
 import app.andy.service.HostFileService
 import app.andy.ui.components.Button
+import app.andy.ui.components.FormLayout
+import app.andy.ui.components.FormLayoutRow
+import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
-import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
+import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -96,9 +100,34 @@ internal fun LocationControlSection(
         },
     ) {
         if (!isEmulator) Caption("Select an emulator to inject location.")
-        StateValueTile("Latitude", lat, { lat = it }, "Apply", ::applyFix)
-        StateValueTile("Longitude", lon, { lon = it }, "Apply", ::applyFix)
-        StateValueTile("Altitude (optional)", alt, { alt = it }, "Clear") { alt = "" }
+        FormLayout {
+            FormLayoutRow {
+                LabeledField("Latitude", lat, { lat = it }, Modifier.weight(1f))
+                LabeledField("Longitude", lon, { lon = it }, Modifier.weight(1f))
+            }
+            FormLayoutRow {
+                LabeledField("Altitude (optional)", alt, { alt = it }, Modifier.weight(1f))
+                Row(
+                    Modifier.weight(1f).padding(top = 22.dp),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Button(
+                        onClick = ::applyFix,
+                        enabled = enabled,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    ) {
+                        Text("Apply", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                    }
+                    OutlinedButton(
+                        onClick = { alt = "" },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    ) {
+                        Text("Clear alt", fontSize = 11.sp, maxLines = 1, softWrap = false)
+                    }
+                }
+            }
+        }
         @OptIn(ExperimentalLayoutApi::class)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             GEO_PRESETS.forEach { preset ->
@@ -146,25 +175,36 @@ internal fun LocationControlSection(
             ) {
                 Text("Load GPX/KML…", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
             }
-            StateValueTile("Interval ms", intervalMs, { intervalMs = it }, "Play") {
-                if (!enabled) {
-                    onStatus("Location requires an emulator")
-                    return@StateValueTile
-                }
-                if (route.isEmpty()) {
-                    onStatus("Load a GPX/KML route first")
-                    return@StateValueTile
-                }
-                playJob?.cancel()
-                playJob = scope.launch {
-                    devices.playRoute(serial, route, intervalMs.toLongOrNull() ?: 1000L)
-                        .catch { onStatus("Route playback failed: ${it.message}") }
-                        .collect { idx ->
-                            routeIndex = idx
-                            onStatus("Route point ${idx + 1}/${route.size}")
+            Box(Modifier.weight(1f)) {
+                FormLayoutRow {
+                LabeledField("Interval ms", intervalMs, { intervalMs = it }, Modifier.weight(1f))
+                Button(
+                    onClick = {
+                        if (!enabled) {
+                            onStatus("Location requires an emulator")
+                            return@Button
                         }
-                    onStatus("Route playback finished")
+                        if (route.isEmpty()) {
+                            onStatus("Load a GPX/KML route first")
+                            return@Button
+                        }
+                        playJob?.cancel()
+                        playJob = scope.launch {
+                            devices.playRoute(serial, route, intervalMs.toLongOrNull() ?: 1000L)
+                                .catch { onStatus("Route playback failed: ${it.message}") }
+                                .collect { idx ->
+                                    routeIndex = idx
+                                    onStatus("Route point ${idx + 1}/${route.size}")
+                                }
+                            onStatus("Route playback finished")
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.padding(top = 22.dp),
+                ) {
+                    Text("Play", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                 }
+            }
             }
             OutlinedButton(
                 onClick = {
@@ -659,17 +699,12 @@ private fun StateSection(
     description: String,
     content: @Composable () -> Unit,
 ) {
-    PanelCard(borderColor = Color.Transparent) {
+    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
             Text(description, color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 16.sp)
         }
-        @OptIn(ExperimentalLayoutApi::class)
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        FormLayout {
             content()
         }
     }
@@ -711,22 +746,14 @@ private fun StateValueTile(
     actionLabel: String,
     onApply: () -> Unit,
 ) {
-    ControlTile(label) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-                colors = fieldColors(),
-            )
-            Button(
-                onClick = onApply,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            ) {
-                Text(actionLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
-            }
+    FormLayoutRow {
+        LabeledField(label, value, onValueChange, Modifier.weight(1f))
+        Button(
+            onClick = onApply,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            modifier = Modifier.padding(top = 22.dp),
+        ) {
+            Text(actionLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
         }
     }
 }
