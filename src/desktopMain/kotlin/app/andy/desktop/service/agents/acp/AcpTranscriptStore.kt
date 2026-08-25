@@ -13,12 +13,12 @@ import app.andy.model.AgentToolState
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 
 /** Crash-safe JSONL transcript used by ACP and by the GUI attach process. */
 class AcpTranscriptStore(
     private val fileFor: (String) -> File,
+    private val maxBytes: Long = 8L * 1024L * 1024L,
 ) {
     private val locks = ConcurrentHashMap<String, Any>()
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
@@ -35,7 +35,7 @@ class AcpTranscriptStore(
             return@synchronized
         }
         val file = fileFor(taskId)
-        val entries = loadUnlocked(file).toMutableList()
+        val entries = coalesceLoaded(loadUnlocked(file)).map { it.toDto() }.toMutableList()
         val index = entries.indexOfLast { (it.toModel() as? AgentEvent.ToolCall)?.toolCallId == id }
         if (index < 0) {
             entries += incoming.toDto()
@@ -49,10 +49,11 @@ class AcpTranscriptStore(
             entries[index] = merged.toDto()
         }
         writeUnlocked(file, entries)
+        trim(file)
     }
 
     fun load(taskId: String): List<AgentEvent> = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
-        loadUnlocked(fileFor(taskId)).mapNotNull { it.toModel() }
+        coalesceLoaded(loadUnlocked(fileFor(taskId)))
     }
 
     private fun appendUnlocked(taskId: String, event: AgentEvent) {
@@ -71,88 +72,47 @@ class AcpTranscriptStore(
         })
     }
 
+    private fun coalesceLoaded(entries: List<TranscriptEvent>): List<AgentEvent> =
+        coalesceAgentStreamDeltas(emptyList(), entries.mapNotNull { it.toModel() })
+
     /**
-     * Persist one event, folding stream deltas into the previous JSONL row when possible so disk
-     * usage tracks the coalesced in-memory transcript instead of one line per token.
+     * Append stream deltas in O(1) and compact to coalesced rows when a turn boundary arrives.
+     * Rewriting the accumulated response on every token was quadratic; compaction keeps disk usage
+     * bounded without paying that cost per delta.
      */
     private fun persistEvent(file: File, event: AgentEvent) {
         file.parentFile?.mkdirs()
-        val last = readLastTranscriptEvent(file)
-        if (last == null) {
-            appendLine(file, event)
-            return
+        appendLine(file, event)
+        if (!isStreamDeltaEvent(event)) {
+            compactUnlocked(file)
         }
-        val merged = coalesceAgentStreamDeltas(listOf(last), listOf(event))
-        when {
-            merged.size == 1 && merged[0] != last ->
-                replaceLastLine(file, json.encodeToString(merged[0].toDto()))
-            merged.size == 2 && merged[0] == last ->
-                appendLine(file, merged[1])
-            else ->
-                appendLine(file, event)
-        }
+        trim(file)
+    }
+
+    private fun compactUnlocked(file: File) {
+        val coalesced = coalesceLoaded(loadUnlocked(file))
+        writeUnlocked(file, coalesced.map { it.toDto() })
+    }
+
+    private fun trim(file: File) {
+        if (!file.isFile || file.length() <= maxBytes) return
+        val bytes = file.readBytes()
+        val start = bytes.size - maxBytes.toInt()
+        val aligned = bytes.copyOfRange(start, bytes.size).toString(Charsets.UTF_8).indexOf('\n')
+        val retained = bytes.copyOfRange(start + aligned + 1, bytes.size)
+        file.writeBytes(retained)
+    }
+
+    private fun isStreamDeltaEvent(event: AgentEvent): Boolean = when (event) {
+        is AgentEvent.AssistantText -> event.isStreamDelta
+        is AgentEvent.Thinking -> event.isStreamDelta
+        else -> false
     }
 
     private fun appendLine(file: File, event: AgentEvent) {
         file.appendText(json.encodeToString(TranscriptEvent.serializer(), event.toDto()) + "\n")
     }
 
-    private fun readLastTranscriptEvent(file: File): AgentEvent? {
-        val line = readLastNonemptyLine(file) ?: return null
-        return runCatching { json.decodeFromString(TranscriptEvent.serializer(), line).toModel() }.getOrNull()
-    }
-
-    private fun readLastNonemptyLine(file: File): String? {
-        if (!file.isFile || file.length() == 0L) return null
-        RandomAccessFile(file, "r").use { raf ->
-            var end = raf.length() - 1
-            while (end >= 0) {
-                raf.seek(end)
-                if (raf.readByte() != '\n'.code.toByte()) break
-                end--
-            }
-            if (end < 0) return null
-            var start = end
-            while (start > 0) {
-                raf.seek(start - 1)
-                if (raf.readByte() == '\n'.code.toByte()) break
-                start--
-            }
-            val length = (end - start).toInt() + 1
-            val bytes = ByteArray(length)
-            raf.seek(start)
-            raf.readFully(bytes)
-            return bytes.toString(Charsets.UTF_8)
-        }
-    }
-
-    private fun replaceLastLine(file: File, line: String) {
-        RandomAccessFile(file, "rw").use { raf ->
-            val lineStart = lastLineStartOffset(raf)
-            raf.setLength(lineStart)
-            raf.seek(lineStart)
-            raf.write((line + "\n").toByteArray(Charsets.UTF_8))
-        }
-    }
-
-    /** Byte offset where the final logical line begins (0 when the file is a single line). */
-    private fun lastLineStartOffset(raf: RandomAccessFile): Long {
-        var end = raf.length() - 1
-        if (end < 0) return 0
-        while (end >= 0) {
-            raf.seek(end)
-            if (raf.readByte() != '\n'.code.toByte()) break
-            end--
-        }
-        if (end < 0) return 0
-        var start = end
-        while (start > 0) {
-            raf.seek(start - 1)
-            if (raf.readByte() == '\n'.code.toByte()) return start
-            start--
-        }
-        return 0
-    }
 }
 
 @Serializable

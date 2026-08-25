@@ -1158,15 +1158,27 @@ internal fun AgentTaskDetail(
                 bottomBarTrailing = {
                     if (task.userInputRequest == null) {
                         ChatVoiceDictationButton(controller = voiceController, style = VoiceDictationButtonStyle.Bare)
-                        ChatSendButton(
-                            onClick = { submitFollowUp() },
-                            enabled = canSendFollowUp,
-                            isStopShown = sessionActive,
-                            onStop = {
-                                scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) }
-                            },
-                            modifier = Modifier.padding(start = AndySpace.Space2),
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (sessionActive && canSendFollowUp) {
+                                ChatSendButton(
+                                    onClick = { submitFollowUp() },
+                                    enabled = true,
+                                    modifier = Modifier.padding(start = AndySpace.Space2),
+                                )
+                            }
+                            ChatSendButton(
+                                onClick = { submitFollowUp() },
+                                enabled = canSendFollowUp,
+                                isStopShown = sessionActive,
+                                onStop = {
+                                    scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) }
+                                },
+                                modifier = Modifier.padding(start = AndySpace.Space2),
+                            )
+                        }
                     }
                 },
                 footer = voiceError?.let { err ->
