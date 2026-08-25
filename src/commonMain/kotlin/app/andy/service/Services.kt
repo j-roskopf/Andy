@@ -18,6 +18,18 @@ interface DeviceService {
      */
     suspend fun emu(serial: String, command: List<String>): CommandResult =
         CommandResult.failure("Emulator console commands are unavailable")
+    /**
+     * Rotates an emulator's physical framebuffer via gRPC (Andy `-qt-hide-window` launches).
+     * [quarterTurn] is 0–3 matching Android `user_rotation` / `wm user-rotation lock`.
+     */
+    suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        CommandResult.failure("Emulator display rotation is unavailable")
+    /**
+     * Reads the emulator's virtual-accelerometer quarter turn (0–3), or null when it cannot
+     * be read. This is the source of truth for "which way is the device being held" —
+     * `wm user-rotation` reports `free` while the sensor drives rotation.
+     */
+    suspend fun readEmulatorDisplayRotation(serial: String): Int? = null
     suspend fun pair(host: String, port: Int, code: String): CommandResult
     suspend fun connect(host: String, port: Int): CommandResult
     suspend fun disconnect(serial: String): CommandResult

@@ -1,8 +1,12 @@
 package app.andy.desktop.service
 
 import app.andy.desktop.service.emulator.EmulatorGrpcProto
+import app.andy.desktop.service.emulator.PHYSICAL_TYPE_ROTATION
+import app.andy.desktop.service.emulator.ROTATION_DEGREES
+import app.andy.desktop.service.emulator.quarterTurnForRoll
 import app.andy.desktop.service.mirror.EmulatorDisplaySize
 import app.andy.desktop.service.mirror.ScrcpyServerLocator
+import app.andy.desktop.service.mirror.effectiveEmulatorTouchDisplaySize
 import app.andy.desktop.service.mirror.emulatorRgb888ToArgb
 import app.andy.desktop.service.mirror.scaledEmulatorTouchPoint
 import app.andy.model.DeviceConnectionState
@@ -187,6 +191,36 @@ class DesktopServicesMockDeviceTest {
     }
 
     @Test
+    fun emulatorGrpcProtoRoundTripsEveryQuarterTurnOnTheZAxis() {
+        // Each turn must read back as the same turn, or the Rotate button cannot advance
+        // from the sensor's current position. X and Y only tilt the device — a rotation
+        // written there leaves the screen facing the way it already was.
+        ROTATION_DEGREES.forEachIndexed { turn, degrees ->
+            val encoded = EmulatorGrpcProto.physicalModelValue(
+                PHYSICAL_TYPE_ROTATION,
+                listOf(0f, 0f, degrees),
+            )
+
+            val parsed = EmulatorGrpcProto.parsePhysicalModelValue(encoded)
+
+            assertEquals(PHYSICAL_TYPE_ROTATION, parsed.physicalType)
+            assertEquals(listOf(0f, 0f, degrees), parsed.values)
+            assertEquals(turn, quarterTurnForRoll(parsed.values[2]))
+        }
+    }
+
+    @Test
+    fun quarterTurnForRollNormalisesNegativeAndOverflowingAngles() {
+        assertEquals(0, quarterTurnForRoll(0f))
+        assertEquals(2, quarterTurnForRoll(180f))
+        assertEquals(3, quarterTurnForRoll(270f))
+        assertEquals(0, quarterTurnForRoll(360f))
+        // The emulator reports the rotation it is holding, which can come back negative.
+        assertEquals(3, quarterTurnForRoll(-90f))
+        assertEquals(1, quarterTurnForRoll(89.6f))
+    }
+
+    @Test
     fun emulatorRgbFramesKeepTopDownOrientation() {
         val rgb = ByteBuffer.wrap(
             byteArrayOf(
@@ -237,6 +271,30 @@ class DesktopServicesMockDeviceTest {
         assertEquals(1200, middle.y)
         assertEquals(1076, clamped.x)
         assertEquals(2396, clamped.y)
+    }
+
+    @Test
+    fun emulatorGrpcTouchUsesFrameAspectWhenDisplaySizeIsStalePortrait() {
+        val landscapeFrame = MirrorFrame(
+            width = 1080,
+            height = 674,
+            argb = IntArray(1080 * 674),
+            frameNumber = 1,
+        )
+        // Stale physical panel size after rotate — aspect disagrees with the live frame.
+        val stalePortrait = EmulatorDisplaySize(1200, 1920)
+        val effective = effectiveEmulatorTouchDisplaySize(landscapeFrame, stalePortrait)
+        assertNotNull(effective)
+        assertTrue(effective!!.width > effective.height, "effective size must follow landscape frame")
+
+        val middle = scaledEmulatorTouchPoint(
+            x = 540,
+            y = 337,
+            frame = landscapeFrame,
+            displaySize = stalePortrait,
+        )
+        assertEquals(effective.width / 2, middle.x)
+        assertTrue(kotlin.math.abs(middle.y - effective.height / 2) <= 1)
     }
 
     @Test

@@ -428,6 +428,41 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun parseWmPhysicalSizeIgnoresRotatedOverride() {
+        val output = """
+            Physical size: 1080x2424
+            Override size: 2424x1080
+        """.trimIndent()
+
+        assertEquals("1080x2424", AndroidParsers.parseWmPhysicalSize(output))
+    }
+
+    @Test
+    fun parseDisplay0CurrentSizeReadsRotatedLogicalSize() {
+        val output = """
+            Display: mDisplayId=5
+              init=674x1080 1dpi cur=674x1080 app=674x1080
+            Display: mDisplayId=0 (organized)
+              init=1200x1920 320dpi cur=1920x1200 app=1920x1200
+                mCurrentRotation=ROTATION_270
+            Display: mDisplayId=1
+              init=100x100 1dpi cur=100x100 app=100x100
+        """.trimIndent()
+
+        assertEquals("1920x1200", AndroidParsers.parseDisplay0CurrentSize(output))
+    }
+
+    @Test
+    fun parseDisplay0CurrentSizeIgnoresScrcpyDisplays() {
+        val output = """
+            Display: mDisplayId=9
+              init=1080x674 1dpi cur=1080x674 app=1080x674
+        """.trimIndent()
+
+        assertNull(AndroidParsers.parseDisplay0CurrentSize(output))
+    }
+
+    @Test
     fun parseFocusedPackageFromWindowFocus() {
         val output = """
             mCurrentFocus=Window{abc u0 com.example.garden/.MainActivity}

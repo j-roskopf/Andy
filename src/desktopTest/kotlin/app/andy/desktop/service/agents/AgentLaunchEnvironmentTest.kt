@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.AgentKind
 import app.andy.terminal.buildTerminalLaunchEnvironment
 import app.andy.terminal.resolveTerminalWorkingDirectory
 import app.andy.terminal.scrubInheritedTerminalEnvironment
@@ -120,10 +121,10 @@ class AgentLaunchEnvironmentTest {
             ),
         )
         assertEquals(
-            "Not logged in — run `claude` in a terminal and sign in, then retry",
+            "Not logged in — run `claude` in a terminal and sign in (`/login`), then retry",
             agentFailureMessage(
                 lastError = null,
-                authHint = "Not logged in — run `claude` in a terminal and sign in, then retry",
+                authHint = providerAuthFailureHint(AgentKind.ClaudeCode, "Please run /login"),
                 result = null,
                 fallbackText = "Please run /login",
                 exitCode = 1,

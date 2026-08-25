@@ -103,6 +103,7 @@ import app.andy.onImageFilesDropped
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.ChatComposerLayout
+import app.andy.ui.components.ComposerEffortChip
 import app.andy.ui.components.ComposerModelChip
 import app.andy.ui.components.ComposerPermissionsChip
 import app.andy.ui.components.ComposerProviderChip
@@ -1054,6 +1055,22 @@ private fun AgentChatComposer(
                             )
                         }
                     }
+                    form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                        Box {
+                            ComposerEffortChip(
+                                text = state.reasoningEffort?.label ?: "Effort",
+                                onClick = { effortMenuExpanded = true },
+                            )
+                            DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
+                                if (state.agent != AgentKind.Cursor) {
+                                    DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
+                                }
+                                selectedModel.efforts.forEach { effort ->
+                                    DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false })
+                                }
+                            }
+                        }
+                    }
                     Box {
                         ComposerPermissionsChip(
                             text = permissionsLabel,
@@ -1073,17 +1090,11 @@ private fun AgentChatComposer(
                                 text = { Text(if (state.planMode) "Plan mode: on" else "Plan mode: off", color = TextPrimary) },
                                 onClick = { state.planMode = !state.planMode },
                             )
-                            form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
+                            form.selectedModel?.takeIf { it.supportsFastMode && !it.fastRequired }?.let {
                                 DropdownMenuItem(
-                                    text = { Text("Effort: ${state.reasoningEffort?.label ?: "default"}", color = TextPrimary) },
-                                    onClick = { effortMenuExpanded = true; permissionsMenuExpanded = false },
+                                    text = { Text(if (state.fastMode) "Fast mode: on" else "Fast mode: off", color = TextPrimary) },
+                                    onClick = { state.fastMode = !state.fastMode },
                                 )
-                                if (selectedModel.supportsFastMode && !selectedModel.fastRequired) {
-                                    DropdownMenuItem(
-                                        text = { Text(if (state.fastMode) "Fast mode: on" else "Fast mode: off", color = TextPrimary) },
-                                        onClick = { state.fastMode = !state.fastMode },
-                                    )
-                                }
                             }
                             if (state.agent == AgentKind.OpenClaw) {
                                 DropdownMenuItem(
@@ -1101,16 +1112,6 @@ private fun AgentChatComposer(
                                     text = { Text("Cancel", color = TextPrimary) },
                                     onClick = cancel,
                                 )
-                            }
-                        }
-                    }
-                    form.selectedModel?.takeIf { it.efforts.isNotEmpty() }?.let { selectedModel ->
-                        DropdownMenu(expanded = effortMenuExpanded, onDismissRequest = { effortMenuExpanded = false }) {
-                            if (state.agent != AgentKind.Cursor) {
-                                DropdownMenuItem(text = { Text("provider default", color = TextPrimary) }, onClick = { state.reasoningEffort = null; effortMenuExpanded = false })
-                            }
-                            selectedModel.efforts.forEach { effort ->
-                                DropdownMenuItem(text = { Text(effort.label, color = TextPrimary) }, onClick = { state.reasoningEffort = effort; effortMenuExpanded = false })
                             }
                         }
                     }

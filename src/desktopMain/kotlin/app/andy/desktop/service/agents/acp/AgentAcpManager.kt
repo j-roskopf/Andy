@@ -125,7 +125,11 @@ class AgentAcpManager(
         outcomes[taskId] = LaneOutcome(
             status = if (success) AgentStatus.Done else AgentStatus.Error,
             stopReason = entry.session.lastStopReason,
-            error = if (success) null else "ACP prompt failed",
+            error = if (success) {
+                null
+            } else {
+                entry.session.lastPromptError?.takeIf { it.isNotBlank() } ?: "ACP prompt failed"
+            },
         )
         return success
     }

@@ -146,6 +146,12 @@ class TunneledRemoteDeviceService(
         inner.shell(serial, command)
     override suspend fun emu(serial: String, command: List<String>): CommandResult =
         inner.emu(serial, command)
+    // Emulator gRPC discovery/connect is local-only (127.0.0.1 + host discovery files).
+    // Do not delegate: a matching local serial would rotate the wrong emulator, and a miss
+    // still cannot reach the remote controller. Callers fall back to tunneled `adb emu`.
+    override suspend fun applyEmulatorDisplayRotation(serial: String, quarterTurn: Int): CommandResult =
+        CommandResult.failure("Emulator gRPC rotation is unavailable over SSH tunnel")
+    override suspend fun readEmulatorDisplayRotation(serial: String): Int? = null
     override suspend fun pair(host: String, port: Int, code: String): CommandResult =
         CommandResult.failure("Wi‑Fi pairing must be done on the remote host")
     override suspend fun connect(host: String, port: Int): CommandResult =

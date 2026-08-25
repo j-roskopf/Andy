@@ -78,7 +78,7 @@ private fun agentContextWindowStatusColor(status: AgentContextWindowStatus): Col
     }
 }
 
-private fun agentContextUsageSummary(status: AgentContextWindowStatus): String {
+internal fun agentContextUsageSummary(status: AgentContextWindowStatus): String {
     val used = formatCompactTokenCount(status.usedTokens)
     val capacity = status.capacityTokens ?: return "$used context used · limit not reported"
     val percent = status.usedTokens.toDouble() / capacity * 100.0

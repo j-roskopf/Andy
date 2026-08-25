@@ -1,5 +1,6 @@
 package app.andy.desktop.service.mirror
 
+import app.andy.service.scaledCaptureSize
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

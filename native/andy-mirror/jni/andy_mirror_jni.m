@@ -1585,6 +1585,26 @@ Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeRepaintLatestFrame(
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_app_andy_desktop_service_mirror_NativeMirrorJni_nativeLatestFrameSize(
+        JNIEnv *env, jclass clazz, jintArray out_size) {
+    (void) clazz;
+    if (!out_size || (*env)->GetArrayLength(env, out_size) < 2) return JNI_FALSE;
+    pthread_mutex_lock(&latest_pixels_lock);
+    CVPixelBufferRef pixels = renderer.latest_pixels;
+    if (pixels) CVPixelBufferRetain(pixels);
+    pthread_mutex_unlock(&latest_pixels_lock);
+    if (!pixels) return JNI_FALSE;
+    size_t width = 0;
+    size_t height = 0;
+    pixel_buffer_dimensions(pixels, &width, &height);
+    CVPixelBufferRelease(pixels);
+    if (!width || !height || width > 8192 || height > 8192) return JNI_FALSE;
+    jint values[2] = { (jint) width, (jint) height };
+    (*env)->SetIntArrayRegion(env, out_size, 0, 2, values);
+    return JNI_TRUE;
+}
+
 /*
  * Copies the latest VideoToolbox CVPixelBuffer as packed ARGB_8888 for bug-capture sampling.
  * out_size must be a length-2 int array that receives [width, height] on success.

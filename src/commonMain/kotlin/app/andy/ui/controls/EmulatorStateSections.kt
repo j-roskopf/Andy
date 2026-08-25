@@ -265,67 +265,68 @@ internal fun SensorControlSection(
                 }
             }
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
                 AxisField("X", x) { x = it }
                 AxisField("Y", y) { y = it }
                 AxisField("Z", z) { z = it }
-            }
-            Button(
-                onClick = {
-                    if (!enabled) {
-                        onStatus("Sensors require an emulator")
-                        return@Button
-                    }
-                    val xv = x.toFloatOrNull()
-                    val yv = y.toFloatOrNull()
-                    val zv = z.toFloatOrNull()
-                    if (xv == null || yv == null || zv == null) {
-                        onStatus("Invalid axis values")
-                        return@Button
-                    }
-                    scope.launch {
-                        val result = devices.setSensor(serial, selected, listOf(xv, yv, zv))
-                        onStatus(result.stdout.ifBlank { result.stderr })
-                    }
-                },
-                enabled = enabled,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-            ) {
-                Text("Set ${selected.name}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
-            }
-        }
-        if (selected == EmulatorSensor.Accelerometer) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
+                Button(
                     onClick = {
-                        x = formatSensorValue(ACCEL_PRESET_FLAT[0])
-                        y = formatSensorValue(ACCEL_PRESET_FLAT[1])
-                        z = formatSensorValue(ACCEL_PRESET_FLAT[2])
-                        if (enabled) {
-                            scope.launch {
-                                val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_FLAT)
-                                onStatus("Flat: ${result.stdout.ifBlank { result.stderr }}")
-                            }
+                        if (!enabled) {
+                            onStatus("Sensors require an emulator")
+                            return@Button
+                        }
+                        val xv = x.toFloatOrNull()
+                        val yv = y.toFloatOrNull()
+                        val zv = z.toFloatOrNull()
+                        if (xv == null || yv == null || zv == null) {
+                            onStatus("Invalid axis values")
+                            return@Button
+                        }
+                        scope.launch {
+                            val result = devices.setSensor(serial, selected, listOf(xv, yv, zv))
+                            onStatus(result.stdout.ifBlank { result.stderr })
                         }
                     },
                     enabled = enabled,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                ) { Text("Flat", fontSize = 11.sp, fontFamily = MonoFont, maxLines = 1, softWrap = false) }
-                OutlinedButton(
-                    onClick = {
-                        x = formatSensorValue(ACCEL_PRESET_PORTRAIT[0])
-                        y = formatSensorValue(ACCEL_PRESET_PORTRAIT[1])
-                        z = formatSensorValue(ACCEL_PRESET_PORTRAIT[2])
-                        if (enabled) {
-                            scope.launch {
-                                val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_PORTRAIT)
-                                onStatus("Portrait: ${result.stdout.ifBlank { result.stderr }}")
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                ) {
+                    Text("Set ${selected.name}", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                }
+                if (selected == EmulatorSensor.Accelerometer) {
+                    OutlinedButton(
+                        onClick = {
+                            x = formatSensorValue(ACCEL_PRESET_FLAT[0])
+                            y = formatSensorValue(ACCEL_PRESET_FLAT[1])
+                            z = formatSensorValue(ACCEL_PRESET_FLAT[2])
+                            if (enabled) {
+                                scope.launch {
+                                    val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_FLAT)
+                                    onStatus("Flat: ${result.stdout.ifBlank { result.stderr }}")
+                                }
                             }
-                        }
-                    },
-                    enabled = enabled,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                ) { Text("Portrait upright", fontSize = 11.sp, fontFamily = MonoFont, maxLines = 1, softWrap = false) }
+                        },
+                        enabled = enabled,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) { Text("Flat", fontSize = 11.sp, fontFamily = MonoFont, maxLines = 1, softWrap = false) }
+                    OutlinedButton(
+                        onClick = {
+                            x = formatSensorValue(ACCEL_PRESET_PORTRAIT[0])
+                            y = formatSensorValue(ACCEL_PRESET_PORTRAIT[1])
+                            z = formatSensorValue(ACCEL_PRESET_PORTRAIT[2])
+                            if (enabled) {
+                                scope.launch {
+                                    val result = devices.setSensor(serial, EmulatorSensor.Accelerometer, ACCEL_PRESET_PORTRAIT)
+                                    onStatus("Portrait: ${result.stdout.ifBlank { result.stderr }}")
+                                }
+                            }
+                        },
+                        enabled = enabled,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) { Text("Portrait upright", fontSize = 11.sp, fontFamily = MonoFont, maxLines = 1, softWrap = false) }
+                }
             }
         }
     }
@@ -574,21 +575,26 @@ internal fun LocaleControlSection(
         title = "Locale",
         description = "Runtime locale via cmd locale (API 33+), setprop+restart, or per-app locales.",
     ) {
-        Caption("Current: ${current ?: "unknown"}")
-        StateValueTile("Locale tag", tag, { tag = it }, "Apply") {
-            if (!enabled) {
-                onStatus("Select an online device")
-                return@StateValueTile
-            }
-            scope.launch {
-                val change = devices.setDeviceLocale(
-                    serial,
-                    tag,
-                    apps = apps,
-                    allowFrameworkRestart = allowRestart,
-                )
-                onStatus("${change.result.stdout.ifBlank { change.result.stderr }} (${change.method.label})")
-                current = devices.currentDeviceLocale(serial)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Caption("Current: ${current ?: "unknown"}")
+            StateValueTile("Locale tag", tag, { tag = it }, "Apply") {
+                if (!enabled) {
+                    onStatus("Select an online device")
+                    return@StateValueTile
+                }
+                scope.launch {
+                    val change = devices.setDeviceLocale(
+                        serial,
+                        tag,
+                        apps = apps,
+                        allowFrameworkRestart = allowRestart,
+                    )
+                    onStatus("${change.result.stdout.ifBlank { change.result.stderr }} (${change.method.label})")
+                    current = devices.currentDeviceLocale(serial)
+                }
             }
         }
         StateCommandTile(

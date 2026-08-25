@@ -51,6 +51,9 @@ internal class GpuMirrorPipeline private constructor(
 
     fun isHardwareReady(): Boolean = !closed && GpuMirrorJni.isHardwareReady(decoderId)
 
+    fun latestFrameSize(): Pair<Int, Int>? =
+        if (closed) null else GpuMirrorJni.latestFrameSize(decoderId)
+
     /** Samples the latest decoded frame as ARGB for bug/recording capture backup. */
     fun copyLatestFrameArgb(): MirrorFrame? =
         if (closed) null else GpuMirrorJni.copyLatestFrameArgb(decoderId)

@@ -93,6 +93,17 @@ internal object NativeMirrorJni {
         }.getOrNull()
     }
 
+    fun latestFrameSize(): Pair<Int, Int>? {
+        if (!loadResult.isSuccess) return null
+        return runCatching {
+            val size = IntArray(2)
+            if (!nativeLatestFrameSize(size)) return@runCatching null
+            val width = size[0]
+            val height = size[1]
+            if (width <= 0 || height <= 0) null else width to height
+        }.getOrNull()
+    }
+
     /** Tears down AppKit presentation unconditionally (mirror disconnect). */
     fun destroyPresentation() {
         if (loadResult.isSuccess) runCatching(::nativeDestroyRenderer)
@@ -336,6 +347,7 @@ internal object NativeMirrorJni {
     )
     private external fun nativeSetMetalInlineOverlayVisible(visible: Boolean)
     private external fun nativeRepaintLatestFrame()
+    private external fun nativeLatestFrameSize(outSize: IntArray): Boolean
     private external fun nativeCopyLatestFrameArgb(outSize: IntArray): IntArray?
     private external fun nativeIsHardwareReady(): Boolean
     private external fun nativeDestroyRenderer()

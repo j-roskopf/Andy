@@ -27,6 +27,7 @@ import app.andy.ui.live.LiveDevicePane
 import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
+import app.andy.ui.controls.rotateDeviceDisplay
 import app.andy.ui.shell.AndyShell
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
@@ -216,7 +217,30 @@ fun AndyMirrorPopOut(
                     onVolumeUp = { sendInput(MirrorInput.Key(24)) },
                     onVolumeDown = { sendInput(MirrorInput.Key(25)) },
                     onRotate = {
-                        if (serial != null) scope.launch { services.devices.shell(serial, listOf("settings", "put", "system", "user_rotation", "1")) }
+                        if (serial != null) {
+                            scope.launch {
+                                val rotation = services.devices.rotateDeviceDisplay(
+                                    serial = serial,
+                                    isEmulator = serial.startsWith("emulator-"),
+                                )
+                                if (!rotation.isSuccess) {
+                                    connectResult = rotation.stderr.ifBlank { rotation.stdout }
+                                    return@launch
+                                }
+                                val base = LiveMirrorSettings.config.value
+                                val config = if (gpuPresentation) {
+                                    base
+                                } else {
+                                    base.copy(rendererMode = MirrorRendererMode.Legacy)
+                                }
+                                val restart = mirror.restartForDisplayChange(serial, config)
+                                connectResult = if (restart.isSuccess) {
+                                    rotation.stdout.ifBlank { "Rotated device" }
+                                } else {
+                                    restart.stderr.ifBlank { restart.stdout }
+                                }
+                            }
+                        }
                     },
                     onCaptureScreenshot = {
                         if (serial != null) scope.launch { services.artifacts.saveScreenshot(serial, "andy-${serial}.png") }

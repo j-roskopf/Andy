@@ -2630,7 +2630,11 @@ class DesktopAgentRunService(
                 taskId = taskId,
                 status = AgentStatus.Error,
                 exitCode = null,
-                error = "ACP failed to start: ${error.message ?: error::class.java.simpleName}",
+                error = friendlyAcpFailureMessage(
+                    agent = launchTask.agent,
+                    phase = AcpFailurePhase.Start,
+                    raw = error.message ?: error::class.java.simpleName,
+                ),
                 statusConfident = true,
             )
             return
@@ -2680,7 +2684,11 @@ class DesktopAgentRunService(
                 runCatching {
                     acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
                 }.getOrElse {
-                    val message = "ACP failed to resume: ${it.message ?: it::class.java.simpleName}"
+                    val message = friendlyAcpFailureMessage(
+                        agent = task.agent,
+                        phase = AcpFailurePhase.Resume,
+                        raw = it.message ?: it::class.java.simpleName,
+                    )
                     appendLaunchDiagnostics(taskId, "acpResumeFailed=${it.message}\n")
                     finishTask(
                         taskId = taskId,
@@ -2745,6 +2753,7 @@ class DesktopAgentRunService(
         val stillStalled = transcriptHasConnectionStall(taskId)
         val recovered = promptSuccess && !stillStalled
         val resumableAfterStall = stillStalled && acpManager.isAlive(taskId)
+        val agent = currentTask(taskId)?.agent ?: AgentKind.ClaudeCode
         finishTask(
             taskId = taskId,
             status = when {
@@ -2755,7 +2764,11 @@ class DesktopAgentRunService(
             exitCode = null,
             error = when {
                 recovered || resumableAfterStall -> null
-                else -> outcome.error ?: "ACP prompt failed"
+                else -> friendlyAcpFailureMessage(
+                    agent = agent,
+                    phase = AcpFailurePhase.Prompt,
+                    raw = outcome.error ?: "ACP prompt failed",
+                )
             },
             resumable = acpManager.isAlive(taskId) && (recovered || resumableAfterStall),
             // A stall is not a finished turn. Confident Done/Error is what dings.

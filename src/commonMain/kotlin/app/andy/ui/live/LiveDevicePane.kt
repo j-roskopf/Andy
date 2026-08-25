@@ -127,9 +127,6 @@ internal fun liveMirrorLayoutSize(
     foldableHingeAngle: Float = 180f,
     allowDeviceScreenFallback: Boolean = false,
 ): MirrorSourceSize {
-    if (captureHint != null && captureHint.width > 1 && captureHint.height > 1) {
-        return captureHint
-    }
     val foldable = foldableProfile?.let { FoldableStreamContext(it, foldableHingeAngle) }
     val stream = resolveLiveMirrorSourceSize(
         device = device,
@@ -139,6 +136,18 @@ internal fun liveMirrorLayoutSize(
         foldable = foldable,
         allowDeviceScreenFallback = allowDeviceScreenFallback,
     )
+    if (captureHint != null && captureHint.width > 1 && captureHint.height > 1) {
+        val hintAspect = captureHint.width.toFloat() / captureHint.height
+        val streamAspect = stream.width.toFloat() / stream.height
+        if (kotlin.math.abs(hintAspect - streamAspect) < 0.06f) {
+            // Same aspect — follow stream pixels so the host matches the scrcpy texture.
+            return stream
+        }
+        // A fold/unfold or Rotate action owns the outer device-frame geometry while the
+        // stream restarts. MirrorVideoSurface still fits its actual frame pixels inside this
+        // box, so a temporarily stale buffer is letterboxed rather than stretched.
+        return captureHint
+    }
     val profile = foldableProfile ?: return stream
     val posture = foldablePostureForAngle(foldableHingeAngle)
     if (!foldableStreamMatchesPosture(stream, posture, profile)) {
@@ -290,6 +299,21 @@ internal fun liveDevicePaneFittedWidth(
     // chips + Pop out so the header does not feel crushed on first load.
     val headerFloor = if (showDeviceHeader) 560.dp else 0.dp
     return maxOf(fittedToMirror, headerFloor)
+}
+
+/**
+ * Smallest Live device column the divider may reach. Narrower than the height-fit width so
+ * the user can shrink the left pane; [LiveDevicePane] width-fits the mirror inside.
+ */
+internal fun liveDevicePaneMinWidth(
+    showSideToolbar: Boolean = true,
+    showContainerChrome: Boolean = true,
+    minMirrorWidth: Dp = 200.dp,
+): Dp {
+    val horizontalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
+    val toolbarWidth = if (showSideToolbar) 68.dp else 0.dp
+    val toolbarGap = if (showSideToolbar) 10.dp else 0.dp
+    return toolbarWidth + toolbarGap + horizontalChrome + minMirrorWidth
 }
 
 @Composable

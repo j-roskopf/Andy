@@ -14,6 +14,7 @@ import app.andy.desktop.service.emulator.readEmulatorGrpcToken
 import app.andy.model.DeviceConnectionState
 import app.andy.model.isWirelessAdbSerial
 import app.andy.service.CommandResult
+import app.andy.service.EncodedVideoAccessUnit
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorBackend
 import app.andy.service.MirrorBackendKind
@@ -23,6 +24,8 @@ import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorTouchAction
 import app.andy.service.MirrorVideoConfig
+import app.andy.service.scaledCaptureSize
+import app.andy.ui.controls.parseWmUserRotation
 import app.andy.ui.live.forRemoteTunnel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -38,7 +41,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import app.andy.service.EncodedVideoAccessUnit
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext
 import org.bytedeco.ffmpeg.avcodec.AVPacket
 import org.bytedeco.ffmpeg.avutil.AVFrame
@@ -83,6 +85,7 @@ private const val MIRROR_RELEASE_GRACE_MILLIS = 500L
 private const val PAUSED_CPU_FRAME_INTERVAL_NANOS = 250_000_000L
 
 internal data class EmulatorDisplaySize(val width: Int, val height: Int)
+private data class LockedEmulatorRotation(val quarterTurn: Int, val landscape: Boolean)
 internal data class EmulatorTouchPoint(val x: Int, val y: Int)
 internal data class ScrcpySessionFrame(val width: Int, val height: Int, val clientResized: Boolean)
 
@@ -115,22 +118,6 @@ internal fun scrcpySessionFrame(header: ByteArray): ScrcpySessionFrame {
     val height = readUint32(8)
     require(width > 0 && height > 0) { "Invalid scrcpy session size: ${width}x${height}" }
     return ScrcpySessionFrame(width, height, header[3].toInt() and 1 != 0)
-}
-
-/**
- * Scales a physical display size to the scrcpy `max_size` edge. `maxSize <= 0` means native
- * (unlimited), matching scrcpy's `max_size=0` contract. Treating 0 as a real limit previously
- * collapsed the metadata frame to 2x2 and made GPU touch mapping a no-op.
- */
-internal fun scaledCaptureSize(sourceWidth: Int, sourceHeight: Int, maxSize: Int): Pair<Int, Int> {
-    val longestSide = maxOf(sourceWidth, sourceHeight).coerceAtLeast(1)
-    val scale = when {
-        maxSize <= 0 -> 1.0
-        longestSide > maxSize -> maxSize.toDouble() / longestSide
-        else -> 1.0
-    }
-    fun evenAtLeast(value: Int, minimum: Int): Int = maxOf(minimum, value and -2)
-    return evenAtLeast((sourceWidth * scale).toInt(), 2) to evenAtLeast((sourceHeight * scale).toInt(), 2)
 }
 
 private fun MirrorInput.usesTouchCoordinates(): Boolean = when (this) {
@@ -225,8 +212,9 @@ internal fun scaledEmulatorTouchPoint(
 ): EmulatorTouchPoint {
     val frameWidth = frame.width.coerceAtLeast(1)
     val frameHeight = frame.height.coerceAtLeast(1)
-    val targetWidth = displaySize?.width ?: frameWidth
-    val targetHeight = displaySize?.height ?: frameHeight
+    val effectiveDisplay = effectiveEmulatorTouchDisplaySize(frame, displaySize)
+    val targetWidth = effectiveDisplay?.width ?: frameWidth
+    val targetHeight = effectiveDisplay?.height ?: frameHeight
     return EmulatorTouchPoint(
         x = (x.coerceIn(0, frameWidth - 1).toLong() * targetWidth / frameWidth)
             .toInt()
@@ -235,6 +223,23 @@ internal fun scaledEmulatorTouchPoint(
             .toInt()
             .coerceIn(0, targetHeight - 1),
     )
+}
+
+/**
+ * When [displaySize] still reflects the unrotated physical panel (portrait) but the live
+ * [frame] is landscape (or vice versa), map touches using a size that matches the frame
+ * aspect and preserves the longer physical edge. Otherwise gRPC injects into the wrong axis.
+ */
+internal fun effectiveEmulatorTouchDisplaySize(
+    frame: MirrorFrame,
+    displaySize: EmulatorDisplaySize?,
+): EmulatorDisplaySize? {
+    if (displaySize == null) return null
+    if (frame.width <= 1 || frame.height <= 1) return displaySize
+    if (!emulatorDisplayAspectDrifted(frame, displaySize)) return displaySize
+    val longEdge = maxOf(displaySize.width, displaySize.height).coerceAtLeast(1)
+    val (width, height) = scaledCaptureSize(frame.width, frame.height, longEdge)
+    return EmulatorDisplaySize(width, height)
 }
 
 class DesktopMirrorEngine(
@@ -444,6 +449,14 @@ class DesktopMirrorEngine(
         }
         val scrcpyServer = ScrcpyServerLocator.find()
             ?: return CommandResult.failure("Andy’s bundled scrcpy server is missing. Reinstall Andy or set SCRCPY_SERVER_PATH for local protocol development.")
+        // scrcpy creates a virtual display and may restore the rotation it observed when its old
+        // transport is torn down. Remember the explicit emulator frame requested by Rotate so the
+        // new capture cannot start against the restored portrait display.
+        val preservedRotation = if (serial.isEmulatorSerial()) {
+            readLockedEmulatorRotation(adb, serial)
+        } else {
+            null
+        }
         stopScrcpyTransport(adb, serial)
         emulatorGrpcClient?.close()
         emulatorGrpcClient = null
@@ -462,6 +475,10 @@ class DesktopMirrorEngine(
         if (serial.isEmulatorSerial()) {
             ensureEmulatorGrpcClient(serial)
             applyEmulatorGuestRefreshRate(adb, serial, effectiveConfig.maxFps)
+            if (preservedRotation != null) {
+                val restored = restoreLockedEmulatorRotation(adb, serial, preservedRotation)
+                if (!restored.isSuccess) return restored
+            }
         }
         val useNativeRenderer =
             config.rendererMode != MirrorRendererMode.Legacy && activeGpuPipeline() != null
@@ -638,6 +655,12 @@ class DesktopMirrorEngine(
     }
 
     override suspend fun sendInput(input: MirrorInput): CommandResult {
+        // Scrcpy control maps 1:1 to stream pixels. Prefer it for touches so a rotated
+        // emulator display (logical landscape vs physical panel size) cannot desync gRPC
+        // touch scaling from the live frame the user clicked.
+        if (input.usesTouchCoordinates()) {
+            sendScrcpyControl(input)?.let { return it }
+        }
         val serial = connectedSerial
         if (serial != null && serial.isEmulatorSerial()) {
             val client = emulatorGrpcClient ?: ensureEmulatorGrpcClient(serial)
@@ -827,6 +850,32 @@ class DesktopMirrorEngine(
         )
     }
 
+    /**
+     * VideoToolbox can change pixel-buffer dimensions in-place when Android rotates. Scrcpy does
+     * not reconnect for that transition, so the decoded buffer is the authoritative size. Keep
+     * Compose, touch metadata, and the Metal presenter's fitted geometry on that same size.
+     */
+    private fun publishNativeDecodedSize(
+        width: Int,
+        height: Int,
+        gpuPipeline: GpuMirrorPipeline?,
+    ) {
+        if (width <= 1 || height <= 1) return
+        val previous = frames.value
+        if (previous.width == width && previous.height == height) return
+        frames.value = MirrorFrame(
+            width = width,
+            height = height,
+            argb = IntArray(0),
+            frameNumber = previous.frameNumber.coerceAtLeast(1),
+        )
+        session.value?.let { active ->
+            session.value = active.copy(width = width, height = height)
+        }
+        gpuPipeline?.setContentSize(width, height)
+            ?: NativeMirrorJni.setPresentationContentSize(width, height)
+    }
+
     private fun legacyStatus(message: String): String = buildString {
         append(message)
         session.value?.backend?.fallbackReason?.let { append(" · $it") }
@@ -876,7 +925,11 @@ class DesktopMirrorEngine(
      */
     private suspend fun applyEmulatorGuestRefreshRate(adb: String, serial: String, maxFps: Int) {
         val rate = maxOf(maxFps, emulatorVsyncRate()).coerceIn(1, 240)
-        val display = readEmulatorDisplaySize(adb, serial)
+        // A display mode is a hardware-panel mode, so it must stay in the panel's natural
+        // orientation. Passing the rotated logical size (for example 2424x1080) makes Android
+        // reject/reset the mode and snap a force-rotated emulator back to portrait during the
+        // scrcpy restart.
+        val display = readEmulatorPhysicalDisplaySize(adb, serial)
         val commands = emulatorGuestRefreshShellCommands(
             rateHz = rate,
             displayWidth = display?.width ?: 0,
@@ -894,6 +947,16 @@ class DesktopMirrorEngine(
     }
 
     private suspend fun readEmulatorDisplaySize(adb: String, serial: String): EmulatorDisplaySize? {
+        // Prefer dumpsys window's display-0 cur= size — it follows rotation. `wm size` often
+        // only prints Physical size (unrotated panel), which keeps Live portrait after rotate.
+        val dumpsys = runner.run(listOf(adb, "-s", serial, "shell", "dumpsys", "window", "displays"), 4)
+        AndroidParsers.parseDisplay0CurrentSize(dumpsys.stdout.ifBlank { dumpsys.stderr })?.let { parsed ->
+            val width = parsed.substringBefore('x').toIntOrNull()
+            val height = parsed.substringAfter('x').toIntOrNull()
+            if (width != null && height != null && width > 0 && height > 0) {
+                return EmulatorDisplaySize(width, height)
+            }
+        }
         val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 4)
         if (!result.isSuccess) return null
         val parsed = AndroidParsers.parseWmSize(result.stdout) ?: return null
@@ -901,6 +964,55 @@ class DesktopMirrorEngine(
         val height = parsed.substringAfter('x').toIntOrNull() ?: return null
         if (width <= 0 || height <= 0) return null
         return EmulatorDisplaySize(width, height)
+    }
+
+    private suspend fun readEmulatorPhysicalDisplaySize(adb: String, serial: String): EmulatorDisplaySize? {
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 4)
+        if (!result.isSuccess) return null
+        val parsed = AndroidParsers.parseWmPhysicalSize(result.stdout) ?: return null
+        val width = parsed.substringBefore('x').toIntOrNull() ?: return null
+        val height = parsed.substringAfter('x').toIntOrNull() ?: return null
+        if (width <= 0 || height <= 0) return null
+        return EmulatorDisplaySize(width, height)
+    }
+
+    private suspend fun readLockedEmulatorRotation(adb: String, serial: String): LockedEmulatorRotation? {
+        val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "user-rotation"), 4)
+        if (!result.isSuccess || result.stdout.trim().equals("free", ignoreCase = true)) return null
+        val quarterTurn = parseWmUserRotation(result.stdout.ifBlank { result.stderr }) ?: return null
+        val display = readEmulatorDisplaySize(adb, serial) ?: return null
+        return LockedEmulatorRotation(quarterTurn, landscape = display.width > display.height)
+    }
+
+    private suspend fun restoreLockedEmulatorRotation(
+        adb: String,
+        serial: String,
+        rotation: LockedEmulatorRotation,
+    ): CommandResult {
+        runner.run(listOf(adb, "-s", serial, "shell", "wm", "fixed-to-user-rotation", "enabled"), 4)
+        runner.run(
+            listOf(adb, "-s", serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0"),
+            4,
+        )
+        val lock = runner.run(
+            listOf(adb, "-s", serial, "shell", "wm", "user-rotation", "lock", rotation.quarterTurn.toString()),
+            4,
+        )
+        if (!lock.isSuccess) {
+            return CommandResult.failure(
+                lock.stderr.ifBlank { lock.stdout }.ifBlank { "Could not restore emulator rotation" },
+            )
+        }
+
+        val deadline = System.nanoTime() + 2_500_000_000L
+        while (System.nanoTime() < deadline) {
+            val display = readEmulatorDisplaySize(adb, serial)
+            if (display != null && (display.width > display.height) == rotation.landscape) {
+                return CommandResult.success("Restored emulator rotation")
+            }
+            delay(100)
+        }
+        return CommandResult.failure("Mirror restart could not preserve emulator rotation")
     }
 
     private suspend fun runEmulatorGrpcVideoLoop(adb: String, serial: String, client: EmulatorGrpcClient, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
@@ -1165,6 +1277,12 @@ class DesktopMirrorEngine(
                             }
                             val now = System.nanoTime()
                             val framesPresented = pipeline.framesPresented()
+                            // Decoding, not presentation, owns stream geometry. In particular,
+                            // keep metadata current while the Live Canvas is being recreated or
+                            // before a Metal presenter attaches after navigation.
+                            pipeline.latestFrameSize()?.let { (width, height) ->
+                                publishNativeDecodedSize(width, height, pipeline)
+                            }
                             if (pipeline.hasDecodedFrame() && session.value?.readyForPresentation == false) {
                                 publishNativePresentationStats(
                                     framesPresented,
@@ -1208,6 +1326,9 @@ class DesktopMirrorEngine(
                             }
                             val now = System.nanoTime()
                             val framesPresented = NativeMirrorJni.framesPresented()
+                            NativeMirrorJni.latestFrameSize()?.let { (width, height) ->
+                                publishNativeDecodedSize(width, height, gpuPipeline = null)
+                            }
                             if (framesPresented > 0L && session.value?.stats?.framesPresented == 0L) {
                                 publishNativePresentationStats(
                                     framesPresented,

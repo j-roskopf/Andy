@@ -52,6 +52,7 @@ import app.andy.model.EmulatorSnapshot
 import app.andy.model.VirtualDevice
 import app.andy.service.AvdService
 import app.andy.ui.components.Button
+import app.andy.ui.components.EmptyState
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
@@ -139,39 +140,57 @@ internal fun SnapshotsScreen(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 220.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxWidth().weight(1f)
-        ) {
-            items(snapshots) { snapshot ->
-                SnapshotCard(
-                    snapshot = snapshot,
-                    selectedAvd = selectedAvd,
-                    avd = avd,
-                    scope = scope,
-                    onStatusChange = { status = it },
-                    onRefresh = { refresh() },
-                    knownDeviceSerials = knownDeviceSerials,
-                    onEmulatorStarted = onEmulatorStarted,
-                    restoreEnabled = startingEmulatorName == null,
-                    onDeleteClick = { snap ->
-                        val targetAvd = selectedAvd ?: return@SnapshotCard
-                        pendingConfirmation = PendingConfirmation("Delete snapshot?", "${targetAvd.name} / ${snap.name}") {
-                            scope.launch {
-                                val result = avd.deleteSnapshot(targetAvd.name, snap.name)
-                                status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${snap.name}" } else result.stderr.ifBlank { result.stdout }
-                                refreshSnapshots(targetAvd)
-                            }
-                        }
+        if (snapshots.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                EmptyState(
+                    title = when {
+                        selectedAvd == null -> "No emulators found"
+                        else -> "No snapshots for this emulator"
                     },
-                    onRenameClick = { snap ->
-                        renameSnapshotTarget = snap
-                    }
+                    description = when {
+                        selectedAvd == null -> "Create an AVD in Catalog, then refresh."
+                        selectedAvd?.running == true -> "Save the current state with + Save snapshot."
+                        else -> "Start the emulator, then save a snapshot from the toolbar."
+                    },
                 )
             }
-
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 220.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            ) {
+                items(snapshots) { snapshot ->
+                    SnapshotCard(
+                        snapshot = snapshot,
+                        selectedAvd = selectedAvd,
+                        avd = avd,
+                        scope = scope,
+                        onStatusChange = { status = it },
+                        onRefresh = { refresh() },
+                        knownDeviceSerials = knownDeviceSerials,
+                        onEmulatorStarted = onEmulatorStarted,
+                        restoreEnabled = startingEmulatorName == null,
+                        onDeleteClick = { snap ->
+                            val targetAvd = selectedAvd ?: return@SnapshotCard
+                            pendingConfirmation = PendingConfirmation("Delete snapshot?", "${targetAvd.name} / ${snap.name}") {
+                                scope.launch {
+                                    val result = avd.deleteSnapshot(targetAvd.name, snap.name)
+                                    status = if (result.isSuccess) result.stdout.ifBlank { "Deleted ${snap.name}" } else result.stderr.ifBlank { result.stdout }
+                                    refreshSnapshots(targetAvd)
+                                }
+                            }
+                        },
+                        onRenameClick = { snap ->
+                            renameSnapshotTarget = snap
+                        }
+                    )
+                }
+            }
         }
 
         pendingConfirmation?.let { confirmation ->

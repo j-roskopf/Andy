@@ -52,6 +52,20 @@ class GpuMirrorSessionsTest {
     }
 
     @Test
+    fun pipelineReportsDecodedSizeChangesWithoutCopyingPixels() {
+        if (!GpuMirrorJni.isAvailable()) return
+        val key = "dynamic-size"
+        val pipeline = GpuMirrorSessions.createAndBind(key)
+        assertNotNull(pipeline)
+
+        assertTrue(pipeline.presentSolidBgra(8, 12, blue = 0, green = 0, red = 255))
+        assertEquals(8 to 12, pipeline.latestFrameSize())
+
+        assertTrue(pipeline.presentSolidBgra(12, 8, blue = 0, green = 255, red = 0))
+        assertEquals(12 to 8, pipeline.latestFrameSize())
+    }
+
+    @Test
     fun pipelineSurvivesUntilLastHolderReleases() {
         if (!GpuMirrorJni.isAvailable()) return
         // Models Live + a same-device pop-out sharing one decoder: releasing one holder (Live

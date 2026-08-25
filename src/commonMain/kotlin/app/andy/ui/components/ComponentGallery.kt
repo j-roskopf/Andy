@@ -124,6 +124,7 @@ internal fun ComponentGallery(modifier: Modifier = Modifier) {
                     ChatComposerDrawerItem("3", "api-spec.yaml", onRemove = {}),
                 ),
                 contextFraction = 0.62f,
+                contextTooltip = "62.0% · 79k/128k context used",
                 onMentionClick = {},
                 onAttachClick = {},
                 input = {
@@ -142,6 +143,7 @@ internal fun ComponentGallery(modifier: Modifier = Modifier) {
                 bottomBarLeading = {
                     ComposerProviderChip(text = "Cursor", onClick = {})
                     ComposerModelChip(text = "Auto", onClick = {})
+                    ComposerEffortChip(text = "High", onClick = {})
                     ComposerPermissionsChip(text = "Standard", onClick = {})
                 },
                 bottomBarTrailing = {

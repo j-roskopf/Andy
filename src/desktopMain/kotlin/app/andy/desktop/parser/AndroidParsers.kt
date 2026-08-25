@@ -100,7 +100,26 @@ object AndroidParsers {
      */
     fun parseWmSize(output: String): String? {
         Regex("""Override size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)?.let { return it }
-        return Regex("""Physical size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)
+        return parseWmPhysicalSize(output)
+    }
+
+    /** Native panel mode, which remains in natural orientation when the logical display rotates. */
+    fun parseWmPhysicalSize(output: String): String? =
+        Regex("""Physical size:\s*([0-9]+x[0-9]+)""").find(output)?.groupValues?.getOrNull(1)
+
+    /**
+     * Logical size of display 0 from `dumpsys window displays` (`cur=WxH`), which reflects
+     * rotation. Prefer this over [parseWmSize] for capture aspect after device rotate.
+     */
+    fun parseDisplay0CurrentSize(output: String): String? {
+        val display0 = Regex(
+            """Display:\s*mDisplayId=0\b[\s\S]*?(?=Display:\s*mDisplayId=|\z)""",
+            RegexOption.IGNORE_CASE,
+        ).find(output)?.value ?: return null
+        val match = Regex("""\bcur=(\d+)x(\d+)\b""", RegexOption.IGNORE_CASE).find(display0) ?: return null
+        val width = match.groupValues[1]
+        val height = match.groupValues[2]
+        return "${width}x${height}"
     }
 
     fun parseStorage(output: String): String? {

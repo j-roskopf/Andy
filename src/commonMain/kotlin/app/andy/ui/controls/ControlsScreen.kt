@@ -101,7 +101,7 @@ internal fun ControlsScreen(
         previousSerial = serial
     }
     val foldable = isFoldableEmulator(device, virtualDevices)
-    val isEmulator = isEmulatorDevice(device)
+    val isEmulator = isEmulatorDevice(device) || serial?.startsWith("emulator-") == true
 
     fun run(label: String, command: List<String>) {
         if (serial == null) {
@@ -301,7 +301,20 @@ internal fun ControlsScreen(
                 HardwareCommand("Recents") { key("Recents", MirrorInput.Recents) }
                 HardwareCommand("Home") { key("Home", MirrorInput.Home) }
                 HardwareCommand("Back") { key("Back", MirrorInput.Back) }
-                HardwareCommand("Rotate") { run("Rotate", listOf("settings", "put", "system", "user_rotation", "1")) }
+                HardwareCommand("Rotate") {
+                    if (serial == null) {
+                        status = "Select an online device"
+                        return@HardwareCommand
+                    }
+                    scope.launch {
+                        val result = devices.rotateDeviceDisplay(serial, isEmulator)
+                        status = "Rotate: " + if (result.isSuccess) {
+                            result.stdout.ifBlank { "ok" }
+                        } else {
+                            result.stderr.ifBlank { result.stdout }
+                        }
+                    }
+                }
             }
         }
     }

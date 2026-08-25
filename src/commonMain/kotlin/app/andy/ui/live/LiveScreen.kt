@@ -65,9 +65,12 @@ import app.andy.ui.controls.foldableDisplayProfile
 import app.andy.ui.controls.foldablePostureForAngle
 import app.andy.ui.controls.isFoldableEmulator
 import app.andy.ui.controls.parseWmSizePx
+import app.andy.ui.controls.readLogicalDisplaySize
+import app.andy.ui.controls.rotateDeviceDisplay
 import app.andy.ui.controls.setFoldableHingeAngle
 import app.andy.ui.controls.setFoldablePosture
 import app.andy.ui.controls.sizeForPosture
+import app.andy.service.DeviceService
 import app.andy.ui.logcat.LogcatState
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.Border
@@ -96,6 +99,12 @@ private fun transferStatusColor(status: String): Color = when {
     status == "Cancelled" || status.startsWith("Wait for") -> Yellow
     else -> TextSecondary
 }
+
+/** Minimum width reserved for Live's stream/settings/logcat column beside the device. */
+internal val LiveSidePanelMinWidth = 360.dp
+
+/** Pane divider + padding between the device column and side panel. */
+internal val LivePaneDividerAllowance = 12.dp
 
 internal fun mirrorVideoConfig(
     maxSize: String,
@@ -269,6 +278,8 @@ internal fun LiveScreen(
     var localDevicePaneWidth by remember(devicePaneWidth) { mutableStateOf(devicePaneWidth) }
     var userResizedDevicePane by remember(serial) { mutableStateOf(false) }
     var minDevicePaneWidth by remember(serial) { mutableStateOf(360f) }
+    var maxDevicePaneWidth by remember(serial) { mutableStateOf(1800f) }
+    var currentFittedPaneWidth by remember(serial) { mutableStateOf(devicePaneWidth) }
     // Android Auto DHU: off by default; Live-scoped and cleared on device switch.
     // DHU runs in its own desktop-head-unit window (no Andy embed / pointer forwarding).
     var androidAutoEnabled by remember(serial) { mutableStateOf(false) }
@@ -502,6 +513,33 @@ internal fun LiveScreen(
         val size = profile?.sizeForPosture(foldablePostureForAngle(angle)) ?: return null
         return MirrorSourceSize(size.first, size.second)
     }
+    fun applyRotateAndRefresh() {
+        if (serial == null) return
+        scope.launch {
+            val before = runCatching { services.devices.readLogicalDisplaySize(serial) }.getOrNull()
+            val result = services.devices.rotateDeviceDisplay(
+                serial = serial,
+                isEmulator = device?.kind == DeviceKind.Emulator || serial.startsWith("emulator-"),
+            )
+            liveActionStatus = "Rotate: " + if (result.isSuccess) {
+                result.stdout.ifBlank { "ok" }
+            } else {
+                result.stderr.ifBlank { result.stdout }
+            }
+            if (result.isSuccess) {
+                val confirmed = awaitLogicalOrientationChange(services.devices, serial, before)
+                if (confirmed != null) {
+                    // The logical display, not the requested sensor turn, owns the outer frame.
+                    // Orientation-locked apps stay in their existing aspect; unlocked apps resize
+                    // here while the decoded stream catches up.
+                    foldableCaptureHint = MirrorSourceSize(confirmed.first, confirmed.second)
+                    userResizedDevicePane = false
+                }
+            } else {
+                foldableCaptureHint = null
+            }
+        }
+    }
     fun applyFoldableAndRefresh(label: String, angle: Float, block: suspend () -> CommandResult) {
         if (serial == null) return
         // Resize the Live host immediately to the expected outer/inner geometry.
@@ -529,7 +567,12 @@ internal fun LiveScreen(
         val stream = MirrorSourceSize(session.width, session.height)
         val profile = foldableProfile
         if (profile == null) {
-            foldableCaptureHint = null
+            // Drop rotate hint once the live stream matches the confirmed post-rotate aspect.
+            val hintAspect = hint.width.toFloat() / hint.height.toFloat()
+            val streamAspect = stream.width.toFloat() / stream.height.toFloat()
+            if (kotlin.math.abs(hintAspect - streamAspect) < 0.06f) {
+                foldableCaptureHint = null
+            }
             return@LaunchedEffect
         }
         val posture = foldablePostureForAngle(foldableHingeAngle)
@@ -563,13 +606,25 @@ internal fun LiveScreen(
                     foldableHingeAngle = foldableHingeAngle,
                     showSideToolbar = caps.hardwareButtons || isIosTarget,
                 )
-                minDevicePaneWidth = fittedDevicePaneWidth.value
+                // Landscape height-fit can ask for more than the row width. Keep enough room
+                // for the Live side panel (stream settings / logcat) instead of eating it.
+                val maxLeftForSidePanel = (maxWidth - LiveSidePanelMinWidth - LivePaneDividerAllowance)
+                    .coerceAtLeast(400.dp)
+                val cappedFittedWidth = minOf(fittedDevicePaneWidth, maxLeftForSidePanel)
+                val dragMinWidth = liveDevicePaneMinWidth(
+                    showSideToolbar = caps.hardwareButtons || isIosTarget,
+                ).coerceAtMost(cappedFittedWidth)
+                minDevicePaneWidth = dragMinWidth.value
+                maxDevicePaneWidth = maxLeftForSidePanel.value
+                currentFittedPaneWidth = cappedFittedWidth.value
                 // While a foldable open/close hint is active, follow the fitted outer/inner
                 // width even if the user previously dragged the divider wider.
                 val devicePaneWidthDp = if (userResizedDevicePane && foldableCaptureHint == null) {
-                    localDevicePaneWidth.dp.coerceAtLeast(fittedDevicePaneWidth)
+                    // Allow shrinking below the height-fit width — LiveDevicePane width-fits
+                    // the mirror so the device frame scales down with the column.
+                    localDevicePaneWidth.dp.coerceIn(dragMinWidth, maxLeftForSidePanel)
                 } else {
-                    fittedDevicePaneWidth
+                    cappedFittedWidth
                 }
                 val dhuActive = showAndroidAuto && androidAutoEnabled
                 val leftWidth = devicePaneWidthDp
@@ -603,7 +658,7 @@ internal fun LiveScreen(
                             onPower = { sendHardware(MirrorInput.Power) },
                             onVolumeUp = { sendHardware(MirrorInput.Key(24)) },
                             onVolumeDown = { sendHardware(MirrorInput.Key(25)) },
-                            onRotate = { runLiveAction("Rotate") { services.devices.shell(serial!!, listOf("settings", "put", "system", "user_rotation", "1")) } },
+                            onRotate = { applyRotateAndRefresh() },
                             onCaptureScreenshot = {
                                 if (serial == null) {
                                     liveActionStatus = "Select an online device"
@@ -703,8 +758,12 @@ internal fun LiveScreen(
         if (!iosSinglePane) {
         PaneDivider(
             onDrag = { dragX ->
+                if (!userResizedDevicePane) {
+                    // Start from the on-screen fitted width, not a stale workspace default.
+                    localDevicePaneWidth = currentFittedPaneWidth
+                }
                 userResizedDevicePane = true
-                localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(minDevicePaneWidth, 1800f)
+                localDevicePaneWidth = (localDevicePaneWidth + dragX).coerceIn(minDevicePaneWidth, maxDevicePaneWidth)
             },
             onDragEnd = {
                 if (userResizedDevicePane) onDevicePaneWidthChange(localDevicePaneWidth)
@@ -862,6 +921,34 @@ private fun formatRecordingDuration(elapsedMillis: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
+}
+
+/**
+ * Waits until `dumpsys window` reports a flipped portrait/landscape aspect after [rotate],
+ * so scrcpy restart does not reconnect on the pre-rotate size.
+ */
+internal suspend fun awaitLogicalOrientationChange(
+    devices: DeviceService,
+    serial: String,
+    previous: Pair<Int, Int>?,
+    timeoutMillis: Long = 3_000L,
+    pollMillis: Long = 100L,
+): Pair<Int, Int>? {
+    val previousLandscape = previous != null && previous.first > previous.second
+    val deadline = currentTimeMillis() + timeoutMillis
+    var latest = previous
+    while (currentTimeMillis() < deadline) {
+        val next = runCatching { devices.readLogicalDisplaySize(serial) }.getOrNull()
+        if (next != null) {
+            latest = next
+            val nextLandscape = next.first > next.second
+            if (previous == null || nextLandscape != previousLandscape) {
+                return next
+            }
+        }
+        delay(pollMillis)
+    }
+    return latest
 }
 
 @Composable
