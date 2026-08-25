@@ -175,9 +175,16 @@ private suspend fun DeviceService.rotatePhysicalDisplay(serial: String): Command
 
 private suspend fun DeviceService.readCurrentQuarterTurn(serial: String): Int {
     val wm = shell(serial, listOf("wm", "user-rotation"))
-    parseWmUserRotation(wm.stdout.ifBlank { wm.stderr })?.let { return it }
+    val raw = wm.stdout.ifBlank { wm.stderr }.trim()
+    // `free` is a rotation *mode*, not portrait. Derive the current posture from the logical
+    // display so Rotate toggles away from the on-screen aspect instead of locking landscape→1.
+    if (raw.equals("free", ignoreCase = true)) {
+        return quarterTurnFromLogicalSize(readLogicalDisplaySize(serial))
+    }
+    parseWmUserRotation(raw)?.let { return it }
     val settings = shell(serial, listOf("settings", "get", "system", "user_rotation"))
-    return settings.stdout.trim().toIntOrNull()?.coerceIn(0, 3) ?: 0
+    settings.stdout.trim().toIntOrNull()?.coerceIn(0, 3)?.let { return it }
+    return quarterTurnFromLogicalSize(readLogicalDisplaySize(serial))
 }
 
 private suspend fun DeviceService.syncAndroidUserRotation(serial: String, quarterTurn: Int) {
@@ -315,17 +322,24 @@ internal fun userRotationLabel(value: Int): String = when (value) {
     else -> "rotation $value"
 }
 
-/** Parses `wm user-rotation` stdout (`free`, `lock 1`, or a bare `0`–`3`). */
+/**
+ * Parses `wm user-rotation` stdout (`lock 1`, or a bare `0`–`3`).
+ * Returns null for `free` — that is a rotation mode, not a quarter-turn value.
+ */
 internal fun parseWmUserRotation(stdout: String): Int? {
     val trimmed = stdout.trim()
     if (trimmed.isEmpty()) return null
+    if (trimmed.equals("free", ignoreCase = true)) return null
     Regex("""\block\s+([0-3])\b""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.get(1)
         ?.toIntOrNull()
         ?.let { return it }
     Regex("""\b([0-3])\b""").find(trimmed)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
-    if (trimmed.equals("free", ignoreCase = true)) return 0
     return null
 }
+
+/** Portrait→0 / landscape→1 from logical display size; used when rotation mode is `free`. */
+internal fun quarterTurnFromLogicalSize(size: Pair<Int, Int>?): Int =
+    if (size != null && size.first > size.second) 1 else 0
 
 internal fun logicalOrientationChanged(before: Pair<Int, Int>?, after: Pair<Int, Int>?): Boolean {
     if (before == null || after == null) return false

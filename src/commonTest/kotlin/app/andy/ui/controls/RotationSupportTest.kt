@@ -8,6 +8,7 @@ import app.andy.service.DeviceService
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -272,11 +273,34 @@ class RotationSupportTest {
     }
 
     @Test
-    fun parseWmUserRotationReadsLockAndFree() {
+    fun parseWmUserRotationReadsLockAndTreatsFreeAsUnknown() {
         assertEquals(1, parseWmUserRotation("lock 1"))
-        assertEquals(0, parseWmUserRotation("free"))
+        assertNull(parseWmUserRotation("free"))
         assertEquals(3, parseWmUserRotation("lock 3\n"))
         assertEquals(2, parseWmUserRotation("2"))
+    }
+
+    @Test
+    fun quarterTurnFromLogicalSizeFollowsAspect() {
+        assertEquals(0, quarterTurnFromLogicalSize(1080 to 2400))
+        assertEquals(1, quarterTurnFromLogicalSize(2400 to 1080))
+        assertEquals(0, quarterTurnFromLogicalSize(null))
+    }
+
+    @Test
+    fun physicalRotateFromFreeUsesCurrentAspect() = runBlocking {
+        val fake = RecordingDeviceService(
+            display0SizeQueue = ArrayDeque(listOf("2400x1080", "2400x1080", "1080x2400")),
+            shellResponses = mapOf(
+                listOf("wm", "user-rotation") to CommandResult.success("free\n"),
+                listOf("wm", "user-rotation", "lock", "0") to CommandResult.success(""),
+            ),
+        )
+        val result = fake.rotateDeviceDisplay("serial", isEmulator = false)
+        assertTrue(result.isSuccess)
+        // Landscape + free must target portrait (0), not re-lock landscape (1).
+        assertTrue(fake.shellCommands.contains(listOf("wm", "user-rotation", "lock", "0")))
+        assertFalse(fake.shellCommands.contains(listOf("wm", "user-rotation", "lock", "1")))
     }
 
     @Test
