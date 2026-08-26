@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.WorktreeMergeOutcome
 import java.io.File
 import kotlin.test.Test
@@ -331,6 +332,94 @@ class WorktreeManagerTest {
             )
             assertEquals(listOf("touched.kt"), scopedSnapshot.summary.files.map { it.path })
             assertEquals(setOf("touched.kt"), scopedSnapshot.diffs.keys)
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun scopedSnapshotIgnoresUnrelatedDirtyFiles() {
+        val repo = File.createTempFile("andy-scoped-snapshot", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            File(repo, "agent.kt").writeText("one\n")
+            File(repo, "user-wip-a.kt").writeText("one\n")
+            File(repo, "user-wip-b.kt").writeText("one\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val baseline = assertNotNull(manager.captureChangeBaseline(repo.absolutePath))
+
+            File(repo, "agent.kt").writeText("one\ntwo\n")
+            File(repo, "user-wip-a.kt").writeText("one\nuser edit\n")
+            File(repo, "user-wip-b.kt").writeText("one\nuser edit\n")
+
+            val scoped = assertNotNull(
+                manager.changeSummary(repo.absolutePath, baseline, listOf("agent.kt")),
+            )
+            assertEquals(listOf("agent.kt"), scoped.files.map { it.path })
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun restorePathsRevertsModifiedAndDeletesNewFiles() {
+        val repo = File.createTempFile("andy-restore-paths", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            File(repo, "tracked.kt").writeText("base\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val baseline = assertNotNull(manager.captureChangeBaseline(repo.absolutePath))
+
+            File(repo, "tracked.kt").writeText("base\nagent edit\n")
+            File(repo, "agent-created.kt").writeText("new file\n")
+            val snapshot = assertNotNull(manager.changeSnapshot(repo.absolutePath, baseline))
+
+            assertTrue(manager.restorePaths(repo.absolutePath, baseline, snapshot).isSuccess)
+            assertEquals("base\n", File(repo, "tracked.kt").readText())
+            assertFalse(File(repo, "agent-created.kt").exists())
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun restorePathsRevertsWithEmptyDiffMetadata() {
+        val repo = File.createTempFile("andy-restore-empty-diffs", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            git(repo, "init")
+            git(repo, "config", "user.email", "andy@example.test")
+            git(repo, "config", "user.name", "Andy Test")
+            File(repo, "tracked.kt").writeText("base\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val baseline = assertNotNull(manager.captureChangeBaseline(repo.absolutePath))
+
+            File(repo, "tracked.kt").writeText("base\nagent edit\n")
+            File(repo, "agent-created.kt").writeText("new file\n")
+            val snapshot = assertNotNull(manager.changeSnapshot(repo.absolutePath, baseline))
+            val emptyDiffSnapshot = AgentThreadChangeSnapshot(summary = snapshot.summary, diffs = emptyMap())
+
+            assertTrue(manager.restorePaths(repo.absolutePath, baseline, emptyDiffSnapshot).isSuccess)
+            assertEquals("base\n", File(repo, "tracked.kt").readText())
+            assertFalse(File(repo, "agent-created.kt").exists())
         } finally {
             repo.deleteRecursively()
         }

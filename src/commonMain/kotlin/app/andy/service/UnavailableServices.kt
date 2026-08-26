@@ -344,6 +344,12 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun worktreeDiffSummary(taskId: String): String? = null
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = null
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = null
+    override suspend fun undoFileChanges(
+        taskId: String,
+        batchId: String,
+        groupedBatchIds: List<String>,
+    ) = unavailable()
+    override suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot) = unavailable()
     override suspend fun refreshCliStatuses() = Unit
     override suspend fun isGitRepo(dir: String) = false
     override suspend fun currentBranch(dir: String): String? = null

@@ -281,6 +281,23 @@ internal fun AgentEvent.toWire(): JsonObject = buildJsonObject {
             put("allowed", allowed)
             note?.let { put("note", it) }
         }
+        is AgentEvent.FileChanges -> {
+            put("type", "file-changes")
+            put("batchId", batchId)
+            put("undone", undone)
+            put(
+                "files",
+                JsonArray(
+                    snapshot.summary.files.map { file ->
+                        buildJsonObject {
+                            put("path", file.path)
+                            put("additions", file.additions)
+                            put("deletions", file.deletions)
+                        }
+                    },
+                ),
+            )
+        }
         is AgentEvent.Raw -> {
             put("type", "raw")
             put("line", line)

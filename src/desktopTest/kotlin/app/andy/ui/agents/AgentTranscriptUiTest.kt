@@ -393,6 +393,42 @@ class AgentTranscriptUiTest {
         }
 
     @Test
+    fun editedFilesCardRendersInline() =
+        runTranscriptUiTest {
+            val snapshot = app.andy.model.AgentThreadChangeSnapshot(
+                summary = app.andy.model.AgentChangeSummary(
+                    listOf(
+                        app.andy.model.AgentFileChange("composeApp/src/wasmJsMain/resources/index.html", 6, 6),
+                        app.andy.model.AgentFileChange("core/platform/src/commonMain/kotlin/Platform.kt", 3, 0),
+                    ),
+                ),
+                diffs = emptyMap(),
+            )
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = listOf(
+                            AgentEvent.UserMessage(atMillis = 1, text = "update platform"),
+                            AgentEvent.FileChanges(
+                                atMillis = 2,
+                                batchId = "batch-1",
+                                baselineTree = "abc",
+                                snapshot = snapshot,
+                            ),
+                            AgentEvent.AssistantText(atMillis = 3, text = "Updated the platform files."),
+                        ),
+                        isActive = false,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+            onNodeWithTag("edited-files-card").assertIsDisplayed()
+            onNodeWithText("Edited 2 files").assertIsDisplayed()
+            onNodeWithTag("edited-files-review").assertIsDisplayed()
+        }
+
+    @Test
     fun userMessagesRenderAsPlainText() =
         runTranscriptUiTest {
             setContent {

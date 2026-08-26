@@ -7,6 +7,11 @@ import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentSkill
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentFileChange
+import app.andy.model.AgentFileDiff
+import app.andy.model.DiffLineKind
 import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
@@ -54,6 +59,15 @@ class AcpTranscriptStore(
 
     fun load(taskId: String): List<AgentEvent> = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
         coalesceLoaded(loadUnlocked(fileFor(taskId)))
+    }
+
+    fun markFileChangesUndone(taskId: String, batchId: String) = synchronized(locks.computeIfAbsent(taskId) { Any() }) {
+        val file = fileFor(taskId)
+        val entries = coalesceLoaded(loadUnlocked(file)).map { it.toDto() }.toMutableList()
+        val index = entries.indexOfFirst { it.type == "file-changes" && it.batchId == batchId }
+        if (index < 0) return@synchronized
+        entries[index] = entries[index].copy(fileChangesUndone = true)
+        writeUnlocked(file, entries)
     }
 
     private fun appendUnlocked(taskId: String, event: AgentEvent) {
@@ -157,6 +171,27 @@ private data class TranscriptEvent(
     val allowed: Boolean = false,
     val note: String = "",
     val rawLine: String = "",
+    val batchId: String = "",
+    val baselineTree: String = "",
+    val fileChangesUndone: Boolean = false,
+    val fileChanges: List<TranscriptFileChange> = emptyList(),
+    val fileDiffs: List<TranscriptFileDiff> = emptyList(),
+)
+
+@Serializable private data class TranscriptFileChange(val path: String, val additions: Int, val deletions: Int)
+@Serializable private data class TranscriptFileDiff(
+    val path: String,
+    val lines: List<TranscriptDiffLine> = emptyList(),
+    val additions: Int = 0,
+    val deletions: Int = 0,
+    val isBinary: Boolean = false,
+    val isNewFile: Boolean = false,
+)
+@Serializable private data class TranscriptDiffLine(
+    val kind: String,
+    val text: String,
+    val oldLineNumber: Int? = null,
+    val newLineNumber: Int? = null,
 )
 
 @Serializable private data class TranscriptSkill(val name: String, val path: String)
@@ -187,6 +222,31 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
     is AgentEvent.AvailableModes -> TranscriptEvent("modes", atMillis, modes = modes.map { TranscriptMode(it.id, it.name, it.description) }, currentModeId = currentModeId.orEmpty())
     is AgentEvent.PermissionRequest -> TranscriptEvent("permission", atMillis, requestId = requestId, toolName = toolName, question = question, options = options.map { TranscriptOption(it.label, it.description) })
     is AgentEvent.PermissionResolved -> TranscriptEvent("permission-resolved", atMillis, requestId = requestId, optionId = optionId, allowed = allowed, note = note.orEmpty())
+    is AgentEvent.FileChanges -> TranscriptEvent(
+        type = "file-changes",
+        atMillis = atMillis,
+        batchId = batchId,
+        baselineTree = baselineTree,
+        fileChangesUndone = undone,
+        fileChanges = snapshot.summary.files.map { TranscriptFileChange(it.path, it.additions, it.deletions) },
+        fileDiffs = snapshot.diffs.values.map { diff ->
+            TranscriptFileDiff(
+                path = diff.path,
+                lines = diff.lines.map { line ->
+                    TranscriptDiffLine(
+                        kind = line.kind.name,
+                        text = line.text,
+                        oldLineNumber = line.oldLineNumber,
+                        newLineNumber = line.newLineNumber,
+                    )
+                },
+                additions = diff.additions,
+                deletions = diff.deletions,
+                isBinary = diff.isBinary,
+                isNewFile = diff.isNewFile,
+            )
+        },
+    )
     is AgentEvent.Raw -> TranscriptEvent("raw", atMillis, rawLine = line)
 }
 
@@ -195,7 +255,17 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "assistant" -> AgentEvent.AssistantText(atMillis, text, isStreamDelta)
     "thinking" -> AgentEvent.Thinking(atMillis, text, isStreamDelta)
     "user" -> AgentEvent.UserMessage(atMillis, text, skills.map { AgentSkill(it.name, "", it.path) }, images)
-    "tool" -> AgentEvent.ToolCall(atMillis, toolName, summary, detail.ifBlank { summary }, toolCallId.takeIf { it.isNotBlank() }, AgentToolKind.entries.firstOrNull { it.name == toolKind }, AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed, locations, toolImages.map { AgentToolImage(it) })
+    "tool" -> {
+        val storedKind = AgentToolKind.entries.firstOrNull { it.name == toolKind } ?: AgentToolKind.Other
+        val resolvedKind = if (storedKind == AgentToolKind.Other) {
+            AcpToolCallPresentation.inferKindFromTitle(toolName)
+                ?: AcpToolCallPresentation.inferKindFromArguments(detail)
+                ?: storedKind
+        } else {
+            storedKind
+        }
+        AgentEvent.ToolCall(atMillis, toolName, summary, detail.ifBlank { summary }, toolCallId.takeIf { it.isNotBlank() }, resolvedKind, AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed, locations, toolImages.map { AgentToolImage(it) })
+    }
     "tool-result" -> AgentEvent.ToolResult(atMillis, toolName.takeIf { it.isNotBlank() }, summary, detail.ifBlank { summary }, isError, quotaWindows.map { AgentQuotaWindow(it.label, it.fraction, it.resetAt, it.detail) })
     "error" -> AgentEvent.TaskError(atMillis, text)
     "result" -> AgentEvent.TaskResult(atMillis, success, finalText.takeIf { it.isNotBlank() }, costUsd.takeIf { it != 0.0 }, costIsEstimated, inputTokens.takeIf { it != 0L }, outputTokens.takeIf { it != 0L }, durationMs.takeIf { it != 0L })
@@ -210,6 +280,35 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "modes" -> AgentEvent.AvailableModes(atMillis, modes.map { app.andy.model.AgentSessionMode(it.id, it.name, it.description) }, currentModeId.takeIf { it.isNotBlank() })
     "permission" -> AgentEvent.PermissionRequest(atMillis, requestId, toolName, question, options.map { app.andy.model.AgentUserInputOption(it.label, it.description) })
     "permission-resolved" -> AgentEvent.PermissionResolved(atMillis, requestId, optionId, allowed, note.takeIf { it.isNotBlank() })
+    "file-changes" -> {
+        val summary = AgentChangeSummary(
+            fileChanges.map { AgentFileChange(it.path, it.additions, it.deletions) },
+        )
+        val diffs = fileDiffs.associate { diff ->
+            diff.path to AgentFileDiff(
+                path = diff.path,
+                lines = diff.lines.map { line ->
+                    app.andy.model.DiffLine(
+                        kind = DiffLineKind.entries.firstOrNull { it.name == line.kind } ?: DiffLineKind.Context,
+                        text = line.text,
+                        oldLineNumber = line.oldLineNumber,
+                        newLineNumber = line.newLineNumber,
+                    )
+                },
+                additions = diff.additions,
+                deletions = diff.deletions,
+                isBinary = diff.isBinary,
+                isNewFile = diff.isNewFile,
+            )
+        }
+        AgentEvent.FileChanges(
+            atMillis = atMillis,
+            batchId = batchId,
+            baselineTree = baselineTree,
+            snapshot = AgentThreadChangeSnapshot(summary = summary, diffs = diffs),
+            undone = fileChangesUndone,
+        )
+    }
     "raw" -> AgentEvent.Raw(atMillis, rawLine)
     else -> null
 }

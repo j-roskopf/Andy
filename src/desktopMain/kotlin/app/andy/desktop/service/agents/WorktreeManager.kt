@@ -9,10 +9,19 @@ import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.WorktreeMergeOutcome
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class WorktreeManager(
     private val worktreesRoot: File = File(System.getProperty("user.home"), ".andy/worktrees"),
 ) {
+    companion object {
+        /** Test hook: incremented on each [changeSnapshot] invocation. */
+        internal val changeSnapshotInvocations = AtomicInteger(0)
+
+        internal fun resetChangeSnapshotInvocationCount() {
+            changeSnapshotInvocations.set(0)
+        }
+    }
     data class Worktree(val path: String, val branch: String)
 
     data class WorktreeInfo(
@@ -131,16 +140,24 @@ class WorktreeManager(
     }
 
     /**
-     * Snapshots the full working-tree state (tracked + untracked, respecting .gitignore) as a git
-     * tree object, without touching HEAD, the branch, or the real index. Used as a content-addressed
-     * baseline so later diffs can tell "unchanged since baseline" apart from "further edited during
-     * this task", even for files that were already dirty when the baseline was taken.
+     * Snapshots working-tree content as a git tree object without touching HEAD or the real index.
+     * When [paths] is null, indexes the full tree (`git add -A`). When non-null, only those
+     * repo-relative paths are staged so unrelated dirty files elsewhere are not scanned.
      */
-    private fun snapshotTree(dir: String): String? {
+    private fun snapshotTree(dir: String, paths: Collection<String>? = null): String? {
         val tmpIndex = File.createTempFile("andy-snapshot-", ".idx").apply { delete() }
         return try {
             val env = mapOf("GIT_INDEX_FILE" to tmpIndex.absolutePath)
-            if (git(dir, listOf("add", "-A"), env).exitCode != 0) return null
+            val addArgs = buildList {
+                add("add")
+                if (paths == null) {
+                    add("-A")
+                } else {
+                    add("--")
+                    addAll(paths)
+                }
+            }
+            if (git(dir, addArgs, env).exitCode != 0) return null
             val writeTree = git(dir, listOf("write-tree"), env)
             if (writeTree.exitCode != 0) return null
             writeTree.output.trim().takeIf { it.isNotBlank() }
@@ -164,7 +181,16 @@ class WorktreeManager(
     fun changeSummary(dir: String, baselineTree: String?, paths: Collection<String>? = null): AgentChangeSummary? {
         if (!isGitRepo(dir) || baselineTree == null) return null
         if (paths != null && paths.isEmpty()) return AgentChangeSummary(emptyList())
-        val currentTree = snapshotTree(dir) ?: return null
+        val currentTree = snapshotTree(dir, paths) ?: return null
+        return changeSummaryFromTrees(dir, baselineTree, currentTree, paths)
+    }
+
+    private fun changeSummaryFromTrees(
+        dir: String,
+        baselineTree: String,
+        currentTree: String,
+        paths: Collection<String>?,
+    ): AgentChangeSummary? {
         if (currentTree == baselineTree) return AgentChangeSummary(emptyList())
         val args = mutableListOf("diff", "--numstat", "--no-renames", baselineTree, currentTree)
         if (paths != null) {
@@ -194,28 +220,96 @@ class WorktreeManager(
         baselineTree: String?,
         paths: Collection<String>? = null,
     ): AgentThreadChangeSnapshot? {
-        val summary = changeSummary(dir, baselineTree, paths) ?: return null
+        changeSnapshotInvocations.incrementAndGet()
+        if (!isGitRepo(dir) || baselineTree == null) return null
+        if (paths != null && paths.isEmpty()) {
+            return AgentThreadChangeSnapshot(AgentChangeSummary(emptyList()), emptyMap())
+        }
+        val currentTree = snapshotTree(dir, paths) ?: return null
+        val summary = changeSummaryFromTrees(dir, baselineTree, currentTree, paths) ?: return null
+        if (summary.files.isEmpty()) {
+            return AgentThreadChangeSnapshot(summary, emptyMap())
+        }
         val diffs = summary.files.associate { change ->
-            change.path to (fileDiff(dir, change.path, baselineTree) ?: AgentFileDiff(path = change.path, lines = emptyList()))
+            change.path to (
+                fileDiffFromTrees(dir, change.path, baselineTree, currentTree)
+                    ?: AgentFileDiff(path = change.path, lines = emptyList())
+                )
         }
         return AgentThreadChangeSnapshot(summary = summary, diffs = diffs)
+    }
+
+    /**
+     * Restores [paths] to their contents at [baselineTree]. New files (not present in the baseline
+     * tree) are deleted from the working directory.
+     */
+    fun restorePaths(
+        dir: String,
+        baselineTree: String,
+        snapshot: AgentThreadChangeSnapshot,
+    ): Result<Unit> {
+        if (!isGitRepo(dir) || baselineTree.isBlank()) {
+            return Result.failure(IllegalStateException("not a git repository"))
+        }
+        val existingPaths = mutableListOf<String>()
+        val newPaths = mutableListOf<String>()
+        snapshot.summary.files.forEach { change ->
+            val path = change.path
+            when {
+                snapshot.diffs[path]?.isNewFile == true -> newPaths += path
+                snapshot.diffs[path]?.isNewFile == false -> existingPaths += path
+                pathExistsInBaselineTree(dir, baselineTree, path) -> existingPaths += path
+                else -> newPaths += path
+            }
+        }
+        if (existingPaths.isNotEmpty()) {
+            val restore = git(dir, listOf("checkout", baselineTree, "--") + existingPaths, emptyMap())
+            if (restore.exitCode != 0) {
+                return Result.failure(IllegalStateException(restore.output.ifBlank { "git checkout failed" }))
+            }
+        }
+        newPaths.forEach { relative ->
+            val file = File(dir, relative)
+            if (file.exists() && !file.delete()) {
+                return Result.failure(IllegalStateException("failed to delete $relative"))
+            }
+        }
+        return Result.success(Unit)
+    }
+
+    private fun pathExistsInBaselineTree(dir: String, baselineTree: String, relativePath: String): Boolean {
+        if (relativePath.isBlank()) return false
+        val result = git(dir, listOf("ls-tree", baselineTree, "--", relativePath), emptyMap())
+        return result.exitCode == 0 && result.output.trim().isNotEmpty()
     }
 
     /** Unified diff for a single path relative to [dir] and [baselineTree], for inline review. */
     fun fileDiff(dir: String, relativePath: String, baselineTree: String?): AgentFileDiff? {
         if (!isGitRepo(dir) || relativePath.isBlank() || baselineTree == null) return null
-        val currentTree = snapshotTree(dir) ?: return null
+        val currentTree = snapshotTree(dir, listOf(relativePath)) ?: return null
+        return fileDiffFromTrees(dir, relativePath, baselineTree, currentTree)
+    }
+
+    private fun fileDiffFromTrees(
+        dir: String,
+        relativePath: String,
+        baselineTree: String,
+        currentTree: String,
+    ): AgentFileDiff? {
         val result = git(
             dir,
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-renames",
-            "-U3",
-            baselineTree,
-            currentTree,
-            "--",
-            relativePath,
+            listOf(
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-renames",
+                "-U3",
+                baselineTree,
+                currentTree,
+                "--",
+                relativePath,
+            ),
+            emptyMap(),
         )
         if (result.exitCode != 0) return null
         if (result.output.isBlank()) return AgentFileDiff(path = relativePath, lines = emptyList())

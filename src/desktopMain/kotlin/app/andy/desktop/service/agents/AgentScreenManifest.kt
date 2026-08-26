@@ -703,37 +703,6 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
         ),
     ),
     ScreenRule(
-        id = "spinner_working",
-        state = ScreenState.Working,
-        priority = 100,
-        region = ScreenRegion.WholeRecent,
-        visibleWorking = true,
-        gate = ScreenGate(
-            lineRegex = listOf(Regex("""^\s*[\u2800-\u28FF]+\s+\p{L}+\w*ing\b""")),
-        ),
-    ),
-    ScreenRule(
-        id = "background_tasks_working",
-        state = ScreenState.Working,
-        priority = 90,
-        region = ScreenRegion.BottomNonEmpty(5),
-        visibleWorking = true,
-        gate = ScreenGate(lineRegex = listOf(Regex("""(?i)·\s*[1-9][0-9]*\s+task"""))),
-    ),
-    ScreenRule(
-        id = "andy_status_spinner_working",
-        state = ScreenState.Working,
-        priority = 80,
-        region = ScreenRegion.BottomNonEmpty(4),
-        visibleWorking = true,
-        gate = ScreenGate(
-            any = listOf(
-                ScreenGate(lineRegex = listOf(Regex("""✻\s+\w+ing\b"""))),
-                ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Executing|Running|Analyzing)\b"""))),
-            ),
-        ),
-    ),
-    ScreenRule(
         id = "andy_prompt_idle",
         state = ScreenState.Idle,
         priority = 50,

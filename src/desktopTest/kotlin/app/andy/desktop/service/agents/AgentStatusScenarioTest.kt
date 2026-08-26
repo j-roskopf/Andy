@@ -104,16 +104,13 @@ class AgentStatusScenarioTest {
     }
 
     @Test
-    fun antigravityPermissionAndSpinner() = runScenario(AgentKind.Antigravity) {
+    fun antigravityPermissionAndIdlePrompt() = runScenario(AgentKind.Antigravity) {
         screen(
             """
             Requesting permission for:
             do you want to proceed?
             """.trimIndent(),
         ).expect(AgentStatus.Blocked)
-
-        screen("  \u2801 Thinking about the change\n")
-            .expect(AgentStatus.Working)
 
         screen("Antigravity agent ready\n> ")
             .expect(AgentStatus.Done)

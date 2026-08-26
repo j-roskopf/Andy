@@ -1,10 +1,13 @@
 package app.andy.desktop.service.agents.acp
 
+import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentEvent
+import app.andy.model.AgentFileChange
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentTask
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.LocalAgentRuntime
@@ -263,6 +266,33 @@ class AcpLaneTest {
         assertEquals("Edit", enriched.toolName)
         assertEquals("SettingsScreen.kt", enriched.summary)
         assertEquals(AgentToolState.Pending, enriched.state)
+    }
+
+    @Test
+    fun mapperInfersEditKindAndPathWhenProviderReportsOther() {
+        val mapped = assertIs<AgentEvent.ToolCall>(
+            AcpEventMapper.map(
+                SessionUpdate.ToolCall(
+                    toolCallId = com.agentclientprotocol.model.ToolCallId("edit-other"),
+                    title = "Edit File",
+                    kind = ToolKind.OTHER,
+                    status = ToolCallStatus.COMPLETED,
+                    content = listOf(
+                        com.agentclientprotocol.model.ToolCallContent.Diff(
+                            path = "/Users/joer/Code/Andy/Andy/src/Main.kt",
+                            oldText = "foo\n",
+                            newText = "bar\n",
+                        ),
+                    ),
+                    locations = emptyList(),
+                    rawInput = null,
+                    rawOutput = null,
+                ),
+                atMillis = 1,
+            ),
+        )
+        assertEquals(AgentToolKind.Edit, mapped.kind)
+        assertEquals(listOf("/Users/joer/Code/Andy/Andy/src/Main.kt"), mapped.locations)
     }
 
     @Test
@@ -598,6 +628,36 @@ class AcpLaneTest {
             assertEquals("Hey there", (loaded[0] as AgentEvent.AssistantText).text)
             assertEquals("next turn", (loaded[1] as AgentEvent.UserMessage).text)
             assertEquals(2, root.resolve("task-1/transcript.jsonl").readLines().size)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun transcriptStoreRoundTripsFileChangesAndMarksUndone() {
+        val root = createTempDirectory("andy-acp-file-changes").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            val snapshot = AgentThreadChangeSnapshot(
+                summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", 2, 1))),
+                diffs = emptyMap(),
+            )
+            store.append(
+                "task-1",
+                AgentEvent.FileChanges(
+                    atMillis = 1,
+                    batchId = "batch-1",
+                    baselineTree = "abc123",
+                    snapshot = snapshot,
+                ),
+            )
+            val loaded = store.load("task-1").single() as AgentEvent.FileChanges
+            assertEquals("batch-1", loaded.batchId)
+            assertEquals("src/Main.kt", loaded.snapshot.summary.files.single().path)
+
+            store.markFileChangesUndone("task-1", "batch-1")
+            val undone = store.load("task-1").single() as AgentEvent.FileChanges
+            assertTrue(undone.undone)
         } finally {
             root.deleteRecursively()
         }

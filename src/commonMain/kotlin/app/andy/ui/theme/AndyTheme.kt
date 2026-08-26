@@ -472,6 +472,7 @@ internal object AndyLayout {
     val ControlHeightXs = 26.dp
     val ControlHeightSm = 28.dp
     val ControlHeightMd = 32.dp
+    val ControlHeightLg = 36.dp
     /** Compact single-line text field — squarish-rounded, readable at a glance. */
     val FieldHeight = 32.dp
     val ToolbarButtonSize = 30.dp

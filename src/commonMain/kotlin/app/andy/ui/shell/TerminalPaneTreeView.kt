@@ -262,7 +262,7 @@ private fun TerminalLeafView(
                     .fillMaxWidth()
                     .padding(start = 10.dp, top = 6.dp, end = 8.dp),
                 scrollTabs = true,
-                showDivider = false,
+                hasDivider = false,
                 trailing = {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),

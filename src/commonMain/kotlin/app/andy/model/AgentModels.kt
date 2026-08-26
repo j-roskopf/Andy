@@ -35,6 +35,24 @@ val AgentKind.acpSupported: Boolean
         AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
+/** Providers with vendor lifecycle/status hook support. */
+val AgentKind.hooksSupported: Boolean
+    get() = when (this) {
+        AgentKind.ClaudeCode,
+        AgentKind.Codex,
+        AgentKind.Cursor,
+        AgentKind.OpenCode,
+        AgentKind.Pi,
+        -> true
+        AgentKind.Antigravity,
+        AgentKind.Hermes,
+        AgentKind.OpenClaw,
+        AgentKind.Goose,
+        AgentKind.Ollama,
+        AgentKind.LMStudio,
+        -> false
+    }
+
 /**
  * Lane for newly-created tasks; persisted tasks never re-derive this value.
  * ACP-capable providers always stay on [AgentLaneKind.Acp] (no terminal demotion).
@@ -251,6 +269,7 @@ object AgentModelCatalog {
             AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
         AgentKind.Antigravity -> listOf(
+            AgentModelOption("gemini-3.7-flash", "Gemini 3.7 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.6-flash", "Gemini 3.6 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.5-flash", "Gemini 3.5 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.High)),
@@ -359,6 +378,7 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
 
 /** Map legacy Antigravity display names and full effort slugs to the base id Andy stores. */
 internal fun antigravityModelBaseId(selected: String): String = when (selected) {
+    "Gemini 3.7 Flash", "gemini-3.7-flash" -> "gemini-3.7-flash"
     "Gemini 3.6 Flash", "gemini-3.6-flash" -> "gemini-3.6-flash"
     "Gemini 3.5 Flash", "gemini-3.5-flash" -> "gemini-3.5-flash"
     "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
@@ -955,20 +975,7 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
                 if (catalog?.supportsFastMode == true && (fastMode || catalog.fastRequired)) append("-fast")
             }
         }
-        AgentKind.Antigravity -> {
-            val base = antigravityModelBaseId(selected)
-            val catalog = AgentModelCatalog.option(AgentKind.Antigravity, base, discovered)
-            val effort = reasoningEffort
-            when {
-                effort == null -> if (selected.any { it.isWhitespace() }) selected else base
-                // Legacy display-name tasks keep the "(High)" variant syntax.
-                selected.any { it.isWhitespace() } -> {
-                    val level = effort.label.split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) }
-                    "$selected ($level)"
-                }
-                else -> "$base-${catalog?.effortToken(effort) ?: effort.cliValue}"
-            }
-        }
+        AgentKind.Antigravity -> antigravityModelBaseId(selected)
         // Pi requires provider/model (e.g. openai-codex/gpt-5.5). A bare provider
         // column from a bad --list-models parse must not be passed as --model.
         AgentKind.Pi -> selected.takeIf { '/' in it }
@@ -1268,6 +1275,20 @@ sealed interface AgentEvent {
         val allowed: Boolean,
         /** When set, Andy resolved the permission without a user prompt (policy, stop, queue). */
         val note: String? = null,
+    ) : AgentEvent
+
+    /**
+     * Inline summary of files edited during a contiguous burst of mutating tool calls.
+     * [baselineTree] is the git tree captured before the burst; used to undo this batch.
+     */
+    data class FileChanges(
+        override val atMillis: Long,
+        val batchId: String,
+        val baselineTree: String,
+        val snapshot: AgentThreadChangeSnapshot,
+        val undone: Boolean = false,
+        /** Display-only merge of back-to-back cards; undo reverts every batch in order. */
+        val groupedBatchIds: List<String> = emptyList(),
     ) : AgentEvent
 
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */

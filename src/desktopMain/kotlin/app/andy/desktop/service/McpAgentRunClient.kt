@@ -11,6 +11,7 @@ import app.andy.desktop.service.agents.discoverAgentSkills
 import app.andy.desktop.service.agents.discoverKnownAgentSkillNames
 import app.andy.desktop.service.agents.providerDesktopContinuation
 import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentCliIssue
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentContextualProvenance
@@ -1083,6 +1084,13 @@ class McpAgentRunClient(
     override suspend fun worktreeDiffSummary(taskId: String): String? = null
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = null
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? = null
+    override suspend fun undoFileChanges(
+        taskId: String,
+        batchId: String,
+        groupedBatchIds: List<String>,
+    ) = CommandResult.failure("not available in client mode")
+    override suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot) =
+        CommandResult.failure("not available in client mode")
     override suspend fun refreshCliStatuses() {
         refreshComposerOptions()
     }

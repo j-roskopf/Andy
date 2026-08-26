@@ -1,10 +1,14 @@
 package app.andy.ui.agents
 
 import app.andy.model.AgentEvent
+import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentFileChange
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.ui.components.ChatBubbleGroup
 import app.andy.ui.components.ChatBubbleSender
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentToolKind
+import app.andy.model.AgentToolState
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
@@ -833,5 +837,101 @@ class AgentTranscriptTest {
         assertEquals(2, displayed.size)
         assertEquals("ship it", (displayed[0] as AgentEvent.UserMessage).text)
         assertEquals("Picking up again.", (displayed[1] as AgentEvent.AssistantText).text)
+    }
+
+    @Test
+    fun undoneFileChangesAreHiddenFromTranscriptDisplay() {
+        val snapshot = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", 2, 1))),
+            diffs = emptyMap(),
+        )
+        val events = listOf(
+            AgentEvent.FileChanges(atMillis = 1, batchId = "batch-1", baselineTree = "abc", snapshot = snapshot, undone = true),
+            AgentEvent.FileChanges(atMillis = 2, batchId = "batch-2", baselineTree = "def", snapshot = snapshot),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        assertEquals("batch-2", (displayed.single() as AgentEvent.FileChanges).batchId)
+    }
+
+    @Test
+    fun consecutiveFileChangesAreMergedForDisplay() {
+        val snapshotA = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 2, 0))),
+            diffs = emptyMap(),
+        )
+        val snapshotB = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/B.kt", 1, 1))),
+            diffs = emptyMap(),
+        )
+        val events = listOf(
+            AgentEvent.FileChanges(atMillis = 1, batchId = "batch-1", baselineTree = "abc", snapshot = snapshotA),
+            AgentEvent.FileChanges(atMillis = 2, batchId = "batch-2", baselineTree = "abc", snapshot = snapshotB),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.size)
+        val merged = displayed.single() as AgentEvent.FileChanges
+        assertEquals(listOf("batch-1", "batch-2"), merged.groupedBatchIds)
+        assertEquals(listOf("src/A.kt", "src/B.kt"), merged.snapshot.summary.files.map { it.path })
+    }
+
+    @Test
+    fun fileChangesSeparatedByActivityAreMergedWithinTurn() {
+        val snapshotA = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 2, 0))),
+            diffs = emptyMap(),
+        )
+        val snapshotB = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/B.kt", 1, 1))),
+            diffs = emptyMap(),
+        )
+        val events = listOf(
+            AgentEvent.FileChanges(atMillis = 1, batchId = "batch-1", baselineTree = "abc", snapshot = snapshotA),
+            AgentEvent.Thinking(atMillis = 2, text = "planning next edit"),
+            AgentEvent.ToolCall(
+                atMillis = 3,
+                toolName = "Read",
+                summary = "src/B.kt",
+                detail = "",
+                kind = AgentToolKind.Read,
+                state = AgentToolState.Completed,
+            ),
+            AgentEvent.FileChanges(atMillis = 4, batchId = "batch-2", baselineTree = "abc", snapshot = snapshotB),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(1, displayed.filterIsInstance<AgentEvent.FileChanges>().size)
+        val merged = displayed.filterIsInstance<AgentEvent.FileChanges>().single()
+        assertEquals(listOf("batch-1", "batch-2"), merged.groupedBatchIds)
+        assertEquals(listOf("src/A.kt", "src/B.kt"), merged.snapshot.summary.files.map { it.path })
+    }
+
+    @Test
+    fun fileChangesInSeparateTurnsAreNotMerged() {
+        val snapshot = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 1, 0))),
+            diffs = emptyMap(),
+        )
+        val events = listOf(
+            AgentEvent.FileChanges(atMillis = 1, batchId = "batch-1", baselineTree = "abc", snapshot = snapshot),
+            AgentEvent.UserMessage(atMillis = 2, text = "follow up"),
+            AgentEvent.FileChanges(atMillis = 3, batchId = "batch-2", baselineTree = "abc", snapshot = snapshot),
+        )
+
+        val displayed = transcriptDisplayEvents(events)
+        assertEquals(2, displayed.filterIsInstance<AgentEvent.FileChanges>().size)
+    }
+
+    @Test
+    fun fileChangesEventKeyIsStablePerBatch() {
+        val event = AgentEvent.FileChanges(
+            atMillis = 1,
+            batchId = "batch-42",
+            baselineTree = "abc",
+            snapshot = AgentThreadChangeSnapshot(AgentChangeSummary(emptyList()), emptyMap()),
+        )
+        assertEquals("file-changes-3-batch-42", transcriptEventKey(3, event))
     }
 }

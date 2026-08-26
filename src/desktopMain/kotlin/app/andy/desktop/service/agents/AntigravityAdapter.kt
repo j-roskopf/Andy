@@ -77,14 +77,14 @@ class AntigravityAdapter : AgentCliAdapter {
 private fun MutableList<String>.addAntigravityModelFlags(task: AgentTask) {
     val model = task.modelForCli() ?: return
     add("--model"); add(model)
-    // agy rejects bare model ids that require an effort level.
+    // agy rejects bare model ids that require an effort level, but rejects --effort on models without effort support.
     val catalog = AgentModelCatalog.options(AgentKind.Antigravity).firstOrNull { it.id == model }
-    val effort = task.reasoningEffort
-        ?: catalog?.preferredEffort()
-        ?: AgentReasoningEffort.High
-    val token = catalog?.effortToken(effort) ?: effort.cliValue
-    if (token in setOf("low", "medium", "high")) {
-        add("--effort"); add(token)
+    val effort = task.reasoningEffort ?: catalog?.preferredEffort()
+    if (effort != null && catalog?.efforts?.isNotEmpty() != false) {
+        val token = catalog?.effortToken(effort) ?: effort.cliValue
+        if (token in setOf("low", "medium", "high")) {
+            add("--effort"); add(token)
+        }
     }
 }
 

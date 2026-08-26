@@ -100,6 +100,7 @@ import app.andy.model.acpSupported
 import app.andy.model.agentPickerOptions
 import app.andy.model.defaultLane
 import app.andy.model.hasVendorCli
+import app.andy.model.hooksSupported
 import app.andy.model.isLocalModelBackend
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
@@ -1025,7 +1026,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
 
     SettingsGroup(
         title = "Chat interface",
-        description = "Choose how new chats start for each provider. ACP is the default wherever the provider supports it.",
+        description = "Choose how new chats start for each provider. ACP is the default wherever the provider supports it. Lifecycle hooks are used for status tracking when supported; other providers rely on prompt detection.",
         ) {
         AgentKind.entries.filter { it.hasVendorCli }.forEach { agent ->
             val selectedLane = providerDefaults[agent]?.lane ?: agent.defaultLane()
@@ -1059,6 +1060,14 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
                     selected = selectedLane == AgentLaneKind.Terminal,
                     contentDescription = "Use terminal for ${agent.label}",
                     onClick = { services.agentRuns.setProviderLane(agent, AgentLaneKind.Terminal) },
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (agent.hooksSupported) "Hooks supported" else "Hooks unsupported",
+                    color = if (agent.hooksSupported) TextSecondary else TextSecondary.copy(alpha = 0.6f),
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                    maxLines = 1,
                 )
             }
         }

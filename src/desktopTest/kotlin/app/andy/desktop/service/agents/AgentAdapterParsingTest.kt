@@ -480,6 +480,17 @@ class AntigravityInteractiveAdapterTest {
     }
 
     @Test
+    fun modelFlagOmitsEffortWhenNotSupported() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(model = "claude-sonnet-4-6"),
+            mcpUrl = null,
+        )
+        assertTrue("--model" in argv && "claude-sonnet-4-6" in argv)
+        assertTrue("--effort" !in argv)
+    }
+
+    @Test
     fun resumeIncludesAttachedImagesInPrompt() {
         val baseTask = task(AgentKind.Antigravity).copy(prompt = "original ask")
         val followUp = baseTask.followUpCliPayload("what time is it", listOf("/tmp/mockup.png"), emptyList()).prompt

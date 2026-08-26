@@ -84,8 +84,8 @@ import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.IMPLEMENT_PLAN_PROMPT
 import app.andy.model.AgentEvent
 import app.andy.model.turnWorkedDurationMs
-import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentNativeSlashCommand
 import app.andy.model.AgentNativeSlashCommands
 import app.andy.model.composerSkillsForSlashMenu
@@ -127,6 +127,8 @@ import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.service.OpenInvestigationRequest
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.ConfirmationDialog
+import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.shell.LocalOpenInvestigation
@@ -157,6 +159,11 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+private sealed class AgentToolSidePaneState {
+    data class SingleFile(val diff: AgentFileDiff) : AgentToolSidePaneState()
+    data class FileChangesReview(val snapshot: AgentThreadChangeSnapshot) : AgentToolSidePaneState()
+}
 
 @Composable
 internal fun AgentTaskDetail(
@@ -195,16 +202,12 @@ internal fun AgentTaskDetail(
     var followUpValue by remember(task.id) { mutableStateOf(TextFieldValue("")) }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
-    var changeSummary by remember(task.id) { mutableStateOf<AgentChangeSummary?>(null) }
-    var changedFilesExpanded by remember(task.id) { mutableStateOf(false) }
-    var showAllChangedFiles by remember(task.id) { mutableStateOf(false) }
-    var expandedDiffPath by remember(task.id) { mutableStateOf<String?>(null) }
-    var loadedFileDiffs by remember(task.id) { mutableStateOf<Map<String, AgentFileDiff>>(emptyMap()) }
-    var loadingDiffPath by remember(task.id) { mutableStateOf<String?>(null) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
-    var toolDiffPane by remember(task.id) { mutableStateOf<AgentFileDiff?>(null) }
+    var toolSidePane by remember(task.id) { mutableStateOf<AgentToolSidePaneState?>(null) }
     var filePreviewPane by remember(task.id) { mutableStateOf<FileLinkPreviewState?>(null) }
     var toolSidePaneWidth by remember(task.id) { mutableStateOf(420f) }
+    var undoError by remember(task.id) { mutableStateOf<String?>(null) }
+    var pendingConfirmation by remember(task.id) { mutableStateOf<PendingConfirmation?>(null) }
     val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
         listOfNotNull(task.worktreePath, task.cwd, task.originDir).distinct()
     }
@@ -239,30 +242,15 @@ internal fun AgentTaskDetail(
     LaunchedEffect(hasStagedImages) {
         if (hasStagedImages) scrollToLatestRequest++
     }
-    LaunchedEffect(task.id, task.isActive, task.status) {
-        if (!task.isActive) {
-            changeSummary = task.completedChanges?.summary ?: services.agentRuns.changeSummary(task.id)
-            loadedFileDiffs = task.completedChanges?.diffs.orEmpty()
-            withFrameMillis { }
-            withFrameMillis { }
-        } else {
-            changeSummary = null
-            loadedFileDiffs = emptyMap()
-        }
-    }
+    val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
     LaunchedEffect(task.id, task.status) {
-        // While the live CLI owns the pane, skip worktree diff fetches — the card is hidden
-        // then, and refetching only changed bottom height mid-turn.
         if (task.worktreePath != null && !task.isActive) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
         }
-        expandedDiffPath = null
-        loadingDiffPath = null
     }
 
     val supportsResume = true
     val interactiveTerminalIds by services.agentRuns.interactiveTerminalTaskIds.collectAsState()
-    val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
     val contextStatus = remember(task.id, transcriptEvents, task.contextTokens, task.inputTokens, task.contextWindowTokens) {
         agentContextWindowStatus(task, transcriptEvents)
     }
@@ -468,7 +456,36 @@ internal fun AgentTaskDetail(
     }
 
     fun openToolFile(content: ToolCallFileContent) {
-        toolDiffPane = diffFromToolCallFileContent(content)
+        toolSidePane = AgentToolSidePaneState.SingleFile(diffFromToolCallFileContent(content))
+    }
+
+    fun openFileChangesReview(change: AgentEvent.FileChanges) {
+        toolSidePane = AgentToolSidePaneState.FileChangesReview(change.snapshot)
+    }
+
+    fun requestUndoFileChanges(change: AgentEvent.FileChanges) {
+        val fileCount = change.snapshot.summary.files.size
+        pendingConfirmation = PendingConfirmation(
+            title = "Undo these changes?",
+            message = "This will revert $fileCount ${if (fileCount == 1) "file" else "files"} to their state before this edit.",
+            confirmLabel = "Undo",
+        ) {
+            scope.launch {
+                undoError = null
+                val result = if (change.batchId.startsWith("synthetic-")) {
+                    services.agentRuns.undoChangeSnapshot(task.id, change.snapshot)
+                } else {
+                    services.agentRuns.undoFileChanges(
+                        task.id,
+                        change.batchId,
+                        change.groupedBatchIds,
+                    )
+                }
+                if (!result.isSuccess) {
+                    undoError = result.stderr.ifBlank { "Undo failed" }
+                }
+            }
+        }
     }
 
     /** Handles a markdown link click that isn't a real web URL — opens it in Andy's own code viewer instead. */
@@ -502,25 +519,19 @@ internal fun AgentTaskDetail(
         }
     }
 
-    fun toggleFileDiff(path: String) {
-        if (expandedDiffPath == path) {
-            expandedDiffPath = null
-            return
-        }
-        expandedDiffPath = path
-        if (path in loadedFileDiffs) return
-        loadingDiffPath = path
-        scope.launch {
-            val diff = services.agentRuns.fileDiff(task.id, path)
-            if (diff != null) loadedFileDiffs = loadedFileDiffs + (path to diff)
-            if (loadingDiffPath == path) loadingDiffPath = null
-        }
-    }
-
     CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
     Box(modifier.onGloballyPositioned { detailRootCoordinates = it }) {
+    pendingConfirmation?.let { confirmation ->
+        ConfirmationDialog(confirmation, { pendingConfirmation = null }) {
+            pendingConfirmation = null
+            confirmation.onConfirm()
+        }
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
+            Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        undoError?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
         // Only guess at an app restart when we have no concrete provider error to show.
@@ -620,7 +631,6 @@ internal fun AgentTaskDetail(
                 .heightIn(
                     min = when {
                         hasStagedImages -> 120.dp
-                        !acpTask && changedFilesExpanded -> 96.dp
                         else -> 280.dp
                     },
                 )
@@ -665,33 +675,15 @@ internal fun AgentTaskDetail(
                                 )
                             }
                         },
-                        trailingContent = changeSummary
-                            ?.takeIf { it.files.isNotEmpty() }
-                            ?.let { summary ->
-                                {
-                                    AgentChangeSummaryCard(
-                                        summary = summary,
-                                        filesExpanded = changedFilesExpanded,
-                                        onFilesExpandedChange = { changedFilesExpanded = it },
-                                        showAllFiles = showAllChangedFiles,
-                                        onShowAllFilesChange = { showAllChangedFiles = it },
-                                        expandedPath = expandedDiffPath,
-                                        loadingPath = loadingDiffPath,
-                                        diffs = loadedFileDiffs,
-                                        viewMode = diffViewMode,
-                                        onViewModeChange = { diffViewMode = it },
-                                        onToggleFile = { path -> toggleFileDiff(path) },
-                                        fileListMaxHeight = null,
-                                    )
-                                }
-                            },
                         activePermissionRequestId = pendingPermissionId,
                         onToolFileOpen = ::openToolFile,
+                        onFileChangesReview = ::openFileChangesReview,
+                        onFileChangesUndo = ::requestUndoFileChanges,
                         knownTasks = knownAgentTasks,
                         currentTaskId = task.id,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
-                    if (filePreviewPane != null || toolDiffPane != null) {
+                    if (filePreviewPane != null || toolSidePane != null) {
                         PaneDivider(
                             onDrag = { dragX ->
                                 toolSidePaneWidth = (toolSidePaneWidth - dragX).coerceIn(280f, 900f)
@@ -706,14 +698,22 @@ internal fun AgentTaskDetail(
                             onClose = { filePreviewPane = null },
                             modifier = Modifier.width(toolSidePaneWidth.dp).fillMaxHeight(),
                         )
-                    } ?: toolDiffPane?.let { diff ->
-                        AgentToolDiffSidePane(
-                            diff = diff,
+                    } ?: when (val pane = toolSidePane) {
+                        is AgentToolSidePaneState.SingleFile -> AgentToolDiffSidePane(
+                            diff = pane.diff,
                             viewMode = diffViewMode,
                             onViewModeChange = { diffViewMode = it },
-                            onClose = { toolDiffPane = null },
+                            onClose = { toolSidePane = null },
                             modifier = Modifier.width(toolSidePaneWidth.dp).fillMaxHeight(),
                         )
+                        is AgentToolSidePaneState.FileChangesReview -> AgentChangesReviewSidePane(
+                            snapshot = pane.snapshot,
+                            viewMode = diffViewMode,
+                            onViewModeChange = { diffViewMode = it },
+                            onClose = { toolSidePane = null },
+                            modifier = Modifier.width(toolSidePaneWidth.dp).fillMaxHeight(),
+                        )
+                        null -> Unit
                     }
                 }
             } else {
@@ -728,22 +728,8 @@ internal fun AgentTaskDetail(
             }
         }
         if (!acpTask && showCompletedTurnChrome) {
-            val summary = changeSummary?.takeIf { it.files.isNotEmpty() }
-            if (workedForLabel != null || summary != null) {
-                AgentChangeSummaryCard(
-                    summary = summary,
-                    workedHeadline = workedForLabel,
-                    filesExpanded = changedFilesExpanded,
-                    onFilesExpandedChange = { changedFilesExpanded = it },
-                    showAllFiles = showAllChangedFiles,
-                    onShowAllFilesChange = { showAllChangedFiles = it },
-                    expandedPath = expandedDiffPath,
-                    loadingPath = loadingDiffPath,
-                    diffs = loadedFileDiffs,
-                    viewMode = diffViewMode,
-                    onViewModeChange = { diffViewMode = it },
-                    onToggleFile = { path -> toggleFileDiff(path) },
-                )
+            workedForLabel?.let { headline ->
+                Text(headline, color = TextSecondary, fontFamily = MonoFont, fontSize = 12.sp)
             }
         }
 
@@ -1660,170 +1646,3 @@ private fun String.removeSelectedSkill(skill: AgentSkill): String =
     replace(Regex("(?:^|\\s)/${Regex.escape(skill.name)}(?=\\s|$)"), " ")
         .replace(Regex(" {2,}"), " ")
         .trim()
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun AgentChangeSummaryCard(
-    summary: AgentChangeSummary?,
-    filesExpanded: Boolean,
-    onFilesExpandedChange: (Boolean) -> Unit,
-    showAllFiles: Boolean,
-    onShowAllFilesChange: (Boolean) -> Unit,
-    expandedPath: String?,
-    loadingPath: String?,
-    diffs: Map<String, AgentFileDiff>,
-    viewMode: DiffViewMode,
-    onViewModeChange: (DiffViewMode) -> Unit,
-    onToggleFile: (String) -> Unit,
-    workedHeadline: String? = null,
-    /** Cap + scroll the expanded list so it cannot overflow a terminal canvas. Null lets a transcript scroll instead. */
-    fileListMaxHeight: Dp? = 220.dp,
-) {
-    val files = summary?.files.orEmpty()
-    val displayedFiles = if (showAllFiles) files else files.take(3)
-    val remaining = files.size - displayedFiles.size
-    val expandable = files.isNotEmpty()
-    PanelCard(
-        modifier = Modifier.fillMaxWidth(),
-        background = AndyColors.SurfaceRaised,
-        contentPadding = PaddingValues(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-    ) {
-        FlowRow(
-            Modifier
-                .fillMaxWidth()
-                .then(
-                    if (expandable) {
-                        Modifier
-                            .pointerHoverIcon(PointerIcon.Hand)
-                            .clickable { onFilesExpandedChange(!filesExpanded) }
-                    } else {
-                        Modifier
-                    },
-                ),
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            if (expandable) {
-                Text(
-                    if (filesExpanded) "v" else ">",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    modifier = Modifier.width(10.dp),
-                )
-            }
-            workedHeadline?.let { headline ->
-                Text(
-                    headline,
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 12.sp,
-                )
-            }
-            if (files.isNotEmpty() && summary != null) {
-                Text(
-                    "Edited ${files.size} ${if (files.size == 1) "file" else "files"}",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 12.sp,
-                )
-                Text("+${summary.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
-                Text("-${summary.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
-            }
-        }
-        if (expandable && filesExpanded) {
-            val listModifier = Modifier
-                .fillMaxWidth()
-                .then(if (fileListMaxHeight != null) Modifier.heightIn(max = fileListMaxHeight) else Modifier)
-                .then(if (fileListMaxHeight != null) Modifier.verticalScroll(rememberScrollState()) else Modifier)
-                .padding(start = 12.dp)
-            Column(
-                listModifier,
-                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            ) {
-                displayedFiles.forEach { file ->
-                    // This interactive row is nested in the transcript's SelectionContainer.
-                    // Opt out so the file link keeps its hand cursor rather than a text cursor.
-                    DisableSelection {
-                        ChangedFileRow(
-                            file = file,
-                            expanded = expandedPath == file.path,
-                            loading = loadingPath == file.path,
-                            diff = diffs[file.path],
-                            viewMode = viewMode,
-                            onViewModeChange = onViewModeChange,
-                            onToggle = { onToggleFile(file.path) },
-                        )
-                    }
-                }
-                if (remaining > 0 || showAllFiles) {
-                    OutlinedButton(
-                        onClick = { onShowAllFilesChange(!showAllFiles) },
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 1.dp),
-                    ) {
-                        Text(if (showAllFiles) "show fewer files" else "show $remaining more files", fontSize = 10.sp)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChangedFileRow(
-    file: AgentFileChange,
-    expanded: Boolean,
-    loading: Boolean,
-    diff: AgentFileDiff?,
-    viewMode: DiffViewMode,
-    onViewModeChange: (DiffViewMode) -> Unit,
-    onToggle: () -> Unit,
-) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(
-            Modifier.fillMaxWidth()
-                .pointerHoverIcon(PointerIcon.Hand)
-                .clickable(onClick = onToggle),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                if (expanded) "v" else ">",
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                modifier = Modifier.width(10.dp),
-            )
-            Text(
-                file.path,
-                color = Cyan,
-                fontFamily = MonoFont,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textDecoration = TextDecoration.Underline,
-                modifier = Modifier.weight(1f).pointerHoverIcon(PointerIcon.Hand),
-            )
-            Text("+${file.additions}", color = Green, fontFamily = MonoFont, fontSize = 11.sp)
-            Text("-${file.deletions}", color = Red, fontFamily = MonoFont, fontSize = 11.sp)
-        }
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
-        ) {
-            when {
-                loading && diff == null -> Text("loading diff…", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-                diff == null -> Text("diff unavailable", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-                else -> AgentFileDiffViewer(
-                    diff = diff,
-                    viewMode = viewMode,
-                    onViewModeChange = onViewModeChange,
-                    onCollapse = onToggle,
-                )
-            }
-        }
-    }
-}

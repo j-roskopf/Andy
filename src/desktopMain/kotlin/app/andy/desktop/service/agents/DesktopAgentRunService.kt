@@ -27,6 +27,8 @@ import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentToolKind
+import app.andy.model.AgentToolState
+import app.andy.model.AcpToolCallPresentation
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
@@ -235,6 +237,18 @@ class DesktopAgentRunService(
     /** Outstanding ACP session-mode syncs; [resume] awaits these so Implement doesn't race plan→agent. */
     private val acpPlanModeSyncJobs = ConcurrentHashMap<String, Job>()
 
+    private data class PendingEditBatch(
+        var baselineTree: String? = null,
+        val paths: MutableSet<String> = mutableSetOf(),
+        var needsPreEditBaseline: Boolean = false,
+    )
+
+    private val pendingEditBatches = ConcurrentHashMap<String, PendingEditBatch>()
+    private val fileChangesEnrichmentJobs = ConcurrentHashMap<String, Job>()
+    private val fileChangesEnrichmentMutex = ConcurrentHashMap<String, Mutex>()
+
+    private val mutatingToolKinds = setOf(AgentToolKind.Edit, AgentToolKind.Delete, AgentToolKind.Move)
+
     /**
      * Serializes minting a brand-new `agy` conversation per workspace. `agy` only exposes
      * "the last conversation used in this workspace" as a single global pointer, not
@@ -418,6 +432,31 @@ class DesktopAgentRunService(
     /** True while the chat is mounted in the UI, focused or not. */
     internal fun isChatOpen(taskId: String): Boolean = taskId in viewingTaskIds
 
+    /** Test-only: transcript path for seeding ACP events on disk. */
+    internal fun testTranscriptFile(taskId: String): File = resolvedTranscriptFile(taskId)
+
+    /** Test-only: run file-changes enrichment immediately without debounce. */
+    internal suspend fun testRunFileChangesEnrichmentNow(
+        taskId: String,
+        flushBatch: Boolean = false,
+        synthesizeTurn: Boolean = false,
+        atMillis: Long = System.currentTimeMillis(),
+    ) {
+        fileChangesEnrichmentMutex.computeIfAbsent(taskId) { Mutex() }.withLock {
+            runFileChangesEnrichment(taskId, flushBatch, synthesizeTurn, atMillis)
+        }
+    }
+
+    /** Test-only: wait for any in-flight debounced enrichment jobs. */
+    internal suspend fun testAwaitFileChangesEnrichmentJobs() {
+        fileChangesEnrichmentJobs.values.forEach { job -> job.join() }
+    }
+
+    /** Test-only: append ACP transcript events through the live enrichment pipeline. */
+    internal fun testAppendAcpEvents(taskId: String, events: List<AgentEvent>) {
+        appendEvents(taskId, events)
+    }
+
     /** True while the local PTY viewer attached to tmux is still running. */
     internal fun isViewerAlive(taskId: String): Boolean = terminals.isViewerAlive(taskId)
 
@@ -591,7 +630,7 @@ class DesktopAgentRunService(
             }
             .sortedByDescending { it.createdAtMillis }
             .mapNotNull { task ->
-                loadAcpEventsForDisplay(task.id)
+                acpTranscriptStore.load(task.id)
                     .asReversed()
                     .filterIsInstance<AgentEvent.AvailableCommands>()
                     .firstOrNull()
@@ -2034,7 +2073,7 @@ class DesktopAgentRunService(
     }
 
     private fun availableAcpModes(taskId: String): List<app.andy.model.AgentSessionMode> =
-        loadAcpEventsForDisplay(taskId)
+        loadAcpEventsFromStore(taskId)
             .filterIsInstance<AgentEvent.AvailableModes>()
             .lastOrNull()
             ?.modes
@@ -3134,6 +3173,8 @@ class DesktopAgentRunService(
         if (!keepTerminal) {
             handles.remove(taskId)
         }
+        fileChangesEnrichmentJobs.remove(taskId)?.cancel()
+        pendingEditBatches.remove(taskId)
         scope.launch {
             persist()
             reconcileWorkflowRun(taskId)
@@ -3368,8 +3409,8 @@ class DesktopAgentRunService(
         currentTask(taskId) ?: return emptyEvents
         return eventFlows.computeIfAbsent(taskId) {
             MutableStateFlow(
-                if (currentTask(taskId)?.lane == AgentLaneKind.Acp) loadAcpEventsForDisplay(taskId) else emptyList(),
-            )
+                if (currentTask(taskId)?.lane == AgentLaneKind.Acp) loadAcpEventsFromStore(taskId) else emptyList(),
+            ).also { scheduleFileChangesEnrichment(taskId) }
         }
     }
 
@@ -3481,24 +3522,240 @@ class DesktopAgentRunService(
         worktrees.fileDiff(cwd, relativePath, task.changeBaselineTree)
     }
 
+    override suspend fun undoFileChanges(
+        taskId: String,
+        batchId: String,
+        groupedBatchIds: List<String>,
+    ): CommandResult = withContext(Dispatchers.IO) {
+        val batchIds = groupedBatchIds.ifEmpty { listOf(batchId) }.distinct()
+        batchIds.asReversed().forEach { id ->
+            val result = undoSingleFileChangesBatch(taskId, id)
+            if (!result.isSuccess) return@withContext result
+        }
+        CommandResult.success()
+    }
+
+    private suspend fun undoSingleFileChangesBatch(taskId: String, batchId: String): CommandResult {
+        val task = currentTask(taskId) ?: return CommandResult.failure("task not found")
+        val cwd = task.cwd ?: return CommandResult.failure("no working directory")
+        val changeEvent = fileChangesEventsForUndo(taskId, task)
+            .lastOrNull { it.batchId == batchId && !it.undone }
+            ?: return CommandResult.failure("edit batch not found")
+        val snapshot = enrichedUndoSnapshot(cwd, changeEvent.baselineTree, changeEvent.snapshot)
+        worktrees.restorePaths(cwd, changeEvent.baselineTree, snapshot)
+            .getOrElse { return CommandResult.failure(it.message ?: "undo failed") }
+        if (task.lane == AgentLaneKind.Acp) {
+            acpTranscriptStore.markFileChangesUndone(taskId, batchId)
+        }
+        eventFlows[taskId]?.update { existing ->
+            existing.map { event ->
+                if (event is AgentEvent.FileChanges && event.batchId == batchId) {
+                    event.copy(undone = true)
+                } else {
+                    event
+                }
+            }
+        }
+        return CommandResult.success()
+    }
+
+    override suspend fun undoChangeSnapshot(
+        taskId: String,
+        snapshot: AgentThreadChangeSnapshot,
+    ): CommandResult = withContext(Dispatchers.IO) {
+        val task = currentTask(taskId) ?: return@withContext CommandResult.failure("task not found")
+        val cwd = task.cwd ?: return@withContext CommandResult.failure("no working directory")
+        val baseline = task.changeBaselineTree
+            ?: return@withContext CommandResult.failure("no change baseline")
+        if (snapshot.summary.files.isEmpty()) {
+            return@withContext CommandResult.failure("nothing to undo")
+        }
+        val enriched = enrichedUndoSnapshot(cwd, baseline, snapshot)
+        worktrees.restorePaths(cwd, baseline, enriched)
+            .getOrElse { return@withContext CommandResult.failure(it.message ?: "undo failed") }
+        updateTask(taskId) { t ->
+            t.copy(completedChanges = null)
+        }
+        CommandResult.success()
+    }
+
     /**
      * Repo-relative paths this task's own tool calls edited/deleted/moved, per its transcript —
      * used to scope [changeSummary] to the agent's actual work instead of the whole working tree.
      * Empty when the task has no structured tool-call locations yet (e.g. the Terminal lane),
      * in which case the caller falls back to a whole-directory diff.
      */
-    private fun touchedPaths(taskId: String, cwd: String): Set<String> {
+    private fun fileChangesEventsForUndo(taskId: String, task: AgentTask): List<AgentEvent.FileChanges> {
+        val inMemory = eventFlows[taskId]?.value.orEmpty()
+        val persisted = when (task.lane) {
+            AgentLaneKind.Acp -> loadAcpEventsFromStore(taskId)
+            AgentLaneKind.Terminal -> inMemory
+        }
+        return (inMemory + persisted)
+            .filterIsInstance<AgentEvent.FileChanges>()
+            .distinctBy { it.batchId }
+    }
+
+    private fun enrichedUndoSnapshot(
+        cwd: String,
+        baselineTree: String,
+        snapshot: AgentThreadChangeSnapshot,
+    ): AgentThreadChangeSnapshot {
+        if (snapshot.diffs.isNotEmpty()) return snapshot
+        val paths = snapshot.summary.files.map { it.path }
+        return worktrees.changeSnapshot(cwd, baselineTree, paths) ?: snapshot
+    }
+
+    private fun touchedPaths(taskId: String, cwd: String): Set<String> =
+        touchedPathsFromTranscriptEvents(
+            events = acpTranscriptStore.load(taskId),
+            cwd = cwd,
+            isMutatingToolCall = ::isMutatingToolCall,
+            toolCallPathCandidates = ::toolCallPathCandidates,
+        )
+
+    private fun touchedPathsFromEvents(events: List<AgentEvent>, cwd: String): Set<String> =
+        touchedPathsFromTranscriptEvents(
+            events = events,
+            cwd = cwd,
+            isMutatingToolCall = ::isMutatingToolCall,
+            toolCallPathCandidates = ::toolCallPathCandidates,
+        )
+
+    private fun effectiveToolKind(event: AgentEvent.ToolCall): AgentToolKind? =
+        event.kind?.takeUnless { it == AgentToolKind.Other }
+            ?: AcpToolCallPresentation.inferKindFromTitle(event.toolName)
+            ?: AcpToolCallPresentation.inferKindFromArguments(event.detail)
+            ?: inferEditKindFromFileSummary(event)
+
+    /** Cursor often titles edits with just the filename while reporting [AgentToolKind.Other]. */
+    private fun inferEditKindFromFileSummary(event: AgentEvent.ToolCall): AgentToolKind? {
+        if (AcpToolCallPresentation.inferKindFromTitle(event.toolName) == AgentToolKind.Read) return null
+        val summary = event.summary.trim()
+        if (summary.isBlank()) return null
+        val looksLikePath = app.andy.domain.looksLikeFilePath(summary) ||
+            (summary.contains('.') && !summary.contains(' '))
+        if (!looksLikePath) return null
+        return when (AcpToolCallPresentation.inferKindFromArguments(event.detail)) {
+            AgentToolKind.Edit, AgentToolKind.Delete, AgentToolKind.Move -> AgentToolKind.Edit
+            else -> null
+        }
+    }
+
+    private fun isMutatingToolCall(event: AgentEvent.ToolCall): Boolean =
+        effectiveToolKind(event) in mutatingToolKinds
+
+    private fun toolCallPathCandidates(event: AgentEvent.ToolCall): List<String> {
+        val fromLocations = event.locations.map { it.trim() }.filter { it.isNotBlank() }
+        if (fromLocations.isNotEmpty()) return fromLocations
+        val fromContent = app.andy.domain.parseToolCallFileContent(event.detail)?.path?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (fromContent != null) return listOf(fromContent)
+        val fromSummary = event.summary.trim().takeIf {
+            app.andy.domain.looksLikeFilePath(it) || it.contains('/') || it.contains('.')
+        }
+        return listOfNotNull(fromSummary)
+    }
+
+    private fun relativeRepoPaths(taskId: String, cwd: String, locations: Collection<String>): Set<String> {
         val root = runCatching { File(cwd).canonicalFile }.getOrNull() ?: return emptySet()
-        return loadAcpEventsForDisplay(taskId)
-            .filterIsInstance<AgentEvent.ToolCall>()
-            .filter { it.kind == AgentToolKind.Edit || it.kind == AgentToolKind.Delete || it.kind == AgentToolKind.Move }
-            .flatMap { it.locations }
-            .mapNotNullTo(mutableSetOf()) { location ->
-                val file = File(location).let { if (it.isAbsolute) it else File(root, location) }
-                val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return@mapNotNullTo null
-                val relative = runCatching { canonical.relativeTo(root) }.getOrNull() ?: return@mapNotNullTo null
-                relative.invariantSeparatorsPath.takeUnless { it.startsWith("..") }
+        return locations.mapNotNullTo(mutableSetOf()) { location -> relativeRepoPath(root, location) }
+    }
+
+    private fun relativeRepoPath(root: File, location: String): String? {
+        val file = File(location).let { if (it.isAbsolute) it else File(root, location) }
+        val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return null
+        val relative = runCatching { canonical.relativeTo(root) }.getOrNull() ?: return null
+        return relative.invariantSeparatorsPath.takeUnless { it.startsWith("..") }
+    }
+
+    private fun shouldFlushEditBatchBefore(event: AgentEvent): Boolean = when (event) {
+        is AgentEvent.UserMessage -> true
+        is AgentEvent.TaskResult, is AgentEvent.TaskError -> true
+        else -> false
+    }
+
+    private fun trackEditToolCall(taskId: String, event: AgentEvent.ToolCall, cwd: String) {
+        if (!isMutatingToolCall(event) || event.state == AgentToolState.Failed) return
+        if (currentTask(taskId)?.status == AgentStatus.Blocked) return
+        val batch = pendingEditBatches.computeIfAbsent(taskId) {
+            PendingEditBatch(
+                baselineTree = currentTask(taskId)?.changeBaselineTree,
+                needsPreEditBaseline = event.state in setOf(AgentToolState.Pending, AgentToolState.InProgress),
+            )
+        }
+        if (
+            batch.baselineTree == null &&
+            batch.needsPreEditBaseline &&
+            event.state in setOf(AgentToolState.Pending, AgentToolState.InProgress)
+        ) {
+            captureEditBatchBaselineAsync(taskId, cwd)
+        }
+        if (event.state == AgentToolState.Completed) {
+            if (batch.baselineTree == null) {
+                batch.baselineTree = currentTask(taskId)?.changeBaselineTree
+                if (batch.baselineTree == null) captureEditBatchBaselineAsync(taskId, cwd)
             }
+            batch.paths.addAll(relativeRepoPaths(taskId, cwd, toolCallPathCandidates(event)))
+        }
+    }
+
+    private fun captureEditBatchBaselineAsync(taskId: String, cwd: String) {
+        scope.launch(Dispatchers.IO) {
+            val baseline = worktrees.captureChangeBaseline(cwd) ?: return@launch
+            pendingEditBatches[taskId]?.let { batch ->
+                if (batch.baselineTree == null) batch.baselineTree = baseline
+            }
+        }
+    }
+
+    private fun resolveEditBatchBaseline(batch: PendingEditBatch, task: AgentTask, cwd: String): String? {
+        batch.baselineTree?.let { return it }
+        task.changeBaselineTree?.let {
+            batch.baselineTree = it
+            return it
+        }
+        return worktrees.captureChangeBaseline(cwd)?.also { batch.baselineTree = it }
+    }
+
+    private fun flushEditBatch(taskId: String, atMillis: Long): AgentEvent.FileChanges? {
+        val batch = pendingEditBatches.remove(taskId) ?: return null
+        val task = currentTask(taskId) ?: return null
+        val cwd = task.cwd ?: return null
+        if (batch.paths.isEmpty()) return null
+        val baseline = resolveEditBatchBaseline(batch, task, cwd) ?: return null
+        val snapshot = worktrees.changeSnapshot(cwd, baseline, batch.paths.toList()) ?: return null
+        if (snapshot.summary.files.isEmpty()) return null
+        return AgentEvent.FileChanges(
+            atMillis = atMillis,
+            batchId = UUID.randomUUID().toString(),
+            baselineTree = baseline,
+            snapshot = snapshot,
+        )
+    }
+
+    /**
+     * Safety net when per-burst tracking missed edits (e.g. providers that report Edit as Other
+     * with no locations). Emits at most one FileChanges card per user turn from the task baseline.
+     */
+    private fun synthesizeTurnFileChanges(taskId: String, atMillis: Long, events: List<AgentEvent>): AgentEvent.FileChanges? {
+        val task = currentTask(taskId) ?: return null
+        val cwd = task.cwd ?: return null
+        val baseline = task.changeBaselineTree ?: return null
+        val lastUserIndex = events.indexOfLast { it is AgentEvent.UserMessage }
+        val alreadyEmitted = events
+            .drop((lastUserIndex + 1).coerceAtLeast(0))
+            .any { it is AgentEvent.FileChanges && !it.undone }
+        if (alreadyEmitted) return null
+        val paths = touchedPathsFromEvents(events, cwd).takeIf { it.isNotEmpty() }
+        val snapshot = worktrees.changeSnapshot(cwd, baseline, paths) ?: return null
+        if (snapshot.summary.files.isEmpty()) return null
+        return AgentEvent.FileChanges(
+            atMillis = atMillis,
+            batchId = UUID.randomUUID().toString(),
+            baselineTree = baseline,
+            snapshot = snapshot,
+        )
     }
 
     override suspend fun refreshCliStatuses() {
@@ -5119,8 +5376,92 @@ class DesktopAgentRunService(
         _tasks.update { list -> list.map { if (it.id == taskId) transform(it) else it } }
     }
 
-    private fun loadAcpEventsForDisplay(taskId: String): List<AgentEvent> =
+    private fun loadAcpEventsFromStore(taskId: String): List<AgentEvent> =
         coalesceAcpTranscriptEvents(acpTranscriptStore.load(taskId))
+
+    /**
+     * Older transcripts may have mutating tool calls but no persisted file-changes rows
+     * (before batch tracking landed). Synthesize one inline card per turn segment on IO only.
+     */
+    private fun enrichTranscriptFileChangesIncremental(
+        taskId: String,
+        task: AgentTask,
+        events: List<AgentEvent>,
+    ): FileChangesEnrichmentResult {
+        val cwd = task.cwd ?: return FileChangesEnrichmentResult(events, emptyList())
+        val baseline = task.changeBaselineTree ?: return FileChangesEnrichmentResult(events, emptyList())
+        return AgentFileChangesEnrichment.enrichIncremental(
+            worktrees = worktrees,
+            cwd = cwd,
+            baseline = baseline,
+            events = events,
+            segmentPaths = { segment ->
+                relativeRepoPaths(
+                    taskId,
+                    cwd,
+                    segment
+                        .filterIsInstance<AgentEvent.ToolCall>()
+                        .filter { it.state == AgentToolState.Completed && isMutatingToolCall(it) }
+                        .flatMap { toolCallPathCandidates(it) },
+                )
+            },
+        )
+    }
+
+    private fun scheduleFileChangesEnrichment(
+        taskId: String,
+        flushBatch: Boolean = false,
+        synthesizeTurn: Boolean = false,
+        atMillis: Long = System.currentTimeMillis(),
+    ) {
+        val task = currentTask(taskId) ?: return
+        if (task.lane != AgentLaneKind.Acp) return
+        fileChangesEnrichmentJobs[taskId]?.cancel()
+        fileChangesEnrichmentJobs[taskId] = scope.launch {
+            delay(400)
+            fileChangesEnrichmentMutex.computeIfAbsent(taskId) { Mutex() }.withLock {
+                runFileChangesEnrichment(taskId, flushBatch, synthesizeTurn, atMillis)
+            }
+        }
+    }
+
+    private suspend fun runFileChangesEnrichment(
+        taskId: String,
+        flushBatch: Boolean,
+        synthesizeTurn: Boolean,
+        atMillis: Long,
+    ) {
+        withContext(Dispatchers.IO) {
+            val task = currentTask(taskId) ?: return@withContext
+            if (task.lane != AgentLaneKind.Acp) return@withContext
+            if (task.status == AgentStatus.Blocked) return@withContext
+
+            flushEditBatch(taskId, atMillis)?.let { acpTranscriptStore.append(taskId, it) }
+            val storeAfterFlush = acpTranscriptStore.load(taskId)
+            if (synthesizeTurn) {
+                synthesizeTurnFileChanges(taskId, atMillis, storeAfterFlush)?.let {
+                    acpTranscriptStore.append(taskId, it)
+                }
+            }
+
+            val raw = acpTranscriptStore.load(taskId)
+            val enrichment = enrichTranscriptFileChangesIncremental(taskId, task, raw)
+            enrichment.newlyPersisted.forEach { acpTranscriptStore.append(taskId, it) }
+
+            val display = if (enrichment.newlyPersisted.isEmpty()) {
+                AgentFileChangesEnrichment.coalescedDisplay(raw)
+            } else {
+                enrichTranscriptFileChangesIncremental(
+                    taskId,
+                    task,
+                    acpTranscriptStore.load(taskId),
+                ).display
+            }
+            eventFlows[taskId]?.update { current ->
+                if (AgentFileChangesEnrichment.displayEventsEqual(current, display)) current else display
+            }
+        }
+    }
 
     private fun readPlanFromDisk(task: AgentTask): String? = runCatching {
         AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
@@ -5159,8 +5500,11 @@ class DesktopAgentRunService(
         val task = currentTask(taskId) ?: return
         if (task.lane != AgentLaneKind.Acp) return
         scope.launch(Dispatchers.IO) {
-            val loaded = loadAcpEventsForDisplay(taskId)
+            val loaded = loadAcpEventsFromStore(taskId)
             eventFlows.computeIfAbsent(taskId) { MutableStateFlow(loaded) }.value = loaded
+            if (task.status != AgentStatus.Blocked) {
+                scheduleFileChangesEnrichment(taskId)
+            }
             if (task.planMode && task.status == AgentStatus.Done && task.completedPlanText.isNullOrBlank()) {
                 resolveCompletedPlanText(taskId, task)?.let { plan ->
                     updateTask(taskId) { current ->
@@ -5175,9 +5519,27 @@ class DesktopAgentRunService(
     private fun appendEvents(taskId: String, events: List<AgentEvent>) {
         if (events.isEmpty()) return
         val task = currentTask(taskId)
+        val cwd = task?.cwd
+        var needsFlush = false
+        events.forEach { event ->
+            if (shouldFlushEditBatchBefore(event)) needsFlush = true
+            if (event is AgentEvent.ToolCall && cwd != null) trackEditToolCall(taskId, event, cwd)
+        }
+        appendEventsDirect(taskId, events)
+        if (needsFlush) {
+            val atMillis = events.lastOrNull()?.atMillis ?: System.currentTimeMillis()
+            scheduleFileChangesEnrichment(taskId, flushBatch = true, atMillis = atMillis)
+        } else if (task?.lane == AgentLaneKind.Acp) {
+            scheduleFileChangesEnrichment(taskId)
+        }
+    }
+
+    private fun appendEventsDirect(taskId: String, events: List<AgentEvent>) {
+        if (events.isEmpty()) return
+        val task = currentTask(taskId)
         val isAcp = task?.lane == AgentLaneKind.Acp
         val flow = eventFlows.computeIfAbsent(taskId) {
-            MutableStateFlow(if (isAcp) loadAcpEventsForDisplay(taskId) else emptyList())
+            MutableStateFlow(if (isAcp) loadAcpEventsFromStore(taskId) else emptyList())
         }
         val filterReplay = taskId in acpSuppressProviderReplay
         val replayScratch = if (filterReplay) {
@@ -5236,18 +5598,31 @@ class DesktopAgentRunService(
     private fun appendTurnCompletionEvent(taskId: String, success: Boolean) {
         val task = currentTask(taskId) ?: return
         val finishedAt = task.finishedAtMillis ?: System.currentTimeMillis()
-        val events = eventFlows[taskId]?.value.orEmpty()
-        val result = turnCompletionResult(
-            events = events,
-            startedAtMillis = task.startedAtMillis,
-            finishedAtMillis = finishedAt,
-            success = success,
-            costUsd = task.totalCostUsd,
-            costIsEstimated = task.costIsEstimated,
-            inputTokens = task.inputTokens,
-            outputTokens = task.outputTokens,
-        ) ?: return
-        appendEvents(taskId, listOf(result))
+        fileChangesEnrichmentJobs.remove(taskId)?.cancel()
+        scope.launch {
+            fileChangesEnrichmentMutex.computeIfAbsent(taskId) { Mutex() }.withLock {
+                withContext(Dispatchers.IO) {
+                    runFileChangesEnrichment(
+                        taskId = taskId,
+                        flushBatch = true,
+                        synthesizeTurn = true,
+                        atMillis = finishedAt,
+                    )
+                }
+            }
+            val events = eventFlows[taskId]?.value.orEmpty()
+            val result = turnCompletionResult(
+                events = events,
+                startedAtMillis = task.startedAtMillis,
+                finishedAtMillis = finishedAt,
+                success = success,
+                costUsd = task.totalCostUsd,
+                costIsEstimated = task.costIsEstimated,
+                inputTokens = task.inputTokens,
+                outputTokens = task.outputTokens,
+            ) ?: return@launch
+            appendEventsDirect(taskId, listOf(result))
+        }
     }
 
     private fun ensureAcpArtifactMonitor(taskId: String, artifacts: AgentWorkflowArtifacts) {

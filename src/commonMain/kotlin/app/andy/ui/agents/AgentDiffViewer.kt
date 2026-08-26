@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.domain.SplitDiffPair
 import app.andy.domain.buildSplitDiffPairs
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.DiffLine
 import app.andy.model.DiffLineKind
 import app.andy.ui.components.FilterPill
@@ -99,6 +100,101 @@ internal fun AgentToolDiffSidePane(
             maxHeight = null,
             modifier = Modifier.fillMaxSize(),
         )
+    }
+}
+
+@Composable
+internal fun AgentChangesReviewSidePane(
+    snapshot: AgentThreadChangeSnapshot,
+    viewMode: DiffViewMode,
+    onViewModeChange: (DiffViewMode) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val files = snapshot.summary.files
+    var selectedPath by remember(snapshot) { mutableStateOf(files.firstOrNull()?.path) }
+    val selectedDiff = selectedPath?.let { snapshot.diffs[it] }
+
+    PanelCard(
+        modifier = modifier.fillMaxHeight(),
+        borderColor = Color.Transparent,
+        contentPadding = PaddingValues(0.dp),
+        verticalArrangement = Arrangement.Top,
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Review changes",
+                        color = TextPrimary,
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                    )
+                    Text(
+                        "${files.size} ${if (files.size == 1) "file" else "files"}",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                    )
+                }
+                OutlinedButton(onClick = onClose) { Text("Close", fontSize = 11.sp) }
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 160.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                files.forEach { file ->
+                    val selected = file.path == selectedPath
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedPath = file.path }
+                            .background(
+                                if (selected) AndyColors.Neutral850 else Color.Transparent,
+                                androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            file.path.substringAfterLast('/').ifBlank { file.path },
+                            color = if (selected) TextPrimary else TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("+${file.additions}", color = Green, fontFamily = MonoFont, fontSize = 10.sp)
+                        Text("-${file.deletions}", color = Red, fontFamily = MonoFont, fontSize = 10.sp)
+                    }
+                }
+            }
+            selectedDiff?.let { diff ->
+                AgentFileDiffViewer(
+                    diff = diff,
+                    viewMode = viewMode,
+                    onViewModeChange = onViewModeChange,
+                    onCollapse = onClose,
+                    showCollapseControl = false,
+                    showPath = true,
+                    maxHeight = null,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                )
+            } ?: Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Select a file", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+            }
+        }
     }
 }
 

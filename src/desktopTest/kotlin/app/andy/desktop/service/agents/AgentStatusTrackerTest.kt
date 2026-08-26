@@ -1097,40 +1097,6 @@ class AgentStatusTrackerTest {
         }
     }
 
-    @Test
-    fun installAntigravityStatusHooksWritesNamedAndyStatusHook() {
-        val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
-        val previousHome = System.getProperty("user.home")
-        try {
-            System.setProperty("user.home", home.absolutePath)
-            val cwd = File(home, "project").also { it.mkdirs() }
-            val artifacts = File(cwd, ".andy/task-hooks").also { it.mkdirs() }
-            installStatusSignals(AgentKind.Antigravity, cwd, artifacts)
-
-            val hooksFile = File(cwd, ".agents/hooks.json")
-            assertTrue(hooksFile.isFile)
-            val root = kotlinx.serialization.json.Json.parseToJsonElement(hooksFile.readText()).jsonObject
-            assertTrue(root.containsKey("andy-status"))
-            val andy = root["andy-status"]!!.jsonObject
-            assertTrue(andy.containsKey("PreInvocation"))
-            assertTrue(andy.containsKey("Stop"))
-            assertTrue(andy.containsKey("PreToolUse"))
-            val text = hooksFile.readText()
-            assertTrue("ask_question|ask_permission" in text)
-            assertTrue(" fully-idle" in text, "Antigravity Stop must gate done on fullyIdle")
-            assertTrue(
-                Regex("""andy-status-hook\.sh" done empty fully-idle""")
-                    .containsMatchIn(text) ||
-                    Regex("""andy-status-hook\.sh\\" done empty fully-idle""")
-                        .containsMatchIn(text),
-                "Antigravity Stop must use empty respond (not decision:stop)",
-            )
-            assertFalse(" done stop" in text)
-        } finally {
-            System.setProperty("user.home", previousHome)
-            home.deleteRecursively()
-        }
-    }
 
     @Test
     fun statusHookScriptWritesStatusAndOptionalRespondPayload() {
@@ -1409,8 +1375,8 @@ class AgentStatusTrackerTest {
             assertFalse(File(home, ".cursor/hooks.json").exists())
             installStatusSignals(AgentKind.Codex, home, artifacts)
             assertFalse(File(home, ".codex/hooks.json").exists())
-            installStatusSignals(AgentKind.Antigravity, home, artifacts)
-            assertFalse(File(home, ".agents/hooks.json").exists())
+            installStatusSignals(AgentKind.ClaudeCode, home, artifacts)
+            assertFalse(File(home, ".claude/settings.json").exists())
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()

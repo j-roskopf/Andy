@@ -19,6 +19,8 @@ import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.AgentUserInputOption
 import app.andy.domain.parseToolCallFileArguments
+import app.andy.domain.parseToolCallFileContent
+import app.andy.domain.looksLikeFilePath
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -167,18 +169,20 @@ object AcpEventMapper {
         val details = contentDetails
             .ifBlank { listOfNotNull(rawInput, rawOutput).joinToString("\n") }
         val presented = AcpToolCallPresentation.present(title, rawInput, rawOutput, details)
+        val agentKind = resolveToolKind(kind, title, rawInput, details)
+        val resolvedLocations = resolveToolLocations(locations, presented.summary, presented.detail, agentKind)
         val summary = AcpToolCallPresentation.enrichSummary(
             summary = presented.summary,
-            kind = kind.toAgentKind(),
-            locations = locations,
+            kind = agentKind,
+            locations = resolvedLocations,
         )
         // Structured edit calls need their original JSON until the transcript has had a chance to
         // recognize file fields. Attach output separately; ToolBlock formats it after parsing.
         val structuredInput = rawInput?.takeIf {
             content.none { item -> item is ToolCallContent.Diff } &&
-                (kind == ToolKind.EDIT || kind == ToolKind.DELETE || kind == ToolKind.MOVE) &&
+                (agentKind == AgentToolKind.Edit || agentKind == AgentToolKind.Delete || agentKind == AgentToolKind.Move) &&
                 !AcpToolCallPresentation.isMinimalOutput(it) &&
-                parseToolCallFileArguments(it, kind.toAgentKind()) != null
+                parseToolCallFileArguments(it, agentKind) != null
         }
         val detail = structuredInput?.let { input ->
             val extra = listOfNotNull(
@@ -193,11 +197,41 @@ object AcpEventMapper {
             summary = summary,
             detail = detail,
             toolCallId = id,
-            kind = kind.toAgentKind(),
+            kind = agentKind,
             state = status.toAgentState(),
-            locations = locations,
+            locations = resolvedLocations,
             images = content.extractImages(),
         )
+    }
+
+    private fun resolveToolKind(
+        kind: ToolKind,
+        title: String,
+        rawInput: String?,
+        details: String,
+    ): AgentToolKind {
+        val mapped = kind.toAgentKind()
+        if (mapped != AgentToolKind.Other) return mapped
+        return AcpToolCallPresentation.inferKindFromTitle(title)
+            ?: AcpToolCallPresentation.inferKindFromArguments(rawInput.orEmpty())
+            ?: AcpToolCallPresentation.inferKindFromArguments(details)
+            ?: AgentToolKind.Other
+    }
+
+    private fun resolveToolLocations(
+        locations: List<String>,
+        summary: String,
+        detail: String,
+        kind: AgentToolKind,
+    ): List<String> {
+        val fromLocations = locations.map { it.trim() }.filter { it.isNotBlank() }
+        if (fromLocations.isNotEmpty()) return fromLocations
+        val fromContent = parseToolCallFileContent(detail)?.path?.trim()?.takeIf { it.isNotBlank() }
+        if (fromContent != null) return listOf(fromContent)
+        val fromArgs = parseToolCallFileArguments(detail, kind)?.path?.trim()?.takeIf { it.isNotBlank() }
+        if (fromArgs != null) return listOf(fromArgs)
+        val fromSummary = summary.trim().takeIf { looksLikeFilePath(it) }
+        return listOfNotNull(fromSummary)
     }
 
     private fun ToolKind.toAgentKind(): AgentToolKind = when (this) {

@@ -40,9 +40,10 @@ import app.andy.domain.temporaryChatOrder
 import app.andy.domain.temporaryChatNeedsDiscardConfirm
 import app.andy.ui.components.Button
 import app.andy.ui.components.ConfirmationDialog
-import app.andy.ui.components.FilterPill
 import app.andy.ui.components.PendingConfirmation
 import app.andy.ui.components.StatusTag
+import app.andy.ui.components.TabBar
+import app.andy.ui.components.TabListSize
 import app.andy.ui.components.TextField
 import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceRailHeader
@@ -57,6 +58,13 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Cyan
 import kotlinx.coroutines.launch
+
+private enum class AgentsInboxTab(val label: String) {
+    All("All"),
+    Live("Live"),
+    Archived("Archived"),
+    UnscopedArtifacts("Unscoped artifacts"),
+}
 
 @Composable
 private fun AgentCommandCenter(
@@ -206,6 +214,13 @@ private fun AgentCommandCenter(
         if (viewingChatId != null) onViewedTaskChange(viewingChatId)
     }
 
+    val inboxFilter = when {
+        showUnscopedArtifacts -> AgentsInboxTab.UnscopedArtifacts
+        showArchived -> AgentsInboxTab.Archived
+        activeOnly -> AgentsInboxTab.Live
+        else -> AgentsInboxTab.All
+    }
+
     WorkspaceSplit(
         sidebarWidth = 236.dp,
         sidebar = {
@@ -229,20 +244,37 @@ private fun AgentCommandCenter(
                 singleLine = true,
                 placeholder = { Text("Search", color = TextSecondary, fontFamily = MonoFont) },
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterPill("All", !activeOnly && !showArchived && !showUnscopedArtifacts, Cyan) {
-                    activeOnly = false; showArchived = false; showUnscopedArtifacts = false
-                }
-                FilterPill("Live", activeOnly && !showUnscopedArtifacts, Green) {
-                    activeOnly = true; showArchived = false; showUnscopedArtifacts = false
-                }
-                FilterPill("Archived", showArchived && !showUnscopedArtifacts, TextSecondary) {
-                    showArchived = true; activeOnly = false; showUnscopedArtifacts = false
-                }
-                FilterPill("Unscoped artifacts", showUnscopedArtifacts, Cyan) {
-                    showUnscopedArtifacts = true; activeOnly = false; showArchived = false
-                }
-            }
+            TabBar(
+                tabs = AgentsInboxTab.entries,
+                selected = inboxFilter,
+                onSelect = { filter ->
+                    when (filter) {
+                        AgentsInboxTab.All -> {
+                            activeOnly = false
+                            showArchived = false
+                            showUnscopedArtifacts = false
+                        }
+                        AgentsInboxTab.Live -> {
+                            activeOnly = true
+                            showArchived = false
+                            showUnscopedArtifacts = false
+                        }
+                        AgentsInboxTab.Archived -> {
+                            showArchived = true
+                            activeOnly = false
+                            showUnscopedArtifacts = false
+                        }
+                        AgentsInboxTab.UnscopedArtifacts -> {
+                            showUnscopedArtifacts = true
+                            activeOnly = false
+                            showArchived = false
+                        }
+                    }
+                },
+                label = { it.label },
+                modifier = Modifier.fillMaxWidth(),
+                size = TabListSize.Sm,
+            )
             if (showUnscopedArtifacts) {
                 WorkspaceEmptyCanvas(
                     "Unscoped artifacts appear in the main pane",

@@ -15,7 +15,6 @@ private val hooksJson = Json {
 }
 
 private const val ANDY_HOOK_MARKER = "andy-status-hook"
-private const val ANTIGRAVITY_HOOK_NAME = "andy-status"
 
 /**
  * Installs vendor lifecycle hooks that append state to `.andy/<taskId>/status.json`
@@ -44,10 +43,9 @@ fun installStatusSignals(
         AgentKind.ClaudeCode -> installClaudeStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Cursor -> installCursorStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Codex -> installCodexStatusHooks(worktreeOrCwd, artifactDir)
-        AgentKind.Antigravity -> installAntigravityStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.OpenCode -> installOpenCodeStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Pi -> installPiStatusHooks(worktreeOrCwd, artifactDir)
-        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
         AgentKind.Ollama, AgentKind.LMStudio -> Unit
     }
 }
@@ -189,72 +187,6 @@ fun installCodexStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     writeHooksIfChanged(hooksFile, mergeClaudeStyleEventHooks(hooksFile, andyHooks))
 }
 
-/**
- * Antigravity: `.agents/hooks.json` named hook `andy-status`.
- * working ← PreInvocation; done ← Stop gated on fullyIdle; blocked ← ask_* tools.
- * Stop always returns `{}` (allow natural termination); only records done when idle.
- */
-fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
-    if (shouldSkipProjectHooks(worktreeOrCwd)) return
-
-    val agentsDir = File(worktreeOrCwd, ".agents").absoluteFile.normalize()
-    agentsDir.mkdirs()
-    prepareStatusHooks(artifactDir)
-
-    val workingCmd = statusHookCommand("working", respond = "empty")
-    val doneCmd = statusHookCommand("done", respond = "empty", gate = "fully-idle")
-    val blockedCmd = statusHookCommand("blocked", respond = "allow")
-    val andyHook = JsonObject(
-        mapOf(
-            "enabled" to JsonPrimitive(true),
-            "PreInvocation" to JsonArray(
-                listOf(
-                    JsonObject(
-                        mapOf(
-                            "type" to JsonPrimitive("command"),
-                            "command" to JsonPrimitive(workingCmd),
-                            "timeout" to JsonPrimitive(5),
-                        ),
-                    ),
-                ),
-            ),
-            "Stop" to JsonArray(
-                listOf(
-                    JsonObject(
-                        mapOf(
-                            "type" to JsonPrimitive("command"),
-                            "command" to JsonPrimitive(doneCmd),
-                            "timeout" to JsonPrimitive(5),
-                        ),
-                    ),
-                ),
-            ),
-            "PreToolUse" to JsonArray(
-                listOf(
-                    JsonObject(
-                        mapOf(
-                            "matcher" to JsonPrimitive("ask_question|ask_permission"),
-                            "hooks" to JsonArray(
-                                listOf(
-                                    JsonObject(
-                                        mapOf(
-                                            "type" to JsonPrimitive("command"),
-                                            "command" to JsonPrimitive(blockedCmd),
-                                            "timeout" to JsonPrimitive(5),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    )
-
-    val hooksFile = File(agentsDir, "hooks.json")
-    writeHooksIfChanged(hooksFile, mergeAntigravityHooks(hooksFile, andyHook))
-}
 
 private fun claudeCommandMatchers(command: String): JsonArray =
     JsonArray(listOf(claudeMatcherEntry(matcher = null, command = command)))
@@ -352,16 +284,6 @@ internal fun mergeCursorHooks(hooksFile: File, andyEventHooks: JsonObject): Json
     return JsonObject(root)
 }
 
-internal fun mergeAntigravityHooks(hooksFile: File, andyHook: JsonObject): JsonObject? {
-    val existingRoot = when (val read = readExistingHooksRoot(hooksFile)) {
-        HooksFileRead.Missing -> null
-        HooksFileRead.Invalid -> return null
-        is HooksFileRead.Ok -> read.root
-    }
-    val root = mutableJsonMap(existingRoot)
-    root[ANTIGRAVITY_HOOK_NAME] = andyHook
-    return JsonObject(root)
-}
 
 /**
  * OpenCode: project plugin `.opencode/plugins/andy-status.js`.

@@ -798,7 +798,7 @@ internal fun ShellDockDrawer(
             scrollTabs = true,
             // Terminal (and Live) bleed into the card; a hairline under the tabs reintroduces
             // the chrome/content seam the matching header background was meant to erase.
-            showDivider = false,
+            hasDivider = false,
             trailing = {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),

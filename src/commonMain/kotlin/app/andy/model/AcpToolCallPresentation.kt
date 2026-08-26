@@ -136,6 +136,23 @@ object AcpToolCallPresentation {
     fun isSparseToolTitle(title: String): Boolean =
         title.trim().lowercase() in sparseToolTitles
 
+    /** Infer kind from a sparse ACP title when the provider reports [AgentToolKind.Other]. */
+    fun inferKindFromTitle(title: String): AgentToolKind? {
+        val trimmed = title.trim().lowercase()
+        return when (trimmed) {
+            "edit", "edit file", "editing files", "write", "create", "update",
+            "str_replace", "apply_patch", "apply patch",
+            -> AgentToolKind.Edit
+            "delete", "delete file" -> AgentToolKind.Delete
+            "move", "rename", "rename file" -> AgentToolKind.Move
+            "read", "read file" -> AgentToolKind.Read
+            "search", "grep" -> AgentToolKind.Search
+            "fetch" -> AgentToolKind.Fetch
+            "terminal", "shell", "bash", "execute", "run", "command" -> AgentToolKind.Execute
+            else -> null
+        }
+    }
+
     /**
      * Names the action from the tool's own payload, for providers that report every call as
      * [AgentToolKind.Other] and title a shell call with the command itself (cursor-agent). Accepts

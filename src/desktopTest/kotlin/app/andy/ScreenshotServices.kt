@@ -762,6 +762,13 @@ internal object ScreenshotServices {
         override suspend fun worktreeDiffSummary(taskId: String) = "2 files changed, 28 insertions(+), 4 deletions(-)"
         override suspend fun changeSummary(taskId: String) = AgentChangeSummary(listOf(AgentFileChange("app/src/main/.../CheckoutReducer.kt", 14, 4), AgentFileChange("app/src/test/.../CheckoutReducerTest.kt", 14, 0)))
         override suspend fun fileDiff(taskId: String, relativePath: String) = AgentFileDiff(relativePath, listOf(DiffLine(DiffLineKind.Context, "fun validatePostalCode(value: String) {", 12, 12), DiffLine(DiffLineKind.Deletion, "  return value.isNotBlank()", 13, null), DiffLine(DiffLineKind.Addition, "  return value.matches(POSTAL_CODE)", null, 13)))
+        override suspend fun undoFileChanges(
+            taskId: String,
+            batchId: String,
+            groupedBatchIds: List<String>,
+        ) = CommandResult.success()
+        override suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot) =
+            CommandResult.success()
         override suspend fun refreshCliStatuses() = Unit
         override suspend fun isGitRepo(dir: String) = true
         override suspend fun currentBranch(dir: String) = "main"

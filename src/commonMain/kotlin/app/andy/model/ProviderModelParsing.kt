@@ -108,6 +108,14 @@ internal fun stripProviderModelVariant(modelId: String): ProviderModelVariant {
         fast = true
         remaining = remaining.removeSuffix("-fast")
     }
+    if (':' in remaining) {
+        val token = remaining.substringAfterLast(':').lowercase()
+        val base = remaining.substringBeforeLast(':')
+        val matchingEffort = EffortTokenOrder.firstOrNull { it.first == token }
+        if (matchingEffort != null && base.isNotEmpty()) {
+            return ProviderModelVariant(base, matchingEffort.second, token, fast)
+        }
+    }
     for (token in EffortTokenByLength) {
         val suffix = "-$token"
         if (remaining.endsWith(suffix) && remaining.length > suffix.length) {
@@ -118,19 +126,43 @@ internal fun stripProviderModelVariant(modelId: String): ProviderModelVariant {
     return ProviderModelVariant(remaining, null, null, fast)
 }
 
-fun parseAntigravityModels(output: String): List<AgentModelOption> =
-    groupProviderModelVariants(
-        output.lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && !it.startsWith("Available") && !it.startsWith("Tip:") }
-            .map { slug -> slug to humanizeModelSlug(stripProviderModelVariant(slug).baseId) }
-            .toList(),
-    )
+fun parseAntigravityModels(output: String): List<AgentModelOption> {
+    val rows = output.lineSequence().mapNotNull { line ->
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() ||
+            trimmed.startsWith("Available", ignoreCase = true) ||
+            trimmed.startsWith("Tip:", ignoreCase = true) ||
+            trimmed.startsWith("Fetching", ignoreCase = true) ||
+            trimmed.startsWith("Loading", ignoreCase = true)
+        ) {
+            return@mapNotNull null
+        }
+        val match = Regex("""^(.+?)\s*\(([^)]+)\)$""").find(trimmed)
+        if (match != null) {
+            val rawLabel = match.groupValues[1].trim()
+            val rawSlug = match.groupValues[2].trim()
+            rawSlug to antigravityBaseLabel(rawSlug, rawLabel)
+        } else if (trimmed.contains(" - ")) {
+            val rawSlug = trimmed.substringBefore(" - ").trim()
+            val rawLabel = trimmed.substringAfter(" - ").trim()
+            rawSlug to antigravityBaseLabel(rawSlug, rawLabel)
+        } else {
+            val rawSlug = trimmed.takeWhile { !it.isWhitespace() }
+            if (rawSlug.isEmpty()) null else rawSlug to humanizeModelSlug(stripProviderModelVariant(rawSlug).baseId)
+        }
+    }.toList()
+    return groupProviderModelVariants(rows)
+}
 
 fun parseCursorModels(output: String): List<AgentModelOption> {
     val rows = output.lineSequence().mapNotNull { line ->
         val trimmed = line.trim()
-        if (trimmed.isEmpty() || trimmed.startsWith("Available") || trimmed.startsWith("Tip:")) return@mapNotNull null
+        if (trimmed.isEmpty() ||
+            trimmed.startsWith("Available", ignoreCase = true) ||
+            trimmed.startsWith("Tip:", ignoreCase = true) ||
+            trimmed.startsWith("Fetching", ignoreCase = true) ||
+            trimmed.startsWith("Loading", ignoreCase = true)
+        ) return@mapNotNull null
         val separator = trimmed.indexOf(" - ")
         if (separator <= 0) {
             val slug = trimmed.takeWhile { !it.isWhitespace() }
@@ -246,6 +278,17 @@ private fun humanizeProviderModel(slug: String): String {
     } else {
         modelLabel
     }
+}
+
+private fun antigravityBaseLabel(slug: String, variantLabel: String): String {
+    val base = stripProviderModelVariant(slug).baseId
+    val cleaned = variantLabel
+        .removeSuffix(" Fast")
+        .replace(Regex("""\b(None|Minimal|Low|Medium|High|Extra High|Max|Ultracode)\b""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+        .trimEnd('-', ' ')
+    return cleaned.ifBlank { humanizeModelSlug(base) }
 }
 
 private fun cursorBaseLabel(slug: String, variantLabel: String): String {

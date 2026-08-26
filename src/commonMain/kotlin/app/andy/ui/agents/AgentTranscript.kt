@@ -95,6 +95,9 @@ import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
 import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
+import app.andy.model.AgentFileChange
+import app.andy.model.AgentChangeSummary
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSpawnPresentation
 import app.andy.model.AgentTask
@@ -219,6 +222,8 @@ internal fun AgentTranscript(
     autoExpandToolSections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
     onToolFileOpen: (ToolCallFileContent) -> Unit = {},
+    onFileChangesReview: (AgentEvent.FileChanges) -> Unit = {},
+    onFileChangesUndo: (AgentEvent.FileChanges) -> Unit = {},
     /** Known Andy chats used to resolve spawn rows to openable task ids. */
     knownTasks: List<AgentTask> = emptyList(),
     /** Current chat id so spawn resolution does not link a row back to itself. */
@@ -505,6 +510,8 @@ internal fun AgentTranscript(
                                 },
                                 onSkillOpen = onSkillOpen,
                                 onToolFileOpen = onToolFileOpen,
+                                onFileChangesReview = onFileChangesReview,
+                                onFileChangesUndo = onFileChangesUndo,
                                 knownTasks = knownTasks,
                                 currentTaskId = currentTaskId,
                                 autoExpandThinkingSections = autoExpandThinkingSections,
@@ -644,6 +651,7 @@ internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent>
     val displayable = coalesced.mapNotNull { event ->
         when {
             event is AgentEvent.AvailableCommands || event is AgentEvent.Raw -> null
+            event is AgentEvent.FileChanges && event.undone -> null
             event is AgentEvent.AssistantText -> {
                 val stripped = event.text.stripTrailingConnectionStallError()
                 when {
@@ -659,7 +667,104 @@ internal fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent>
     return displayable.filterIndexed { index, event ->
         val completion = displayable.getOrNull(index + 1) as? AgentEvent.TaskResult
         event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
+    }.let(::coalesceFileChangesInTurnSegments)
+}
+
+/** Hard boundaries that split edit bursts — a new user/assistant message or turn result. */
+internal fun isFileChangesSegmentBoundary(event: AgentEvent): Boolean = when (event) {
+    is AgentEvent.UserMessage -> true
+    is AgentEvent.AssistantText ->
+        !event.isStreamDelta && event.text.stripTrailingConnectionStallError().isNotBlank()
+    is AgentEvent.TaskResult, is AgentEvent.TaskError -> true
+    else -> false
+}
+
+/**
+ * Within each turn segment, merge every edited-files card into one row. Activity
+ * (thoughts, reads, searches) may sit between the original cards; the merged card
+ * replaces the last one so the summary appears after the related work.
+ */
+internal fun coalesceFileChangesInTurnSegments(events: List<AgentEvent>): List<AgentEvent> {
+    if (events.isEmpty()) return events
+    val output = mutableListOf<AgentEvent>()
+    var segment = mutableListOf<AgentEvent>()
+
+    fun flushSegment() {
+        if (segment.isNotEmpty()) {
+            output += coalesceFileChangesWithinSegment(segment)
+            segment = mutableListOf()
+        }
     }
+
+    for (event in events) {
+        if (isFileChangesSegmentBoundary(event)) {
+            flushSegment()
+            output += event
+        } else {
+            segment += event
+        }
+    }
+    flushSegment()
+    return output
+}
+
+internal fun coalesceFileChangesWithinSegment(segment: List<AgentEvent>): List<AgentEvent> {
+    if (segment.isEmpty()) return segment
+    val fileChanges = segment.filterIsInstance<AgentEvent.FileChanges>()
+    if (fileChanges.size <= 1) return segment
+    val merged = mergeConsecutiveFileChanges(fileChanges)
+    val lastIndex = segment.indexOfLast { it is AgentEvent.FileChanges }
+    return segment.mapIndexedNotNull { index, event ->
+        when {
+            event is AgentEvent.FileChanges && index != lastIndex -> null
+            event is AgentEvent.FileChanges && index == lastIndex -> merged
+            else -> event
+        }
+    }
+}
+
+/** @deprecated Use [coalesceFileChangesInTurnSegments]; kept for tests. */
+internal fun coalesceConsecutiveFileChanges(events: List<AgentEvent>): List<AgentEvent> {
+    if (events.isEmpty()) return events
+    val merged = mutableListOf<AgentEvent>()
+    var index = 0
+    while (index < events.size) {
+        val event = events[index]
+        if (event !is AgentEvent.FileChanges) {
+            merged += event
+            index += 1
+            continue
+        }
+        val group = mutableListOf<AgentEvent.FileChanges>()
+        while (index < events.size && events[index] is AgentEvent.FileChanges) {
+            group += events[index] as AgentEvent.FileChanges
+            index += 1
+        }
+        merged += if (group.size == 1) group.single() else mergeConsecutiveFileChanges(group)
+    }
+    return merged
+}
+
+internal fun mergeConsecutiveFileChanges(changes: List<AgentEvent.FileChanges>): AgentEvent.FileChanges {
+    require(changes.isNotEmpty())
+    if (changes.size == 1) return changes.single()
+    val mergedFiles = linkedMapOf<String, AgentFileChange>()
+    val mergedDiffs = linkedMapOf<String, AgentFileDiff>()
+    changes.forEach { change ->
+        change.snapshot.summary.files.forEach { mergedFiles[it.path] = it }
+        change.snapshot.diffs.forEach { (path, diff) -> mergedDiffs[path] = diff }
+    }
+    val first = changes.first()
+    return first.copy(
+        atMillis = changes.last().atMillis,
+        batchId = changes.last().batchId,
+        baselineTree = first.baselineTree,
+        groupedBatchIds = changes.map { it.batchId },
+        snapshot = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(mergedFiles.values.sortedBy { it.path }),
+            diffs = mergedDiffs,
+        ),
+    )
 }
 
 internal sealed class TranscriptDisplayItem {
@@ -784,6 +889,8 @@ private fun TranscriptEvent(
     onThinkingExpandedChange: (String, Boolean) -> Unit,
     onSkillOpen: (AgentSkill) -> Unit,
     onToolFileOpen: (ToolCallFileContent) -> Unit,
+    onFileChangesReview: (AgentEvent.FileChanges) -> Unit,
+    onFileChangesUndo: (AgentEvent.FileChanges) -> Unit,
     knownTasks: List<AgentTask> = emptyList(),
     currentTaskId: String? = null,
     autoExpandThinkingSections: Boolean = false,
@@ -902,6 +1009,17 @@ private fun TranscriptEvent(
             markdown = event.markdown,
             awaitingApproval = awaitingPlanConfirmation,
         )
+        is AgentEvent.FileChanges -> {
+            var showAllFiles by remember(event.batchId) { mutableStateOf(false) }
+            EditedFilesCard(
+                snapshot = event.snapshot,
+                showAllFiles = showAllFiles,
+                onShowAllFilesChange = { showAllFiles = it },
+                onUndo = { onFileChangesUndo(event) },
+                onReview = { onFileChangesReview(event) },
+                canUndo = event.baselineTree.isNotBlank(),
+            )
+        }
         is AgentEvent.ModeChanged -> Text(
             "mode: ${event.modeId}",
             color = TextSecondary,
@@ -2350,6 +2468,10 @@ internal fun transcriptDisplayItemKey(item: TranscriptDisplayItem): String = whe
 internal fun transcriptEventKey(index: Int, event: AgentEvent): String = when (event) {
     is AgentEvent.ToolCall -> "tool-call-$index-${event.atMillis}-${event.toolName}"
     is AgentEvent.ToolResult -> "tool-result-$index-${event.atMillis}-${event.toolName}-${event.isError}"
+    is AgentEvent.FileChanges -> {
+        val batchKey = event.groupedBatchIds.takeIf { it.isNotEmpty() }?.joinToString("+") ?: event.batchId
+        "file-changes-$index-$batchKey"
+    }
     else -> "${event::class.simpleName}-$index-${event.atMillis}"
 }
 

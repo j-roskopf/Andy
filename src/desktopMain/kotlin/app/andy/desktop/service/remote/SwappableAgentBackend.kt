@@ -17,6 +17,7 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectSpecDraft
@@ -210,6 +211,14 @@ class SwappableAgentBackend(
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = runs().changeSummary(taskId)
     override suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff? =
         runs().fileDiff(taskId, relativePath)
+    override suspend fun undoFileChanges(
+        taskId: String,
+        batchId: String,
+        groupedBatchIds: List<String>,
+    ): CommandResult =
+        runs().undoFileChanges(taskId, batchId, groupedBatchIds)
+    override suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot): CommandResult =
+        runs().undoChangeSnapshot(taskId, snapshot)
     override suspend fun refreshCliStatuses() = runs().refreshCliStatuses()
     override suspend fun isGitRepo(dir: String): Boolean = runs().isGitRepo(dir)
     override suspend fun currentBranch(dir: String): String? = runs().currentBranch(dir)

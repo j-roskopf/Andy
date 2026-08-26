@@ -676,6 +676,16 @@ interface AgentRunService {
     suspend fun worktreeDiffSummary(taskId: String): String?
     suspend fun changeSummary(taskId: String): AgentChangeSummary?
     suspend fun fileDiff(taskId: String, relativePath: String): AgentFileDiff?
+    suspend fun undoFileChanges(
+        taskId: String,
+        batchId: String,
+        groupedBatchIds: List<String> = emptyList(),
+    ): CommandResult
+    /**
+     * Reverts [snapshot] paths to [AgentTask.changeBaselineTree] when no transcript
+     * [AgentEvent.FileChanges] batch exists (legacy / fallback edited-files card).
+     */
+    suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot): CommandResult
     suspend fun refreshCliStatuses()
     suspend fun isGitRepo(dir: String): Boolean
     /** Current branch of [dir], or null when detached HEAD or not a repo. */
