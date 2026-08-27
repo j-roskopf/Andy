@@ -6,6 +6,9 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.AgentModelOption
+import app.andy.model.AgentProviderDefaults
+import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
@@ -158,6 +161,29 @@ class WebChatHttpServerTest {
             null,
             evaluateNetworkAccessAuth("203.0.113.10", token, token, limiter),
         )
+    }
+
+    @Test
+    fun modelsListsProviderDefaultAndCatalogOptions() = runBlocking {
+        agents.setProviderModels(
+            AgentKind.Codex to listOf(
+                AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.High)),
+            ),
+        )
+        agents.setProviderDefaults(
+            AgentKind.Codex to AgentProviderDefaults(model = "gpt-5.6-sol"),
+        )
+        val client = HttpClient(CIO)
+        try {
+            val response = client.get("http://127.0.0.1:$port/api/models?agent=Codex")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = response.bodyAsText()
+            assertTrue(body.contains("Provider default"))
+            assertTrue(body.contains("gpt-5.6-sol"))
+            assertTrue(body.contains("\"defaultModel\":\"gpt-5.6-sol\""))
+        } finally {
+            client.close()
+        }
     }
 
     @Test
@@ -439,7 +465,7 @@ class WebChatHttpServerTest {
             val body = response.bodyAsText()
             assertTrue(body.contains("\"name\":\"Demo Project\""), body)
             assertTrue(body.contains("\"id\":\"demo\""), body)
-            assertTrue(body.contains("/tmp/demo"), body)
+            assertTrue(!body.contains("/tmp/demo"), "web API must not expose filesystem paths")
         } finally {
             client.close()
         }
@@ -463,7 +489,15 @@ class WebChatHttpServerTest {
     fun websocketStaysOpenAfterTerminalStatus() = runBlocking {
         val client = HttpClient(CIO) { install(WebSockets) }
         try {
-            client.webSocket("ws://127.0.0.1:$port/ws/chats/acp-1?token=$token") {
+            client.webSocket(
+                method = io.ktor.http.HttpMethod.Get,
+                host = "127.0.0.1",
+                port = port,
+                path = "/ws/chats/acp-1",
+                request = {
+                    header(HttpHeaders.SecWebSocketProtocol, "bearer.$token")
+                },
+            ) {
                 val first = (incoming.receive() as Frame.Text).readText()
                 assertTrue(first.contains("\"replaceFrom\":0"), first)
                 agents.setStatus("acp-1", AgentStatus.Done)
@@ -513,6 +547,55 @@ class WebChatHttpServerTest {
                 queryToken = token,
             ),
         )
+    }
+
+    @Test
+    fun loginCodeExchangesForChatSession() = runBlocking {
+        workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
+        val code = mcp.createNetworkLoginCode()
+        assertTrue(code.isNotBlank())
+        val client = HttpClient(CIO) {
+            install(io.ktor.client.plugins.HttpTimeout) {
+                requestTimeoutMillis = 3_000
+            }
+        }
+        try {
+            val response = client.post("http://127.0.0.1:$port/api/auth/login") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"code":"$code"}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = response.bodyAsText()
+            assertTrue(body.contains("sessionToken"), body)
+            val session = Regex(""""sessionToken"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
+            assertTrue(!session.isNullOrBlank())
+            val chatOk = client.get("http://127.0.0.1:$port/api/chats") {
+                header(HttpHeaders.Authorization, "Bearer $session")
+            }
+            assertEquals(HttpStatusCode.OK, chatOk.status)
+            val mcpResponse = client.get("http://127.0.0.1:$port/mcp") {
+                header(HttpHeaders.Authorization, "Bearer $session")
+            }
+            assertEquals(HttpStatusCode.Forbidden, mcpResponse.status)
+        } finally {
+            workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = false))
+            client.close()
+        }
+    }
+
+    @Test
+    fun masterTokenGrantsApiWhenNetworkAccessOn() = runBlocking {
+        workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
+        val client = HttpClient(CIO)
+        try {
+            val response = client.get("http://127.0.0.1:$port/api/chats") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+        } finally {
+            workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = false))
+            client.close()
+        }
     }
 
     private fun ephemeralPort(): Int =
@@ -582,6 +665,18 @@ class WebChatHttpServerTest {
         private val slash = MutableStateFlow(
             listOf(AgentSlashCommand("review", "provider review command")),
         )
+        private val _providerModels = MutableStateFlow<Map<AgentKind, List<AgentModelOption>>>(emptyMap())
+        override val providerModels = _providerModels
+        private val _providerDefaults = MutableStateFlow<Map<AgentKind, AgentProviderDefaults>>(emptyMap())
+        override val providerDefaults = _providerDefaults
+
+        fun setProviderModels(models: Pair<AgentKind, List<AgentModelOption>>) {
+            _providerModels.value = mapOf(models)
+        }
+
+        fun setProviderDefaults(defaults: Pair<AgentKind, AgentProviderDefaults>) {
+            _providerDefaults.value = mapOf(defaults)
+        }
 
         override fun events(taskId: String) =
             eventFlows.getOrPut(taskId) { MutableStateFlow(emptyList()) }

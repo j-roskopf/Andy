@@ -28,10 +28,6 @@ object PendingAgentTaskOpen {
         onActivate = handler
     }
 
-    fun offer(request: OpenAgentTaskRequest) {
-        this.request = request
-    }
-
     /** Notification click (or equivalent): stash the task and bring Andy forward. */
     fun activate(request: OpenAgentTaskRequest) {
         this.request = request
@@ -41,7 +37,6 @@ object PendingAgentTaskOpen {
 
 class DesktopOsNotificationService : OsNotificationService {
     override fun show(event: AgentAttentionEvent) {
-        PendingAgentTaskOpen.offer(OpenAgentTaskRequest(event.taskId, event.projectId))
         val subtitle = when (event.kind) {
             AgentAttentionKind.Blocked -> "Needs your input"
             AgentAttentionKind.Done -> "Agent completed"

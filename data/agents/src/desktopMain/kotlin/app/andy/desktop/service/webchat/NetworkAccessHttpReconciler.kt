@@ -77,6 +77,9 @@ class NetworkAccessHttpReconciler(
                 val next = runCatching { workspaceStore.load().toNetworkAccessBindConfig() }
                     .getOrNull() ?: continue
                 if (next == applied) continue
+                if (next.token != applied.token) {
+                    mcp.invalidateNetworkAccessSessions()
+                }
                 System.err.println(
                     "andyd: Network Access settings changed " +
                         "(enabled=${next.enabled}, tailscaleOnly=${next.tailscaleOnly}, " +

@@ -669,6 +669,8 @@ internal object ScreenshotServices {
         override fun getToolNames() = listOf("list_devices", "capture_screenshot", "run_shell")
         override fun suggestNetworkAccessHosts() = listOf("192.168.1.42", "100.64.1.2")
         override fun generateNetworkAccessToken() = "screenshot-network-access-token-0123456789abcdef"
+
+        override fun createNetworkLoginCode() = "screenshot-login-code"
     }
 
     private object ScreenshotActionConfig : ActionConfigStore {

@@ -56,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -143,6 +144,7 @@ import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
 import app.andy.ui.agents.isSessionWorking
+import app.andy.ui.agents.ChatFollowUpDraftMemory
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
 import app.andy.ui.components.StatusTag
@@ -200,6 +202,7 @@ private enum class ProjectCanvas(val label: String) {
 }
 
 private const val RecentSessionsPerProject = 5
+private const val ShowMoreSessionsIncrement = 20
 
 @Composable
 private fun ProjectCockpit(
@@ -247,8 +250,9 @@ private fun ProjectCockpit(
     var profilesOpen by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
+    val followUpDraftMemory = remember { ChatFollowUpDraftMemory() }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
-    var expandedProjectSessionsId by remember { mutableStateOf<String?>(null) }
+    val projectSessionVisibleLimits = remember { mutableStateMapOf<String, Int>() }
     var viewingArchivedForProjectId by remember { mutableStateOf<String?>(null) }
     val collapsedProjectIds = workspaceState.collapsedProjectChatIds
     fun updateCollapsedProjectIds(transform: (Set<String>) -> Set<String>) {
@@ -271,6 +275,7 @@ private fun ProjectCockpit(
         if (force) {
             scope.launch {
                 transcriptScrollMemory.remove(task.id)
+                followUpDraftMemory.remove(task.id)
                 services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
                 if (selectedTaskId == task.id) selectedTaskId = null
             }
@@ -287,6 +292,7 @@ private fun ProjectCockpit(
                 ) {
                     WorktreeDeleteOutcome.Deleted -> {
                         transcriptScrollMemory.remove(task.id)
+                        followUpDraftMemory.remove(task.id)
                         if (selectedTaskId == task.id) selectedTaskId = null
                     }
                     is WorktreeDeleteOutcome.BlockedByChildren -> {
@@ -498,14 +504,15 @@ private fun ProjectCockpit(
                                 viewingArchived -> archivedSessions
                                 else -> sessions
                             }
-                            val expandedSessions = entry.searchSessions != null ||
-                                viewingArchived ||
-                                expandedProjectSessionsId == item.id
+                            val sessionVisibleLimit = when {
+                                entry.searchSessions != null -> Int.MAX_VALUE
+                                viewingArchived -> Int.MAX_VALUE
+                                else -> projectSessionVisibleLimits[item.id] ?: RecentSessionsPerProject
+                            }
                             val visibleSessions = visibleChatSessions(
                                 sessions = sourceSessions,
                                 pinPriority = pinPriority,
-                                expanded = expandedSessions,
-                                limit = RecentSessionsPerProject,
+                                limit = sessionVisibleLimit,
                             )
                             ProjectSessionGroup(
                                 project = item,
@@ -519,7 +526,6 @@ private fun ProjectCockpit(
                                 viewingArchived = viewingArchived && entry.searchSessions == null,
                                 archivedCount = archivedSessions.size,
                                 showMore = !searchActive && !sessionsCollapsed && !viewingArchived &&
-                                    expandedProjectSessionsId != item.id &&
                                     visibleSessions.size < sessions.size,
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
@@ -547,10 +553,13 @@ private fun ProjectCockpit(
                                 },
                                 onUnarchiveSession = { task -> services.agentRuns.unarchive(task.id) },
                                 onDeleteSession = ::requestDeleteChat,
-                                onShowMore = { expandedProjectSessionsId = item.id },
+                                onShowMore = {
+                                    projectSessionVisibleLimits[item.id] =
+                                        sessionVisibleLimit + ShowMoreSessionsIncrement
+                                },
                                 onToggleArchived = {
                                     viewingArchivedForProjectId = if (viewingArchived) null else item.id
-                                    expandedProjectSessionsId = null
+                                    projectSessionVisibleLimits.remove(item.id)
                                 },
                                 onNewChat = {
                                     updateCollapsedProjectIds { it - item.id }
@@ -639,6 +648,7 @@ private fun ProjectCockpit(
                                             onDelete = ::requestDeleteChat,
                                             showHeader = false,
                                             transcriptScrollMemory = transcriptScrollMemory,
+                                            followUpDraftMemory = followUpDraftMemory,
                                             workspaceState = workspaceState,
                                             modifier = Modifier.fillMaxSize(),
                                             dictationActive = active && chatActive,
@@ -1459,7 +1469,7 @@ private fun ProjectSessionGroup(
                 )
                 if (showMore) {
                     Text(
-                        "Show all chats",
+                        "Show more",
                         color = Cyan.copy(alpha = 0.78f),
                         fontFamily = DisplayFont,
                         fontSize = 11.sp,

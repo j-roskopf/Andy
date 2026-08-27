@@ -193,7 +193,7 @@ fun CommandPalette(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
-                Text("⌕", color = TextSecondary.copy(alpha = 0.7f), fontSize = 14.sp)
+                Text("⌕", color = TextSecondary.copy(alpha = 0.7f), fontSize = 18.sp)
                 TextField(
                     value = query,
                     onValueChange = {

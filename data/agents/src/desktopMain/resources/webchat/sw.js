@@ -1,17 +1,15 @@
-const CACHE = "andy-webchat-v1";
-const ASSETS = [
-  "/",
-  "/index.html",
-  "/styles.css",
-  "/app.js",
+const CACHE = "andy-webchat-v11";
+const OFFLINE_ASSETS = [
   "/manifest.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
 ];
 
+const SHELL_PATHS = new Set(["/", "/index.html", "/styles.css", "/app.js"]);
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting()),
+    caches.open(CACHE).then((cache) => cache.addAll(OFFLINE_ASSETS)).then(() => self.skipWaiting()),
   );
 });
 
@@ -26,6 +24,11 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/ws/")) {
+    return;
+  }
+  if (SHELL_PATHS.has(url.pathname)) {
+    // Always use the network for shell assets so HTML/CSS/JS stay in sync.
+    event.respondWith(fetch(event.request));
     return;
   }
   event.respondWith(

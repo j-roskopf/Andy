@@ -75,6 +75,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.currentTimeMillis
 import app.andy.AndyDestination
 import app.andy.EditorSyntaxThemePreview
 import app.andy.filterSupportedImagePaths
@@ -108,6 +109,8 @@ import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
 import app.andy.service.DeviceService
 import app.andy.service.McpServerService
+import app.andy.service.NetworkLoginCodeRefreshLeadMillis
+import app.andy.service.networkLoginCodeCountdownLabel
 import app.andy.service.OrchestrationPreferencesService
 import app.andy.service.ProxyService
 import app.andy.service.RetentionSweepResult
@@ -152,6 +155,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -2012,20 +2016,78 @@ private fun NetworkAccessPanel(
     }
     val accessUrls = hosts.map { host -> "http://$host:${workspaceState.mcpServerPort}/" }
     val primaryAccessUrl = accessUrls.firstOrNull() ?: "http://127.0.0.1:${workspaceState.mcpServerPort}/"
-    val qrUrl = if (workspaceState.networkAccessToken.isNotBlank()) {
-        "$primaryAccessUrl?token=${workspaceState.networkAccessToken}"
-    } else {
-        primaryAccessUrl
+    var currentLoginCode by remember { mutableStateOf("") }
+    var loginCodeExpiresAtMillis by remember { mutableStateOf(0L) }
+    val loginCodeTtlMillis = mcpService.networkLoginCodeTtlMillis
+    val loginCodeRefreshMillis = remember(loginCodeTtlMillis) {
+        (loginCodeTtlMillis - NetworkLoginCodeRefreshLeadMillis).coerceAtLeast(5_000L)
     }
-    var qrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var nowMillis by remember { mutableStateOf(currentTimeMillis()) }
+    val loginCodeRemainingMillis = remember(loginCodeExpiresAtMillis, nowMillis) {
+        (loginCodeExpiresAtMillis - nowMillis).coerceAtLeast(0L)
+    }
+    val loginCodeCountdownLabel = remember(loginCodeRemainingMillis) {
+        networkLoginCodeCountdownLabel(loginCodeRemainingMillis)
+    }
+    val qrEligibleUrls = remember(accessUrls, workspaceState.networkAccessTailscaleOnly) {
+        if (workspaceState.networkAccessTailscaleOnly) {
+            accessUrls.filterNot { it.contains("127.0.0.1") || it.contains("[::1]") }
+        } else {
+            accessUrls
+        }
+    }
+    var loginCodesByUrl by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val qrUrls = remember(qrEligibleUrls, loginCodesByUrl) {
+        qrEligibleUrls.map { url ->
+            val code = loginCodesByUrl[url]
+            if (!code.isNullOrBlank()) "$url?code=$code" else url
+        }
+    }
+    var qrBitmaps by remember { mutableStateOf<Map<String, ImageBitmap>>(emptyMap()) }
 
-    LaunchedEffect(qrUrl, workspaceState.networkAccessEnabled) {
-        qrBitmap = if (workspaceState.networkAccessEnabled && workspaceState.networkAccessToken.isNotBlank()) {
+    LaunchedEffect(
+        workspaceState.networkAccessEnabled,
+        qrEligibleUrls,
+        workspaceState.mcpServerPort,
+    ) {
+        if (!workspaceState.networkAccessEnabled) {
+            loginCodesByUrl = emptyMap()
+            currentLoginCode = ""
+            loginCodeExpiresAtMillis = 0L
+            qrBitmaps = emptyMap()
+            return@LaunchedEffect
+        }
+        while (true) {
+            val issuedAt = currentTimeMillis()
+            val code = mcpService.createNetworkLoginCode()
+            currentLoginCode = code
+            loginCodeExpiresAtMillis = if (code.isNotBlank()) issuedAt + loginCodeTtlMillis else 0L
+            loginCodesByUrl = qrEligibleUrls.mapNotNull { url ->
+                code.takeIf { it.isNotBlank() }?.let { url to it }
+            }.toMap()
+            delay(loginCodeRefreshMillis)
+        }
+    }
+
+    LaunchedEffect(workspaceState.networkAccessEnabled, loginCodeExpiresAtMillis) {
+        if (!workspaceState.networkAccessEnabled || loginCodeExpiresAtMillis <= 0L) return@LaunchedEffect
+        while (true) {
+            nowMillis = currentTimeMillis()
+            delay(1_000)
+        }
+    }
+
+    LaunchedEffect(qrUrls, workspaceState.networkAccessEnabled) {
+        qrBitmaps = if (workspaceState.networkAccessEnabled && qrUrls.any { it.contains("code=") }) {
             withContext(Dispatchers.Default) {
-                devices.generatePairingQr(qrUrl)?.let { loadImageBitmap(it) }
+                qrUrls.mapNotNull { url ->
+                    devices.generatePairingQr(url)?.let { bytes ->
+                        loadImageBitmap(bytes)?.let { url to it }
+                    }
+                }.toMap()
             }
         } else {
-            null
+            emptyMap()
         }
     }
 
@@ -2064,7 +2126,8 @@ private fun NetworkAccessPanel(
         if (workspaceState.networkAccessEnabled) {
             Spacer(Modifier.height(10.dp))
             Text(
-                "Anyone who has the access token can control Andy, including device and file tools — not just chat.",
+                "Anyone who has the access token can control Andy via MCP (device, shell, files). " +
+                    "QR codes use one-time login codes that grant chat-only sessions on the phone.",
                 color = Rust,
                 fontSize = 12.sp,
             )
@@ -2083,7 +2146,8 @@ private fun NetworkAccessPanel(
                         "(also gets you HTTPS for free, needed for Web Push / iOS install). " +
                         "Turn off if you need plain LAN access or a non-Tailscale VPN instead."
                 } else {
-                    "Any device that can reach this Mac’s IP may attempt access (still needs the token)."
+                    "Any device that can reach this Mac’s IP may attempt access over http:// (still needs the token). " +
+                        "Use Tailscale Serve or a reverse proxy for HTTPS / Web Push on untrusted networks."
                 },
                 color = TextSecondary,
                 fontSize = 12.sp,
@@ -2128,6 +2192,7 @@ private fun NetworkAccessPanel(
                 OutlinedButton(
                     onClick = {
                         val next = mcpService.generateNetworkAccessToken()
+                        mcpService.invalidateNetworkAccessSessions()
                         onUpdateWorkspace { it.copy(networkAccessToken = next) }
                     },
                 ) {
@@ -2140,16 +2205,50 @@ private fun NetworkAccessPanel(
                 color = TextSecondary,
                 fontSize = 12.sp,
             )
-            accessUrls.forEach { url ->
-                SelectionContainer {
-                    Text(url, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            if (workspaceState.networkAccessToken.isNotBlank()) {
+                Text(
+                    if (workspaceState.networkAccessTailscaleOnly && qrEligibleUrls.isEmpty()) {
+                        "From another device: run `tailscale serve`, open the https://…ts.net URL it prints, " +
+                            "then paste the login code below (expires in $loginCodeCountdownLabel)."
+                    } else {
+                        "Scan to sign in (expires in $loginCodeCountdownLabel)"
+                    },
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            accessUrls.forEachIndexed { index, url ->
+                val qrUrl = qrUrls.getOrNull(qrEligibleUrls.indexOf(url)).takeIf { qrEligibleUrls.contains(url) }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    SelectionContainer(Modifier.weight(1f)) {
+                        Text(url, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                    }
+                    qrUrl?.let { qr ->
+                        qrBitmaps[qr]?.let { bitmap ->
+                            Image(
+                                bitmap = bitmap,
+                                contentDescription = "QR code for $url",
+                                modifier = Modifier
+                                    .size(120.dp)
+                                    .background(Color.White, AndyShape.Interactive)
+                                    .padding(6.dp),
+                                contentScale = ContentScale.Fit,
+                            )
+                        }
+                    }
                 }
+                if (index < accessUrls.lastIndex) Spacer(Modifier.height(8.dp))
             }
             Text(
                 if (workspaceState.networkAccessTailscaleOnly) {
-                    "This localhost URL only works on this Mac — it's for testing the token/QR flow. From " +
-                        "another Tailscale device, run the `tailscale serve` command above, then open the " +
-                        "https://…ts.net URL it prints (token still required)."
+                    "This localhost URL only works on this Mac. From another Tailscale device, run " +
+                        "`tailscale serve` above, open the https://…ts.net URL, then paste the login code " +
+                        "(or scan a LAN QR when Tailscale-only is off)."
                 } else {
                     "LAN addresses are listed first when available; Tailscale/WireGuard addresses appear when " +
                         "present. These stay http://. For HTTPS / Web Push, run " +
@@ -2166,24 +2265,20 @@ private fun NetworkAccessPanel(
                     Text("Copy URL")
                 }
                 OutlinedButton(
-                    onClick = { copyText(qrUrl) },
-                    enabled = workspaceState.networkAccessToken.isNotBlank(),
+                    onClick = { copyText(currentLoginCode) },
+                    enabled = currentLoginCode.isNotBlank(),
                 ) {
-                    Text("Copy URL + token")
+                    Text("Copy login code")
                 }
-            }
-            qrBitmap?.let { bitmap ->
-                Spacer(Modifier.height(10.dp))
-                Text("Scan to open and sign in", color = TextSecondary, fontSize = 12.sp)
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = "Network access QR code",
-                    modifier = Modifier
-                        .size(160.dp)
-                        .background(Color.White, AndyShape.Interactive)
-                        .padding(8.dp),
-                    contentScale = ContentScale.Fit,
-                )
+                OutlinedButton(
+                    onClick = {
+                        val url = qrUrls.firstOrNull()?.takeIf { it.contains("code=") } ?: primaryAccessUrl
+                        copyText(url)
+                    },
+                    enabled = qrUrls.any { it.contains("code=") },
+                ) {
+                    Text("Copy URL + login code")
+                }
             }
         }
     }

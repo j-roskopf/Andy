@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#0f1419" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <title>Andy</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icons/icon-192.png" />
@@ -17,9 +17,9 @@
     <section id="view-auth" class="view hidden">
       <div class="auth-card">
         <h1>Andy</h1>
-        <p class="muted">Enter the access token from Andy Settings → MCP → Network Access.</p>
+        <p class="muted">Enter the access token from Settings, a QR login code, or scan the QR code.</p>
         <label class="field">
-          <span>Access token</span>
+          <span>Access token or login code</span>
           <input id="token-input" type="password" autocomplete="off" spellcheck="false" />
         </label>
         <button id="token-save" class="primary">Continue</button>
@@ -28,17 +28,17 @@
     </section>
 
     <section id="view-list" class="view hidden">
-      <header class="topbar">
+      <header class="list-header">
         <h1>Chats</h1>
-        <div class="topbar-actions">
-          <button id="btn-notify" class="ghost" type="button">Enable notifications</button>
-          <button id="btn-new" class="primary" type="button">New</button>
+        <div class="list-header-actions">
+          <button id="btn-new" class="primary" type="button">New chat</button>
           <button id="btn-forget" class="ghost" type="button">Log out</button>
         </div>
+        <button id="btn-notify" class="ghost list-notify-btn" type="button" hidden title="Enable push notifications">Enable notifications</button>
       </header>
+      <p id="list-error" class="error list-error hidden"></p>
       <div id="chat-list" class="list"></div>
       <p id="list-empty" class="muted empty hidden">No ACP chats yet.</p>
-      <p id="list-error" class="error hidden"></p>
     </section>
 
     <section id="view-chat" class="view view-chat hidden">
@@ -63,20 +63,22 @@
       </div>
     </section>
 
-    <section id="view-new" class="view hidden">
+    <section id="view-new" class="view view-new hidden">
       <header class="topbar">
         <button id="btn-new-back" class="ghost icon-btn" type="button" aria-label="Back">‹</button>
         <h1>New chat</h1>
       </header>
-      <form id="new-form" class="form">
+      <div class="new-options">
         <label class="field">
           <span>Agent</span>
           <select id="new-agent">
             <option value="ClaudeCode">Claude Code</option>
-            <option value="Codex">Codex</option>
-            <option value="Cursor">Cursor</option>
-            <option value="OpenCode">OpenCode</option>
-            <option value="Pi">Pi</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <select id="new-model">
+            <option value="">Provider default</option>
           </select>
         </label>
         <label class="field">
@@ -93,20 +95,16 @@
             <option value="Full">Full</option>
           </select>
         </label>
-        <label class="field">
-          <span>Title (optional)</span>
-          <input id="new-title" type="text" />
-        </label>
-        <label class="field">
-          <span>Prompt</span>
-          <div class="composer-wrap new-prompt-wrap">
-            <div id="new-slash-menu" class="slash-menu hidden" role="listbox"></div>
-            <textarea id="new-prompt" rows="5" required autocomplete="off"></textarea>
-          </div>
-        </label>
-        <button type="submit" class="primary">Start chat</button>
+        <p class="muted new-agent-hint">Terminal-only agents (Antigravity, Hermes, OpenClaw) are available in the desktop app, not web chat.</p>
         <p id="new-error" class="error hidden"></p>
-      </form>
+      </div>
+      <div class="composer-wrap">
+        <div id="new-slash-menu" class="slash-menu hidden" role="listbox"></div>
+        <form id="new-form" class="composer">
+          <textarea id="new-prompt" rows="1" placeholder="Prompt…" enterkeyhint="go" required autocomplete="off"></textarea>
+          <button type="submit" class="primary">Start</button>
+        </form>
+      </div>
     </section>
   </div>
   <script src="/app.js"></script>

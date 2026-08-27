@@ -7,10 +7,15 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentStatus
+import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.LocalAgentRuntime
 import app.andy.model.acpSupported
+import app.andy.model.hasVendorCli
 import app.andy.model.isLocalModelBackend
+import app.andy.model.localModelIdWithoutProviderPrefix
 import app.andy.model.localModelLaunchError
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.parseLocalAgentRuntime
@@ -23,6 +28,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.http.content.staticResources
+import io.ktor.server.request.contentLength
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
@@ -51,6 +57,14 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 private val WebChatJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+private const val WebChatMaxBodyBytes = 1_048_576L
+
+private suspend fun io.ktor.server.application.ApplicationCall.receiveJsonObject(): JsonObject? {
+    if ((request.contentLength() ?: 0L) > WebChatMaxBodyBytes) return null
+    val bodyText = receiveText()
+    if (bodyText.length > WebChatMaxBodyBytes) return null
+    return runCatching { WebChatJson.parseToJsonElement(bodyText).jsonObject }.getOrNull()
+}
 
 /** Strict string field: rejects arrays/objects/non-string primitives so handlers return 4xx, not 500. */
 private fun JsonObject.requiredString(name: String): String? {
@@ -80,6 +94,7 @@ internal fun Application.installWebChatRoutes(
     projectWorkflows: () -> ProjectWorkflowService? = { null },
     actionConfig: () -> ActionConfigStore? = { null },
     push: WebPushService,
+    networkAccess: NetworkAccessWebConfig = NetworkAccessWebConfig(),
 ) {
     routing {
         staticResources("/", "webchat") {
@@ -87,6 +102,135 @@ internal fun Application.installWebChatRoutes(
         }
 
         route("/api") {
+            post("/auth/login") {
+                val remote = call.remotePeerAddress()
+                if (networkAccess.loginLimiter.isBlocked(remote)) {
+                    return@post call.respondJsonError(
+                        HttpStatusCode.TooManyRequests,
+                        "too many failed login attempts",
+                    )
+                }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
+                val code = body.requiredString("code")?.trim().orEmpty()
+                val master = body.requiredString("token")?.trim().orEmpty()
+                val expectedMaster = networkAccess.masterTokenProvider().trim()
+                val sessionToken = when {
+                    code.isNotEmpty() -> networkAccess.sessionStore.exchangeLoginCode(code)
+                    master.isNotEmpty() && expectedMaster.isNotEmpty() ->
+                        networkAccess.sessionStore.exchangeMasterToken(master, expectedMaster)
+                    else -> null
+                }
+                if (sessionToken == null) {
+                    networkAccess.loginLimiter.recordFailure(remote)
+                    return@post call.respondJsonError(HttpStatusCode.Unauthorized, "invalid or expired login")
+                }
+                networkAccess.loginLimiter.resetKey(remote)
+                val expiresAtMillis = System.currentTimeMillis() + networkAccess.sessionTtlMillis
+                call.respondText(
+                    buildJsonObject {
+                        put("sessionToken", sessionToken)
+                        put("expiresAtMillis", expiresAtMillis)
+                        put("scope", "chat")
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            get("/agents") {
+                call.respondText(
+                    buildJsonArray {
+                        AgentKind.entries.forEach { agent ->
+                            add(
+                                buildJsonObject {
+                                    put("id", agent.name)
+                                    put("label", agent.label)
+                                    put("cliName", agent.cliName)
+                                    put("webChat", agent.acpSupported)
+                                },
+                            )
+                        }
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            get("/models") {
+                val agents = agentRuns()
+                    ?: return@get call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "agent services unavailable",
+                    )
+                val agentName = call.request.queryParameters["agent"].orEmpty().trim()
+                val agent = AgentKind.entries.firstOrNull {
+                    it.name.equals(agentName, ignoreCase = true) ||
+                        it.cliName.equals(agentName, ignoreCase = true)
+                } ?: return@get call.respondJsonError(HttpStatusCode.BadRequest, "unknown agent: $agentName")
+                if (!agent.acpSupported) {
+                    return@get call.respondJsonError(
+                        HttpStatusCode.BadRequest,
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
+                    )
+                }
+                val discovered = agents.providerModels.value
+                val options = discovered[agent].orEmpty().ifEmpty { AgentModelCatalog.options(agent) }
+                val defaults = agents.providerDefaults.value[agent]
+                val defaultModel = defaults?.model?.let { raw ->
+                    if (agent.isLocalModelBackend) {
+                        localModelIdWithoutProviderPrefix(agent, raw)
+                    } else {
+                        AgentModelCatalog.option(agent, raw, discovered)?.id ?: raw
+                    }
+                }
+                val defaultRuntime = if (agent.isLocalModelBackend) {
+                    (defaults?.localRuntime ?: LocalAgentRuntime.OpenCode).name
+                } else {
+                    null
+                }
+                call.respondText(
+                    buildJsonObject {
+                        put("agent", agent.name)
+                        put("requiresModel", agent.isLocalModelBackend)
+                        if (defaultModel != null) put("defaultModel", defaultModel) else put("defaultModel", JsonNull)
+                        if (defaultRuntime != null) put("defaultRuntime", defaultRuntime)
+                        putJsonArray("models") {
+                            if (agent.hasVendorCli) {
+                                add(
+                                    buildJsonObject {
+                                        put("id", "")
+                                        put("label", "Provider default")
+                                    },
+                                )
+                            }
+                            val seen = mutableSetOf<String>()
+                            options.forEach { opt ->
+                                val id = if (agent.isLocalModelBackend) {
+                                    localModelIdWithoutProviderPrefix(agent, opt.id)
+                                } else {
+                                    opt.id
+                                }
+                                if (!seen.add(id)) return@forEach
+                                add(
+                                    buildJsonObject {
+                                        put("id", id)
+                                        put("label", opt.label)
+                                    },
+                                )
+                            }
+                            if (!defaultModel.isNullOrBlank() && seen.add(defaultModel)) {
+                                add(
+                                    buildJsonObject {
+                                        put("id", defaultModel)
+                                        put("label", defaultModel)
+                                    },
+                                )
+                            }
+                        }
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
             get("/chats") {
                 val agents = agentRuns()
                     ?: return@get call.respondText(
@@ -124,12 +268,11 @@ internal fun Application.installWebChatRoutes(
                 }
                 call.respondText(
                     buildJsonArray {
-                        byId.values.forEach { (id, name, directory) ->
+                        byId.values.forEach { (id, name, _) ->
                             add(
                                 buildJsonObject {
                                     put("id", id)
                                     put("name", name)
-                                    put("directory", directory)
                                 },
                             )
                         }
@@ -175,18 +318,8 @@ internal fun Application.installWebChatRoutes(
             }
 
             get("/chats/recent-directories") {
-                val agents = agentRuns()
-                    ?: return@get call.respondText(
-                        """{"error":"agent services unavailable"}""",
-                        status = HttpStatusCode.ServiceUnavailable,
-                    )
-                val dirs = agents.tasks.value.excludingTemporary()
-                    .asSequence()
-                    .flatMap { listOfNotNull(it.cwd?.takeIf { p -> p.isNotBlank() }, it.originDir?.takeIf { p -> p.isNotBlank() }) }
-                    .distinct()
-                    .sorted()
-                    .toList()
-                call.respondText(buildJsonArray { dirs.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } }.toString(), ContentType.Application.Json)
+                // Web clients resolve projects by id — raw filesystem paths are desktop-only.
+                call.respondText("[]", ContentType.Application.Json)
             }
 
             get("/chats/{id}") {
@@ -230,10 +363,8 @@ internal fun Application.installWebChatRoutes(
                         "this chat isn't supported in the web client yet — use `andy attach` over SSH",
                     )
                 }
-                val body = runCatching { WebChatJson.parseToJsonElement(call.receiveText()).jsonObject }
-                    .getOrElse {
-                        return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
-                    }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 val messageField = body["message"]
                 if (messageField != null && messageField.asJsonStringOrNull() == null) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "message must be string")
@@ -267,10 +398,8 @@ internal fun Application.installWebChatRoutes(
                         "this chat isn't supported in the web client yet — use `andy attach` over SSH",
                     )
                 }
-                val body = runCatching { WebChatJson.parseToJsonElement(call.receiveText()).jsonObject }
-                    .getOrElse {
-                        return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
-                    }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 val requestIdField = body["requestId"]
                 if (requestIdField != null && requestIdField.asJsonStringOrNull() == null) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "requestId must be string")
@@ -309,10 +438,8 @@ internal fun Application.installWebChatRoutes(
                         HttpStatusCode.ServiceUnavailable,
                         "agent services unavailable",
                     )
-                val body = runCatching { WebChatJson.parseToJsonElement(call.receiveText()).jsonObject }
-                    .getOrElse {
-                        return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
-                    }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 for (field in listOf("prompt", "agent", "directory", "autonomy", "title", "projectId", "model", "runtime")) {
                     val el = body[field] ?: continue
                     if (el.asJsonStringOrNull() == null && el !is JsonNull) {
@@ -369,6 +496,11 @@ internal fun Application.installWebChatRoutes(
                         }
                     }?.takeIf { it.isNotBlank() }
                 val runtime = parseLocalAgentRuntime(body.requiredString("runtime")?.trim())
+                    ?: if (agent.isLocalModelBackend) {
+                        agents.providerDefaults.value[agent]?.localRuntime ?: LocalAgentRuntime.OpenCode
+                    } else {
+                        null
+                    }
                 val model = body.requiredString("model")?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
                     if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
                 }
@@ -415,10 +547,8 @@ internal fun Application.installWebChatRoutes(
             }
 
             post("/push/subscribe") {
-                val body = runCatching { WebChatJson.parseToJsonElement(call.receiveText()).jsonObject }
-                    .getOrElse {
-                        return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
-                    }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 val endpointField = body["endpoint"]
                 if (endpointField != null && endpointField.asJsonStringOrNull() == null) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "endpoint must be string")
@@ -450,7 +580,8 @@ internal fun Application.installWebChatRoutes(
                     )
                 }
                 try {
-                    push.subscribe(endpoint, p256dh, auth)
+                    val fingerprint = call.attributes.getOrNull(NetworkAccessAuthFingerprintKey)
+                    push.subscribe(endpoint, p256dh, auth, fingerprint)
                     call.respondText("""{"ok":true}""", ContentType.Application.Json)
                 } catch (error: Exception) {
                     call.respondJsonError(
@@ -481,6 +612,15 @@ internal fun Application.installWebChatRoutes(
         }
 
         webSocket("/ws/chats/{id}") {
+            if (call.attributes.getOrNull(NetworkAccessWsScopeRejectedKey) == true) {
+                close(
+                    CloseReason(
+                        NetworkAccessScopeFailureCloseCode.toShort(),
+                        "forbidden",
+                    ),
+                )
+                return@webSocket
+            }
             if (call.attributes.getOrNull(NetworkAccessWsAuthRejectedKey) == true) {
                 close(
                     CloseReason(
@@ -619,8 +759,6 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
     put("lane", lane.name)
     put("status", status?.name.orEmpty())
     put("projectId", projectId.orEmpty())
-    put("cwd", cwd.orEmpty())
-    put("originDir", originDir.orEmpty())
     put("autonomy", autonomy.name)
     put("unread", unread)
     put("archived", archived)

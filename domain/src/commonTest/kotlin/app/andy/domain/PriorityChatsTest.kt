@@ -82,7 +82,6 @@ class PriorityChatsTest {
         val visible = visibleChatSessions(
             sessions = rest + priority,
             pinPriority = true,
-            expanded = false,
             limit = 2,
         )
         // All 3 priority + 2 non-priority (limit), even though priority alone exceeds limit.
@@ -98,7 +97,6 @@ class PriorityChatsTest {
         val visible = visibleChatSessions(
             sessions = listOf(newer, mid, older, working),
             pinPriority = true,
-            expanded = false,
             limit = 2,
         )
         // All priority chats, plus [limit] non-priority — priority does not consume the budget.
@@ -112,7 +110,6 @@ class PriorityChatsTest {
         val visible = visibleChatSessions(
             sessions = listOf(newer, working),
             pinPriority = false,
-            expanded = false,
             limit = 1,
         )
         assertEquals(listOf("newer"), visible.map { it.id })

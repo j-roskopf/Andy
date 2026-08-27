@@ -55,12 +55,10 @@ fun splitPriorityChats(
 fun visibleChatSessions(
     sessions: List<AgentTask>,
     pinPriority: Boolean,
-    expanded: Boolean,
     limit: Int,
     nowMillis: Long = clockNowMillis(),
 ): List<AgentTask> {
-    if (!pinPriority) return if (expanded) sessions else sessions.take(limit)
+    if (!pinPriority) return sessions.take(limit)
     val split = splitPriorityChats(sessions, nowMillis)
-    if (expanded) return split.priority + split.rest
     return split.priority + split.rest.take(limit)
 }
