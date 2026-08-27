@@ -29,7 +29,9 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.http.content.staticResources
 import io.ktor.server.request.contentLength
-import io.ktor.server.request.receiveText
+import io.ktor.server.request.receiveChannel
+import io.ktor.utils.io.core.readBytes
+import io.ktor.utils.io.readRemaining
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -59,10 +61,16 @@ import kotlinx.serialization.json.putJsonObject
 private val WebChatJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 private const val WebChatMaxBodyBytes = 1_048_576L
 
+private suspend fun io.ktor.server.application.ApplicationCall.receiveBoundedText(maxBytes: Long): String? {
+    if ((request.contentLength() ?: 0L) > maxBytes) return null
+    val channel = receiveChannel()
+    val bytes = channel.readRemaining(maxBytes + 1).readBytes()
+    if (bytes.size > maxBytes) return null
+    return bytes.decodeToString()
+}
+
 private suspend fun io.ktor.server.application.ApplicationCall.receiveJsonObject(): JsonObject? {
-    if ((request.contentLength() ?: 0L) > WebChatMaxBodyBytes) return null
-    val bodyText = receiveText()
-    if (bodyText.length > WebChatMaxBodyBytes) return null
+    val bodyText = receiveBoundedText(WebChatMaxBodyBytes) ?: return null
     return runCatching { WebChatJson.parseToJsonElement(bodyText).jsonObject }.getOrNull()
 }
 
@@ -592,7 +600,7 @@ internal fun Application.installWebChatRoutes(
             }
 
             delete("/push/subscribe") {
-                val bodyText = runCatching { call.receiveText() }.getOrDefault("")
+                val bodyText = call.receiveBoundedText(WebChatMaxBodyBytes).orEmpty()
                 val endpoint = if (bodyText.isNotBlank()) {
                     val obj = runCatching { WebChatJson.parseToJsonElement(bodyText).jsonObject }
                         .getOrElse {

@@ -268,6 +268,23 @@ class WebChatHttpServerTest {
     }
 
     @Test
+    fun loopbackPushSubscribeWithoutNetworkAccess() = runBlocking {
+        val client = HttpClient(CIO)
+        try {
+            val response = client.post("http://127.0.0.1:$port/api/push/subscribe") {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"endpoint":"https://push.example.test/ep","keys":{"p256dh":"key","auth":"auth"}}""",
+                )
+            }
+            assertEquals(HttpStatusCode.OK, response.status, response.bodyAsText())
+            assertTrue(response.bodyAsText().contains("ok"))
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun websocketAcceptsTokenQueryParam() = runBlocking {
         val client = HttpClient(CIO) { install(WebSockets) }
         try {

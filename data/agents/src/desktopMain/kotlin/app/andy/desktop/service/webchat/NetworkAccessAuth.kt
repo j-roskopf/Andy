@@ -26,6 +26,9 @@ internal const val NetworkAccessScopeFailureCloseCode = 4403
 internal val NetworkAccessAuthFingerprintKey =
     AttributeKey<String>("NetworkAccessAuthFingerprint")
 
+/** Stable owner id for unauthenticated loopback web-chat (Network Access off). */
+internal const val LocalLoopbackPushOwnerFingerprint = "local-loopback"
+
 /**
  * Set by [NetworkAccessAuthPlugin] when a WebSocket handshake failed auth.
  * The WS route upgrades then closes with [NetworkAccessAuthFailureCloseCode]
@@ -112,6 +115,10 @@ internal val NetworkAccessAuthPlugin = createApplicationPlugin(
         }
 
         if (loopback && !networkAccessEnabled) {
+            call.attributes.put(
+                NetworkAccessAuthFingerprintKey,
+                LocalLoopbackPushOwnerFingerprint,
+            )
             return@onCall
         }
 
