@@ -41,5 +41,5 @@ modules:
       - type: file
         path: com.joetr.andy.metainfo.xml
       - type: file
-        path: ../src/desktopMain/resources/icons/andy.png
+        path: ../composeApp/src/desktopMain/resources/icons/andy.png
         dest-filename: com.joetr.andy.png
