@@ -321,7 +321,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          deb="$(find build -name '*.deb' -print -quit)"
+          deb="$(find composeApp/build -name '*.deb' -print -quit)"
           if [[ -z "${deb}" ]]; then
             echo "::error::Could not find Linux DEB release artifact"
             exit 1
@@ -399,7 +399,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release-artifacts" | Out-Null
-          $msi = Get-ChildItem -Path "build" -Recurse -Filter "*.msi" | Select-Object -First 1
+          $msi = Get-ChildItem -Path "composeApp/build" -Recurse -Filter "*.msi" | Select-Object -First 1
           if (-not $msi) {
             throw "Could not find Windows MSI release artifact"
           }
@@ -543,7 +543,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          log_dir="build/compose/logs"
+          log_dir="composeApp/build/compose/logs"
           if [[ ! -d "${log_dir}" ]]; then
             echo "No Compose packaging logs found."
             exit 0
@@ -560,7 +560,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          dmg="$(find build -name '*.dmg' -print -quit)"
+          dmg="$(find composeApp/build -name '*.dmg' -print -quit)"
           if [[ -z "${dmg}" ]]; then
             echo "::error::Could not find macOS DMG release artifact"
             exit 1
