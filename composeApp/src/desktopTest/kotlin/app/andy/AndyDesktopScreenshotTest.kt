@@ -248,7 +248,7 @@ class AndyDesktopScreenshotTest {
                         else -> onNode(isRoot() and hasAnyDescendant(hasText("Devices")))
                     }
                     captureTarget.captureRoboImage(
-                        filePath = "src/screenshotTest/roborazzi/macos/${scenario.fileName}",
+                        filePath = "../src/screenshotTest/roborazzi/macos/${scenario.fileName}",
                         roborazziOptions = screenshotOptions,
                     )
                 }
