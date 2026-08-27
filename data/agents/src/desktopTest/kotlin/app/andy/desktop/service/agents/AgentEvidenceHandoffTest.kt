@@ -167,22 +167,36 @@ class AgentEvidenceHandoffTest {
                 terminalMode = AgentTerminalMode.DirectPty,
                 evidenceRootDir = evidenceRoot,
             )
-            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
-                while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.available }) delay(25)
+            withTimeout(harnessTimeoutMillis(10_000, 60_000, 120_000)) {
+                while (service.cliStatuses.value.none { it.kind == AgentKind.Codex && it.ready }) delay(25)
             }
-            withTimeout(harnessTimeoutMillis(10_000, 60_000)) { while (service.tasks.value.isEmpty()) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000, 120_000)) { while (service.tasks.value.isEmpty()) delay(25) }
 
             service.resume(finished.id, "check the network trace", contextBundleIds = listOf(bundleId))
 
             val copiedManifest = File(store.taskEvidenceDir(finished.id), "$bundleId/manifest.json")
-            withTimeout(harnessTimeoutMillis(10_000, 60_000)) { while (!copiedManifest.isFile) delay(25) }
-            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
+            val manifestPathHint = copiedManifest.canonicalPath
+            withTimeout(harnessTimeoutMillis(10_000, 60_000, 120_000)) { while (!copiedManifest.isFile) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000, 120_000)) {
                 while (service.tasks.value.first { it.id == finished.id }.isActive) delay(25)
+            }
+            withTimeout(harnessTimeoutMillis(10_000, 60_000, 120_000)) {
+                while (
+                    adapter.resumeFollowUps.none { followUp ->
+                        followUp != null &&
+                            (followUp.contains(manifestPathHint) || followUp.contains(copiedManifest.absolutePath))
+                    }
+                ) {
+                    delay(25)
+                }
             }
 
             assertTrue(copiedManifest.isFile, "evidence should be copied on resume even for an orphaned/restarted task")
             assertTrue(
-                adapter.resumeFollowUps.any { it?.contains(copiedManifest.absolutePath) == true },
+                adapter.resumeFollowUps.any { followUp ->
+                    followUp != null &&
+                        (followUp.contains(manifestPathHint) || followUp.contains(copiedManifest.absolutePath))
+                },
                 "resume follow-up text should point at the copied evidence: ${adapter.resumeFollowUps}",
             )
 

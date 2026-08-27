@@ -15,7 +15,7 @@ import kotlin.test.fail
  */
 class MitmAddonSourceTest {
     companion object {
-        /** SHA-256 of `src/desktopMain/resources/proxy/andy_mitm_addon.py` (runtime source). */
+        /** SHA-256 of `data/network/.../proxy/andy_mitm_addon.py` (runtime classpath resource). */
         const val EXPECTED_RESOURCE_SHA256 =
             "4a5eae319c815f08889822fcbc6cc47d61ec2b3f659c6c9983800e02f22a8e3f"
     }
