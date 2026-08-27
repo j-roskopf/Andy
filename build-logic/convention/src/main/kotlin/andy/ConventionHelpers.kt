@@ -4,7 +4,9 @@ import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalog
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.plugins.BasePluginExtension
+import org.gradle.api.tasks.testing.Test
 import org.gradle.kotlin.dsl.getByType
+import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 
@@ -75,6 +77,17 @@ internal fun Project.configureAndyKmp(
                     implementation(kotlin("test"))
                 }
             }
+        }
+    }
+
+    configureAndyDesktopTests()
+}
+
+internal fun Project.configureAndyDesktopTests() {
+    tasks.withType<Test>().configureEach {
+        if (name == "desktopTest") {
+            systemProperty("java.awt.headless", "false")
+            jvmArgs("--add-exports=jdk.unsupported.desktop/jdk.swing.interop=ALL-UNNAMED")
         }
     }
 }

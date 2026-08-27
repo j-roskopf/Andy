@@ -28,6 +28,7 @@ kotlin {
         }
         desktopTest.dependencies {
             implementation(libs.compose.ui.test.junit4)
+            implementation(compose.desktop.currentOs)
             implementation(project(":core:testing"))
             implementation(project(":data:devices"))
             implementation(project(":feature:controls"))

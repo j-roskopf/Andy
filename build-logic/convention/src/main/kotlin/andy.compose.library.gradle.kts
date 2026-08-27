@@ -39,5 +39,15 @@ kotlin {
                 implementation(libs.findLibrary("compose-ui-tooling-preview").get())
             }
         }
+        named("desktopTest") {
+            dependencies {
+                implementation(compose.desktop.currentOs)
+            }
+        }
+        named("desktopMain") {
+            dependencies {
+                implementation(libs.findLibrary("coroutines-swing").get())
+            }
+        }
     }
 }

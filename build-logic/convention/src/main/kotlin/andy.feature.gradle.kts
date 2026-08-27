@@ -27,6 +27,7 @@ kotlin {
             dependencies {
                 implementation(libs.findLibrary("coroutines-test").get())
                 implementation(libs.findLibrary("compose-ui-test-junit4").get())
+                implementation(compose.desktop.currentOs)
             }
         }
     }

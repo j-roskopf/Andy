@@ -332,7 +332,7 @@ jobs:
           fi
 
           rsync -a --delete --exclude .git \
-            build/dist/wasmJs/productionExecutable/ \
+            composeApp/build/dist/wasmJs/productionExecutable/ \
             preview-pages/
           touch preview-pages/.nojekyll
           cp preview-pages/index.html preview-pages/404.html

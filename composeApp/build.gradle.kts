@@ -188,7 +188,7 @@ plugins.withType<WasmNodeJsPlugin> {
 }
 
 roborazzi {
-    outputDir.set(layout.projectDirectory.dir("src/screenshotTest/roborazzi"))
+    outputDir.set(rootProject.layout.projectDirectory.dir("src/screenshotTest/roborazzi"))
 }
 
 val verifyScrcpyServer by tasks.registering {
@@ -1023,7 +1023,7 @@ tasks.register<Copy>("installAndydLaunchAgent") {
 tasks.register<Exec>("buildAndyCli") {
     group = "build"
     description = "Build the release andy CLI binary (cli/andy)"
-    workingDir = file("cli/andy")
+    workingDir = rootProject.layout.projectDirectory.dir("cli/andy").asFile
     val pathSep = System.getProperty("path.separator") ?: ":"
     val cargoHomeBin = file("${System.getProperty("user.home")}/.cargo/bin")
     val pathWithCargo = listOfNotNull(
@@ -1051,7 +1051,7 @@ tasks.register<Copy>("installAndyCli") {
     group = "distribution"
     description = "Install release andy CLI to ~/.andy/bin/andy"
     dependsOn("buildAndyCli")
-    from("cli/andy/target/release/andy")
+    from(rootProject.layout.projectDirectory.file("cli/andy/target/release/andy"))
     into("${System.getProperty("user.home")}/.andy/bin")
     filePermissions {
         user {
@@ -1080,19 +1080,19 @@ tasks.register<Copy>("installAndyCli") {
             check(codesign.waitFor() == 0) { "codesign failed for ${dest.absolutePath}" }
         }
 
-        val hookSrc = file("scripts/andy-status-hook.sh")
+        val hookSrc = rootProject.file("scripts/andy-status-hook.sh")
         check(hookSrc.isFile) { "missing ${hookSrc.path}" }
         val hookDest = file("$binDir/andy-status-hook.sh")
         hookDest.writeText(hookSrc.readText())
         hookDest.setExecutable(true, false)
 
-        val piExtSrc = file("scripts/pi-andy-extension.ts")
+        val piExtSrc = rootProject.file("scripts/pi-andy-extension.ts")
         check(piExtSrc.isFile) { "missing ${piExtSrc.path}" }
         val piExtDest = file("${System.getProperty("user.home")}/.andy/pi/andy-extension.ts")
         piExtDest.parentFile.mkdirs()
         piExtDest.writeText(piExtSrc.readText())
 
-        val ocPluginSrc = file("scripts/opencode-andy-status.js")
+        val ocPluginSrc = rootProject.file("scripts/opencode-andy-status.js")
         check(ocPluginSrc.isFile) { "missing ${ocPluginSrc.path}" }
         // Canonical copy next to the status hook for reference; projects get a
         // fresh install from AndyOpenCodePluginInstaller on session start.
@@ -1162,7 +1162,7 @@ tasks.register("installAndyd") {
         val jarDest = file("$runtimeDir/andyd.jar")
         andydFatJar.get().archiveFile.get().asFile.copyTo(jarDest, overwrite = true)
 
-        val launcherSrc = file("scripts/andyd-launcher.sh")
+        val launcherSrc = rootProject.file("scripts/andyd-launcher.sh")
         check(launcherSrc.isFile) { "missing ${launcherSrc.path}" }
         val launcherDest = file("$binDir/andyd")
         launcherDest.writeText(launcherSrc.readText())
