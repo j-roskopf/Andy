@@ -3410,9 +3410,12 @@ class DesktopAgentRunService(
     override fun events(taskId: String): StateFlow<List<AgentEvent>> {
         currentTask(taskId) ?: return emptyEvents
         return eventFlows.computeIfAbsent(taskId) {
+            val isAcp = currentTask(taskId)?.lane == AgentLaneKind.Acp
             MutableStateFlow(
-                if (currentTask(taskId)?.lane == AgentLaneKind.Acp) loadAcpEventsFromStore(taskId) else emptyList(),
-            ).also { scheduleFileChangesEnrichment(taskId) }
+                if (isAcp) loadAcpEventsForInitialDisplay(taskId) else emptyList(),
+            ).also {
+                if (isAcp) enqueueImmediateAcpDisplayEnrichment(taskId)
+            }
         }
     }
 
@@ -5391,6 +5394,29 @@ class DesktopAgentRunService(
         coalesceAcpTranscriptEvents(acpTranscriptStore.load(taskId))
 
     /**
+     * Raw ACP rows may include persisted [AgentEvent.FileChanges] that enrichment later
+     * strips (committed edits) or replaces (synthesized cards). Never publish them on first
+     * paint — messages and tool activity can render while enrichment runs on IO.
+     */
+    private fun loadAcpEventsForInitialDisplay(taskId: String): List<AgentEvent> =
+        loadAcpEventsFromStore(taskId).filter { it !is AgentEvent.FileChanges }
+
+    private fun enqueueImmediateAcpDisplayEnrichment(
+        taskId: String,
+        flushBatch: Boolean = false,
+        atMillis: Long = System.currentTimeMillis(),
+    ) {
+        val task = currentTask(taskId) ?: return
+        if (task.lane != AgentLaneKind.Acp || task.status == AgentStatus.Blocked) return
+        fileChangesEnrichmentJobs[taskId]?.cancel()
+        fileChangesEnrichmentJobs[taskId] = scope.launch {
+            fileChangesEnrichmentMutex.computeIfAbsent(taskId) { Mutex() }.withLock {
+                runFileChangesEnrichment(taskId, flushBatch, synthesizeTurn = false, atMillis)
+            }
+        }
+    }
+
+    /**
      * Older transcripts may have mutating tool calls but no persisted file-changes rows
      * (before batch tracking landed). Synthesize one inline card per turn segment on IO only.
      */
@@ -5463,7 +5489,7 @@ class DesktopAgentRunService(
                     acpTranscriptStore.load(taskId),
                 ).display
             }
-            eventFlows[taskId]?.update { current ->
+            eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }.update { current ->
                 if (AgentFileChangesEnrichment.displayEventsEqual(current, display)) current else display
             }
         }
@@ -5505,12 +5531,18 @@ class DesktopAgentRunService(
     private fun refreshAcpTranscriptFromDisk(taskId: String) {
         val task = currentTask(taskId) ?: return
         if (task.lane != AgentLaneKind.Acp) return
-        scope.launch(Dispatchers.IO) {
-            val loaded = loadAcpEventsFromStore(taskId)
-            eventFlows.computeIfAbsent(taskId) { MutableStateFlow(loaded) }.value = loaded
-            if (task.status != AgentStatus.Blocked) {
-                scheduleFileChangesEnrichment(taskId)
+        eventFlows.computeIfAbsent(taskId) {
+            MutableStateFlow(loadAcpEventsForInitialDisplay(taskId))
+        }
+        if (task.status != AgentStatus.Blocked) {
+            enqueueImmediateAcpDisplayEnrichment(taskId)
+        } else {
+            scope.launch(Dispatchers.IO) {
+                val loaded = loadAcpEventsFromStore(taskId)
+                eventFlows[taskId]?.value = loaded
             }
+        }
+        scope.launch(Dispatchers.IO) {
             if (task.planMode && task.status == AgentStatus.Done && task.completedPlanText.isNullOrBlank()) {
                 resolveCompletedPlanText(taskId, task)?.let { plan ->
                     updateTask(taskId) { current ->
@@ -5545,7 +5577,7 @@ class DesktopAgentRunService(
         val task = currentTask(taskId)
         val isAcp = task?.lane == AgentLaneKind.Acp
         val flow = eventFlows.computeIfAbsent(taskId) {
-            MutableStateFlow(if (isAcp) loadAcpEventsFromStore(taskId) else emptyList())
+            MutableStateFlow(if (isAcp) loadAcpEventsForInitialDisplay(taskId) else emptyList())
         }
         val filterReplay = taskId in acpSuppressProviderReplay
         val replayScratch = if (filterReplay) {
@@ -5736,10 +5768,13 @@ class DesktopAgentRunService(
                 terminals.clearForeground()
             }
             viewing -> {
+                val alreadyViewing = taskId in viewingTaskIds
                 viewingTaskIds.add(taskId)
                 terminals.setOnlyForeground(taskId)
                 markRead(taskId)
-                refreshAcpTranscriptFromDisk(taskId)
+                if (!alreadyViewing) {
+                    refreshAcpTranscriptFromDisk(taskId)
+                }
             }
             else -> {
                 viewingTaskIds.remove(taskId)

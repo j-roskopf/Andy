@@ -32,10 +32,21 @@ internal fun isTerminalPasteChord(event: KeyEvent): Boolean =
         (event.isMetaPressed || event.isCtrlPressed) &&
         event.key == Key.V
 
+private val modifierOnlyKeys = setOf(
+    Key.CtrlLeft, Key.CtrlRight,
+    Key.AltLeft, Key.AltRight,
+    Key.ShiftLeft, Key.ShiftRight,
+    Key.MetaLeft, Key.MetaRight,
+)
+
+/** AWT `KeyEvent.KEY_CHAR_UNDEFINED` — sent for modifier-only KEY_PRESSED events. */
+private const val KEY_CHAR_UNDEFINED = 0xFFFF
+
 internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
     if (event.type != KeyEventType.KeyDown) return null
     // Cmd/Meta chords are handled by the canvas (copy/paste) or dropped — never encoded.
     if (event.isMetaPressed) return null
+    if (event.key in modifierOnlyKeys) return null
 
     if (event.isCtrlPressed) {
         encodeCtrl(event)?.let { return it }
@@ -59,7 +70,12 @@ internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
     }
 
     val codePoint = event.utf16CodePoint
-    if (codePoint != 0 && Character.isValidCodePoint(codePoint) && !Character.isISOControl(codePoint)) {
+    if (
+        codePoint != 0 &&
+            codePoint != KEY_CHAR_UNDEFINED &&
+            Character.isValidCodePoint(codePoint) &&
+            !Character.isISOControl(codePoint)
+    ) {
         return String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8)
     }
     return null

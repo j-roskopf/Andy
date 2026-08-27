@@ -1091,6 +1091,7 @@ tasks.register("installAndyd") {
         println("Installed ${launcherDest.absolutePath}")
         println("Installed ${jarDest.absolutePath}")
         println("Recorded ${releaseMeta.absolutePath}")
+        println("Restart the Andy desktop app (or quit Andy) so the running andyd loads the new JAR.")
         println("Add ~/.andy/bin to PATH permanently if needed:")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.zshrc   # zsh")
         println("  echo 'export PATH=\"\$HOME/.andy/bin:\$PATH\"' >> ~/.bashrc  # bash")

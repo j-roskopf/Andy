@@ -145,6 +145,25 @@ class DesktopWorkspaceStoreTest {
         assertEquals("Database", tracing.filesTab)
         assertEquals("garden", tracing.lastActionProjectId)
         assertEquals("test", tracing.lastActionId)
+        assertEquals(mapOf("garden" to "test"), tracing.lastActionIdsByProject)
+
+        DesktopWorkspaceStore(file).save(
+            tracing.copy(
+                lastActionProjectId = "mobile",
+                lastActionId = "install",
+                lastActionIdsByProject = mapOf(
+                    "garden" to "test",
+                    "mobile" to "install",
+                ),
+            ),
+        )
+        val perProjectActions = DesktopWorkspaceStore(file).load()
+        assertEquals("mobile", perProjectActions.lastActionProjectId)
+        assertEquals("install", perProjectActions.lastActionId)
+        assertEquals(
+            mapOf("garden" to "test", "mobile" to "install"),
+            perProjectActions.lastActionIdsByProject,
+        )
 
         file.writeText(file.readText().replace("performanceTab=Tracing", "performanceTab=Nope"))
         assertEquals("Metrics", DesktopWorkspaceStore(file).load().performanceTab)

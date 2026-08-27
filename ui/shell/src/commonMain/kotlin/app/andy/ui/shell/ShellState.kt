@@ -928,6 +928,7 @@ internal class ShellState(
             it.copy(
                 lastActionProjectId = project.id,
                 lastActionId = action.id,
+                lastActionIdsByProject = it.lastActionIdsByProject + (project.id to action.id),
             )
         }
         val runId = services.actionRuns.run(project, action)
@@ -937,34 +938,51 @@ internal class ShellState(
     }
 
     fun rememberActionSelection(projectId: String, actionId: String?) {
+        val resolvedActionId = resolveLastActionId(projectId, actionId)
         if (
             workspaceState.lastActionProjectId == projectId &&
-            workspaceState.lastActionId == actionId
+            workspaceState.lastActionId == resolvedActionId
+        ) {
+            return
+        }
+        updateWorkspace {
+            val rememberedMap = if (actionId != null && resolvedActionId != null) {
+                it.lastActionIdsByProject + (projectId to resolvedActionId)
+            } else {
+                it.lastActionIdsByProject
+            }
+            it.copy(
+                lastActionProjectId = projectId,
+                lastActionId = resolvedActionId,
+                lastActionIdsByProject = rememberedMap,
+            )
+        }
+    }
+
+    fun rememberLastProject(projectId: String) {
+        val resolvedActionId = resolveLastActionId(projectId, actionId = null)
+        if (
+            workspaceState.lastActionProjectId == projectId &&
+            workspaceState.lastActionId == resolvedActionId
         ) {
             return
         }
         updateWorkspace {
             it.copy(
                 lastActionProjectId = projectId,
-                lastActionId = actionId,
+                lastActionId = resolvedActionId,
             )
         }
     }
 
-    fun rememberLastProject(projectId: String) {
-        if (workspaceState.lastActionProjectId == projectId) return
-        val actionId = workspaceState.lastActionId?.takeIf { actionId ->
-            actionsConfig.projects
-                .firstOrNull { it.id == projectId }
-                ?.actions
-                ?.any { it.id == actionId } == true
-        } ?: actionsConfig.projects.firstOrNull { it.id == projectId }?.actions?.firstOrNull()?.id
-        updateWorkspace {
-            it.copy(
-                lastActionProjectId = projectId,
-                lastActionId = actionId,
-            )
-        }
+    private fun resolveLastActionId(projectId: String, actionId: String?): String? {
+        val projectActions = actionsConfig.projects.firstOrNull { it.id == projectId }?.actions.orEmpty()
+        if (projectActions.isEmpty()) return null
+        actionId?.takeIf { id -> projectActions.any { it.id == id } }?.let { return it }
+        workspaceState.lastActionIdsByProject[projectId]
+            ?.takeIf { id -> projectActions.any { it.id == id } }
+            ?.let { return it }
+        return projectActions.firstOrNull()?.id
     }
 
     fun stopAction(run: RunningAction) {

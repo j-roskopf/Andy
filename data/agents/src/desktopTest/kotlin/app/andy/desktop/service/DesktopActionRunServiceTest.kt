@@ -76,29 +76,29 @@ class DesktopActionRunServiceTest {
     }
 
     @Test
-    fun rerunningAnActionStopsThePreviousShellAndStartsFresh() = runBlocking {
+    fun rerunningAnActionAppendsToTheExistingShell() = runBlocking {
         val service = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
         val project = ActionProject(
             id = "project",
             name = "Project",
             contextDir = createTempDirectory("andy-rerun-action").toString(),
         )
-        val action = ProjectAction(id = "run", name = "Run", command = "echo first")
+        val firstAction = ProjectAction(id = "run", name = "Run", command = "echo first")
+        val secondAction = firstAction.copy(command = "echo second")
 
-        val firstRunId = service.run(project, action)
+        val runId = service.run(project, firstAction)
         try {
-            awaitTerminalText(service, firstRunId, "first")
+            awaitTerminalText(service, runId, "first")
             assertEquals(ActionRunStatus.Running, service.running.value.single().status)
 
-            val secondRunId = service.run(project, action)
-            assertTrue(firstRunId != secondRunId)
-            assertEquals(listOf(secondRunId), service.running.value.map { it.runId })
-            awaitRustTerminal(service, secondRunId)
-            awaitTerminalText(service, secondRunId, "first")
+            val secondRunId = service.run(project, secondAction)
+            assertEquals(runId, secondRunId)
+            assertEquals(listOf(runId), service.running.value.map { it.runId })
+            awaitTerminalText(service, runId, "second")
+            assertTrue(service.bufferSnapshot(runId).contains("first"))
         } finally {
-            val runIds = service.running.value.map { it.runId }
-            runIds.forEach { service.stop(it) }
-            runIds.forEach { awaitRunFinished(service, it) }
+            service.stop(runId)
+            awaitRunFinished(service, runId)
         }
     }
 

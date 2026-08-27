@@ -16,6 +16,7 @@ pub mod device_map;
 pub mod dispatch;
 pub mod events;
 pub mod file_picker;
+pub mod loading;
 pub mod mcp;
 pub mod skills;
 pub mod slash;

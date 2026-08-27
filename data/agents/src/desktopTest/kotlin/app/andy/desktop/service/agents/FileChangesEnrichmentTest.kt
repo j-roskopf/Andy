@@ -75,6 +75,7 @@ class FileChangesEnrichmentTest {
             WorktreeManager.resetChangeSnapshotInvocationCount()
 
             service.testRunFileChangesEnrichmentNow(taskId, synthesizeTurn = true)
+            service.testAwaitFileChangesEnrichmentJobs()
 
             val fileChanges = service.events(taskId).value.filterIsInstance<AgentEvent.FileChanges>()
             assertEquals(1, fileChanges.size)
@@ -107,6 +108,8 @@ class FileChangesEnrichmentTest {
             assertTrue(WorktreeManager.changeSnapshotInvocations.get() >= 1)
             val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
             assertTrue(store.load(taskId).any { it is AgentEvent.FileChanges })
+            service.events(taskId)
+            service.testAwaitFileChangesEnrichmentJobs()
             assertTrue(service.events(taskId).value.any { it is AgentEvent.FileChanges })
         }
     }
@@ -200,6 +203,79 @@ class FileChangesEnrichmentTest {
                 WorktreeManager.changeSnapshotInvocations.get() <= 2,
                 "expected debounced enrichment, got ${WorktreeManager.changeSnapshotInvocations.get()} git snapshots",
             )
+        }
+    }
+
+    @Test
+    fun eventsInitialDisplayOmitsFileChangesUntilEnrichment() = runBlocking {
+        withGitService(status = AgentStatus.Done) { service, repo, taskId, baseline ->
+            val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
+            store.append(
+                taskId,
+                AgentEvent.FileChanges(
+                    atMillis = 1,
+                    batchId = "batch-stale",
+                    baselineTree = baseline,
+                    snapshot = AgentThreadChangeSnapshot(
+                        summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", 1, 0))),
+                        diffs = emptyMap(),
+                    ),
+                ),
+            )
+            git(repo, "add", "src/Main.kt")
+            git(repo, "commit", "-m", "committed edits")
+
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+
+            service.testAwaitFileChangesEnrichmentJobs()
+
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+        }
+    }
+
+    @Test
+    fun eventsAddsValidFileChangesAfterImmediateEnrichment() = runBlocking {
+        withGitService(status = AgentStatus.Working) { service, _, taskId, _ ->
+            seedLegacyEditSegment(service, taskId, repoFile = "src/Main.kt")
+
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+
+            service.testAwaitFileChangesEnrichmentJobs()
+
+            assertTrue(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+        }
+    }
+
+    @Test
+    fun reclickingSameChatDoesNotResurrectStaleFileChangesCard() = runBlocking {
+        withGitService(status = AgentStatus.Done) { service, repo, taskId, baseline ->
+            val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
+            store.append(
+                taskId,
+                AgentEvent.FileChanges(
+                    atMillis = 1,
+                    batchId = "batch-stale",
+                    baselineTree = baseline,
+                    snapshot = AgentThreadChangeSnapshot(
+                        summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", 1, 0))),
+                        diffs = emptyMap(),
+                    ),
+                ),
+            )
+            // withGitService leaves src/Main.kt dirty ("one\ntwo\n"); commit so the card is stale.
+            git(repo, "add", "src/Main.kt")
+            git(repo, "commit", "-m", "committed edits")
+
+            service.events(taskId)
+            service.setChatViewing(taskId, viewing = true)
+            service.testAwaitFileChangesEnrichmentJobs()
+
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+
+            service.setChatViewing(taskId, viewing = true)
+            service.testAwaitFileChangesEnrichmentJobs()
+
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
         }
     }
 
