@@ -24,11 +24,31 @@ use crate::mcp::McpClient;
 use crate::tmux;
 use std::path::PathBuf;
 
+/// Restores the terminal on every exit path (including startup failures).
+struct TerminalGuard(Terminal<CrosstermBackend<Stdout>>);
+
+impl TerminalGuard {
+    fn setup() -> Result<Self> {
+        enable_raw_mode()?;
+        stdout().execute(EnterAlternateScreen)?;
+        stdout().execute(EnableMouseCapture)?;
+        Ok(Self(Terminal::new(CrosstermBackend::new(stdout()))?))
+    }
+
+    fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<Stdout>> {
+        &mut self.0
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = restore_terminal(&mut self.0);
+    }
+}
+
 pub async fn run_dashboard(socket: PathBuf, ensure_local_daemon: bool) -> Result<()> {
-    enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
-    stdout().execute(EnableMouseCapture)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let mut guard = TerminalGuard::setup()?;
+    let mut terminal = guard.terminal();
 
     if ensure_local_daemon {
         daemon::ensure_running_with_feedback(&socket, |message, tick| {
@@ -297,7 +317,6 @@ pub async fn run_dashboard(socket: PathBuf, ensure_local_daemon: bool) -> Result
         }
     }
 
-    restore_terminal(&mut terminal)?;
     Ok(())
 }
 

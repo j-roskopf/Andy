@@ -51,6 +51,8 @@ class DesktopActionRunService(
     private val nextRun = AtomicInteger(1)
     private val handles = ConcurrentHashMap<String, RunHandle>()
     private val pendingAppends = ConcurrentHashMap<String, MutableList<String>>()
+    /** Runs whose PTY is live but the spawn handshake has not yet sent [initialCommand]. */
+    private val awaitingInitialCommand = ConcurrentHashMap.newKeySet<String>()
 
     // Serializes the spawn handshake (status check + handle registration) against stop()/clear(),
     // so a run cancelled while its PTY is still spawning never publishes a live backend afterwards.
@@ -86,7 +88,7 @@ class DesktopActionRunService(
                     it.actionId == action.id &&
                     it.status in ACTIVE_STATUSES
             }
-            if (existing != null && isAppendable(existing.runId)) {
+            if (existing != null) {
                 if (command != null) appendCommand(existing.runId, command)
                 return existing.runId
             }
@@ -134,6 +136,7 @@ class DesktopActionRunService(
                             false
                         } else {
                             handles[runId] = RunHandle(rustTerminal, rustTerminal)
+                            awaitingInitialCommand.add(runId)
                             _running.update { runs ->
                                 runs.map { run ->
                                     if (run.runId == runId && run.status == ActionRunStatus.Starting) {
@@ -155,6 +158,7 @@ class DesktopActionRunService(
                         runCatching { rustTerminal.writeText("$command\r") }
                     }
                     drainPendingAppends(runId, rustTerminal)
+                    awaitingInitialCommand.remove(runId)
                     val exitCode = runCatching {
                         rustTerminal.exitCode.first { it != null }
                     }.getOrNull() ?: -1
@@ -165,6 +169,7 @@ class DesktopActionRunService(
                     )
                 },
                 onFailure = {
+                    awaitingInitialCommand.remove(runId)
                     markComplete(runId, ActionRunStatus.Failed, null)
                     synchronized(lifecycleLock) {
                         // Publish a tombstone only if the run wasn't already cleared, so a
@@ -203,6 +208,7 @@ class DesktopActionRunService(
     override fun clear(runId: String) {
         val handle = synchronized(lifecycleLock) {
             pendingAppends.remove(runId)
+            awaitingInitialCommand.remove(runId)
             val handle = handles.remove(runId)
             _running.update { runs -> runs.filterNot { it.runId == runId } }
             handle
@@ -235,14 +241,9 @@ class DesktopActionRunService(
             .forEach { clear(it.runId) }
     }
 
-    private fun isAppendable(runId: String): Boolean {
-        val terminal = handles[runId]?.rustTerminal ?: return true
-        return terminal.isAlive
-    }
-
     private fun appendCommand(runId: String, command: String) {
         val terminal = handles[runId]?.rustTerminal
-        if (terminal != null && terminal.isAlive) {
+        if (terminal != null && terminal.isAlive && runId !in awaitingInitialCommand) {
             runCatching { terminal.writeText("$command\r") }
         } else {
             pendingAppends.computeIfAbsent(runId) { mutableListOf() }.add(command)
