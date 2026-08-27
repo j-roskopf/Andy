@@ -306,6 +306,7 @@ class DesktopWorkspaceStore(
             saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
+        restrictPrivateFilePermissions(file)
         mutableState.value = state
     }
 

@@ -51,12 +51,20 @@ class WebPushService(
         return workspaceStore.load().vapidPublicKey
     }
 
-    suspend fun subscribe(endpoint: String, p256dh: String, auth: String) {
+    suspend fun subscribe(endpoint: String, p256dh: String, auth: String, ownerFingerprint: String? = null) {
         require(endpoint.isNotBlank()) { "endpoint required" }
         require(p256dh.isNotBlank()) { "p256dh required" }
         require(auth.isNotBlank()) { "auth required" }
+        require(!ownerFingerprint.isNullOrBlank()) { "authenticated session required for push" }
         ensureKeys()
-        subscriptions.upsert(StoredPushSubscription(endpoint = endpoint, p256dh = p256dh, auth = auth))
+        subscriptions.upsert(
+            StoredPushSubscription(
+                endpoint = endpoint,
+                p256dh = p256dh,
+                auth = auth,
+                ownerFingerprint = ownerFingerprint,
+            ),
+        )
     }
 
     fun unsubscribe(endpoint: String) {

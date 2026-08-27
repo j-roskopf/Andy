@@ -78,8 +78,42 @@ class NetworkAccessAuthTest {
     }
 
     @Test
+    fun tailscaleIpv6UlaAccepted() {
+        assertTrue(isTailscalePeerAddress("fd7a:115c:a1e0::1"))
+        assertTrue(isTailscalePeerAddress("fd7a:115c:a1e0:abcd::42"))
+        assertFalse(isTailscalePeerAddress("fd00::1"))
+    }
+
+    @Test
+    fun chatSessionCannotAccessMcpScope() {
+        val store = NetworkAccessSessionStore()
+        val session = store.exchangeMasterToken("master-secret-value", "master-secret-value")!!
+        val limiter = AuthFailureLimiter(10, 60_000, 60_000) { 0L }
+        assertNull(
+            evaluateNetworkAccessAuth(
+                "192.168.1.20",
+                session,
+                "master-secret-value",
+                limiter,
+                requiredScope = NetworkAccessScope.CHAT,
+                sessionStore = store,
+            ),
+        )
+        assertEquals(
+            HttpStatusCode.Forbidden,
+            evaluateNetworkAccessAuth(
+                "192.168.1.20",
+                session,
+                "master-secret-value",
+                limiter,
+                requiredScope = NetworkAccessScope.FULL,
+                sessionStore = store,
+            ),
+        )
+    }
+
+    @Test
     fun hostnamesAreNeverLoopbackWithoutDns() {
-        // Must not resolve hostnames — a name that DNS-maps to loopback must not bypass auth.
         assertFalse(isLoopbackAddress("localhost"))
         assertFalse(isLoopbackAddress("evil.example"))
         assertFalse(isLoopbackAddress("localhost.localdomain"))
@@ -118,8 +152,9 @@ class NetworkAccessAuthTest {
     }
 
     @Test
-    fun scrubTokenQueryRemovesTokenParam() {
+    fun scrubTokenQueryRemovesTokenAndCodeParams() {
         assertEquals("foo=1", scrubTokenQuery("token=abc&foo=1"))
+        assertEquals("foo=1", scrubTokenQuery("code=abc&foo=1"))
         assertEquals("foo=1&bar=2", scrubTokenQuery("foo=1&token=abc&bar=2"))
         assertEquals("", scrubTokenQuery("token=only"))
     }
@@ -129,6 +164,15 @@ class NetworkAccessAuthTest {
         assertEquals(
             "secret",
             extractAccessToken(authorizationHeader = null, path = "/ws/chats/abc", queryToken = "secret"),
+        )
+        assertEquals(
+            "secret",
+            extractAccessToken(
+                authorizationHeader = null,
+                path = "/ws/chats/abc",
+                queryToken = null,
+                webSocketSubprotocol = "bearer.secret",
+            ),
         )
         assertNull(
             extractAccessToken(authorizationHeader = null, path = "/api/chats", queryToken = "secret"),
@@ -162,9 +206,28 @@ class NetworkAccessAuthTest {
         assertTrue(isPublicWebChatPath("/sw.js"))
         assertTrue(isPublicWebChatPath("/icons/icon-192.png"))
         assertFalse(isPublicWebChatPath("/api/chats"))
+        assertFalse(isPublicWebChatPath("/api/auth/login"))
         assertFalse(isPublicWebChatPath("/mcp"))
         assertFalse(isPublicWebChatPath("/mcp-http"))
         assertFalse(isPublicWebChatPath("/ws/chats/x"))
+    }
+
+    @Test
+    fun loginCodeIsSingleUse() {
+        val store = NetworkAccessSessionStore(clock = { 0L })
+        val code = store.createLoginCode()
+        val session = store.exchangeLoginCode(code)
+        assertTrue(session != null)
+        assertNull(store.exchangeLoginCode(code))
+    }
+
+    @Test
+    fun loginCodeExpiresAfterTtl() {
+        var now = 0L
+        val store = NetworkAccessSessionStore(clock = { now })
+        val code = store.createLoginCode()
+        now = app.andy.service.NetworkLoginCodeTtlMillis
+        assertNull(store.exchangeLoginCode(code))
     }
 
     @Test
@@ -204,7 +267,6 @@ class NetworkAccessAuthTest {
         }
         threads.forEach { it.start() }
         threads.forEach { it.join() }
-        // 800 failures against a threshold of 50 must trip the cooldown without corrupting state.
         assertTrue(limiter.isBlocked("10.0.0.9"))
     }
 }

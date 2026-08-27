@@ -908,6 +908,33 @@ sealed interface MirrorInput {
     data object Power : MirrorInput
 }
 
+/** Lifetime of QR / manual login codes before they expire server-side. */
+const val NetworkLoginCodeTtlMillis = 60_000L
+
+/** Refresh login codes this long before expiry so Settings never shows a stale code. */
+const val NetworkLoginCodeRefreshLeadMillis = 5_000L
+
+fun networkLoginCodeExpiryLabel(ttlMillis: Long = NetworkLoginCodeTtlMillis): String {
+    val wholeMinutes = ttlMillis / 60_000L
+    return when {
+        wholeMinutes >= 1L && ttlMillis % 60_000L == 0L ->
+            if (wholeMinutes == 1L) "1 minute" else "$wholeMinutes minutes"
+        ttlMillis >= 1_000L -> "${ttlMillis / 1_000L} seconds"
+        else -> "a short time"
+    }
+}
+
+fun networkLoginCodeCountdownLabel(remainingMillis: Long): String {
+    val totalSeconds = (remainingMillis / 1_000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return when {
+        totalSeconds <= 0L -> "0s"
+        minutes > 0 -> "$minutes:${seconds.toString().padStart(2, '0')}"
+        else -> "${totalSeconds}s"
+    }
+}
+
 interface McpServerService {
     val status: Flow<String>            // "stopped" | "running on 127.0.0.1:8565" | "error: ..."
     val running: Flow<Boolean>
@@ -931,6 +958,19 @@ interface McpServerService {
 
     /** Cryptographically random access token (URL-safe base64). */
     fun generateNetworkAccessToken(): String = ""
+
+    /** How long [createNetworkLoginCode] results stay valid. */
+    val networkLoginCodeTtlMillis: Long
+        get() = NetworkLoginCodeTtlMillis
+
+    /**
+     * Short-lived single-use code for QR sign-in (exchanged for a chat-scoped session on the web client).
+     * Empty when the HTTP server is not running.
+     */
+    fun createNetworkLoginCode(): String = ""
+
+    /** Drops in-memory web login codes and chat sessions (e.g. after master token rotation). */
+    fun invalidateNetworkAccessSessions() {}
 }
 
 enum class MirrorTouchAction { Down, Move, Up }

@@ -86,6 +86,7 @@ private fun AgentCommandCenter(
     var showUnscopedArtifacts by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
+    val followUpDraftMemory = remember { ChatFollowUpDraftMemory() }
     var projects by remember { mutableStateOf<List<app.andy.model.ActionProject>>(emptyList()) }
     LaunchedEffect(Unit) {
         projects = runCatching { services.actionConfig.load().projects }.getOrDefault(emptyList())
@@ -113,6 +114,7 @@ private fun AgentCommandCenter(
         if (force) {
             scope.launch {
                 transcriptScrollMemory.remove(task.id)
+                followUpDraftMemory.remove(task.id)
                 services.agentRuns.delete(task.id, task.ownsWorktree, force = true)
                 if (selectedTaskId == task.id) selectedTaskId = null
             }
@@ -151,6 +153,7 @@ private fun AgentCommandCenter(
                 when (val outcome = services.agentRuns.delete(task.id, task.ownsWorktree)) {
                     app.andy.model.WorktreeDeleteOutcome.Deleted -> {
                         transcriptScrollMemory.remove(task.id)
+                        followUpDraftMemory.remove(task.id)
                         if (selectedTaskId == task.id) selectedTaskId = null
                     }
                     is app.andy.model.WorktreeDeleteOutcome.BlockedByChildren -> {
@@ -404,6 +407,7 @@ private fun AgentCommandCenter(
                                 selected,
                                 onDelete = ::requestDelete,
                                 transcriptScrollMemory = transcriptScrollMemory,
+                                followUpDraftMemory = followUpDraftMemory,
                                 workspaceState = workspaceState,
                                 modifier = Modifier.fillMaxSize(),
                                 dictationActive = active && !composing,

@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -46,12 +47,16 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCheckBox
+import com.mikepenz.markdown.compose.elements.MarkdownTable
+import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
+import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.m3.Markdown
 import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.SyntaxTheme
 import dev.snipme.highlights.model.SyntaxThemes
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.rememberMarkdownState
 
@@ -320,6 +325,13 @@ private fun AndyMarkdown(
             )
             AndyMarkdownDensity.Preview -> markdownPadding()
         },
+        dimens = markdownDimens(
+            tableCellPadding = when (density) {
+                AndyMarkdownDensity.Chat -> 6.dp
+                AndyMarkdownDensity.Thinking -> 4.dp
+                AndyMarkdownDensity.Preview -> 16.dp
+            },
+        ),
         components = markdownComponents(
             codeBlock = {
                 SafeMarkdownHighlightedCodeBlock(
@@ -368,6 +380,34 @@ private fun AndyMarkdown(
                                     },
                             )
                         }
+                    },
+                )
+            },
+            // Library defaults to maxLines=1 + ellipsis in table cells, which clips chat prose.
+            table = { model ->
+                MarkdownTable(
+                    content = model.content,
+                    node = model.node,
+                    style = model.typography.table,
+                    headerBlock = { content, header, tableWidth, style ->
+                        MarkdownTableHeader(
+                            content = content,
+                            header = header,
+                            tableWidth = tableWidth,
+                            style = style,
+                            maxLines = Int.MAX_VALUE,
+                            overflow = TextOverflow.Clip,
+                        )
+                    },
+                    rowBlock = { content, row, tableWidth, style ->
+                        MarkdownTableRow(
+                            content = content,
+                            header = row,
+                            tableWidth = tableWidth,
+                            style = style,
+                            maxLines = Int.MAX_VALUE,
+                            overflow = TextOverflow.Clip,
+                        )
                     },
                 )
             },

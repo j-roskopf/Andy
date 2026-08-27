@@ -1,5 +1,6 @@
 (() => {
-  const TOKEN_KEY = "andy.networkAccessToken";
+  const SESSION_KEY = "andy.networkAccessSession";
+  const LEGACY_TOKEN_KEY = "andy.networkAccessToken";
   const $ = (id) => document.getElementById(id);
 
   const views = {
@@ -9,7 +10,58 @@
     new: $("view-new"),
   };
 
-  let token = localStorage.getItem(TOKEN_KEY) || "";
+  let token = localStorage.getItem(SESSION_KEY) || "";
+  let routePromise = null;
+
+  function loginParamsFromUrl() {
+    const hash = location.hash.replace(/^#/, "") || "/";
+    const params = new URLSearchParams(location.search);
+    const hashParams = new URLSearchParams(hash.split("?")[1] || "");
+    return {
+      hash,
+      fromCode: params.get("code") || hashParams.get("code"),
+      legacyToken: params.get("token") || hashParams.get("token"),
+    };
+  }
+
+  function authHeaders(extra = {}) {
+    return Object.assign({ Authorization: `Bearer ${token}` }, extra);
+  }
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      cache: "no-store",
+      ...options,
+      headers: authHeaders(options.headers || {}),
+    });
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (_) {
+      body = null;
+    }
+    if (res.status === 401) {
+      const { fromCode, legacyToken } = loginParamsFromUrl();
+      if (fromCode || legacyToken) {
+        token = "";
+        localStorage.removeItem(SESSION_KEY);
+        await routeFromHash();
+        throw new Error("unauthorized");
+      }
+      forgetToken("Session expired — sign in again.").catch(() => {});
+      throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+      const err = new Error(
+        (body && typeof body.error === "string" && body.error) ||
+          `Request failed (${res.status})`,
+      );
+      err.status = res.status;
+      err.body = body;
+      throw err;
+    }
+    return body;
+  }
   let currentChatId = null;
   let socket = null;
   let events = [];
@@ -22,51 +74,113 @@
   let slashActiveIndex = 0;
   let slashInput = null;
   let slashMenuEl = null;
+  let newChatRequiresModel = false;
+  let newChatDefaultRuntime = null;
   let chatWorking = false;
   let chatLoading = false;
   let optimisticUserText = null;
+  let socketPreferQueryAuth = false;
+  let socketConnecting = false;
+
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   function show(name) {
     Object.entries(views).forEach(([key, el]) => {
       el.classList.toggle("hidden", key !== name);
     });
+    syncSafeAreaTop();
   }
 
+  const isIOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (isIOS) {
+    document.documentElement.classList.add("ios");
+  }
+  if (isAndroid) {
+    document.documentElement.classList.add("android");
+    socketPreferQueryAuth = true;
+  }
+
+  function readSafeAreaInsetTop() {
+    const probe = document.createElement("div");
+    probe.style.cssText =
+      "position:fixed;top:0;left:0;height:0;padding-top:env(safe-area-inset-top);visibility:hidden;pointer-events:none;";
+    document.documentElement.appendChild(probe);
+    const top = probe.getBoundingClientRect().height;
+    probe.remove();
+    return top;
+  }
+
+  /** iOS standalone often reports env(safe-area-inset-top) as 0 on first paint. */
+  function syncSafeAreaTop() {
+    if (!isIOS) return;
+    let top = readSafeAreaInsetTop();
+    if (top <= 0) {
+      const probe = document.createElement("div");
+      probe.style.paddingTop = "env(safe-area-inset-top)";
+      document.body.appendChild(probe);
+      top = parseFloat(getComputedStyle(probe).paddingTop) || 0;
+      document.body.removeChild(probe);
+    }
+    if (top <= 0 && window.visualViewport?.offsetTop > 0) {
+      top = window.visualViewport.offsetTop;
+    }
+    if (top <= 0) {
+      const anchor =
+        document.querySelector("#view-list:not(.hidden) .list-header") ||
+        document.querySelector("#view-chat:not(.hidden) .topbar") ||
+        document.querySelector("#view-new:not(.hidden) .topbar");
+      if (anchor && anchor.getBoundingClientRect().top < 8) {
+        const longSide = Math.max(window.screen.width, window.screen.height);
+        top = longSide >= 812 ? 47 : 20;
+      }
+    }
+    document.documentElement.style.setProperty("--safe-top", `${Math.round(top)}px`);
+  }
+
+  /** Shrink the shell when the software keyboard is open (Android + most Chromium). */
   function syncViewportHeight() {
+    if (isIOS) return;
     const vv = window.visualViewport;
-    const height = Math.round(vv ? vv.height : window.innerHeight);
+    const height = Math.max(Math.round(vv ? vv.height : window.innerHeight), 200);
     document.documentElement.style.setProperty("--app-height", `${height}px`);
-    // Keep focused composer visible above the soft keyboard / browser chrome.
+    if (vv) {
+      const keyboardOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      document.documentElement.style.setProperty("--keyboard-offset", `${Math.round(keyboardOffset)}px`);
+    }
+    keepFocusedFieldVisible();
+  }
+
+  function keepFocusedFieldVisible() {
     const active = document.activeElement;
-    if (active && (active.id === "composer-input" || active.id === "new-prompt")) {
-      requestAnimationFrame(() => {
-        active.scrollIntoView({ block: "nearest", inline: "nearest" });
-        const transcript = $("transcript");
-        if (transcript && !views.chat.classList.contains("hidden")) {
-          transcript.scrollTop = transcript.scrollHeight;
+    if (!active || !(active instanceof HTMLElement)) return;
+    if (!active.closest("#app")) return;
+    const tag = active.tagName;
+    if (tag !== "TEXTAREA" && tag !== "INPUT") return;
+    if (tag === "INPUT" && active.type === "hidden") return;
+
+    requestAnimationFrame(() => {
+      if (active.id === "composer-input" || active.id === "new-prompt") {
+        const scrollParent = active.closest(".new-options") || active.closest(".view");
+        if (scrollParent) {
+          const margin = 16;
+          const parentRect = scrollParent.getBoundingClientRect();
+          const fieldRect = active.getBoundingClientRect();
+          if (fieldRect.bottom > parentRect.bottom - margin) {
+            scrollParent.scrollTop += fieldRect.bottom - parentRect.bottom + margin;
+          } else if (fieldRect.top < parentRect.top + margin) {
+            scrollParent.scrollTop -= parentRect.top + margin - fieldRect.top;
+          }
         }
-      });
-    }
-  }
-
-  function authHeaders(extra = {}) {
-    return Object.assign({ Authorization: `Bearer ${token}` }, extra);
-  }
-
-  async function api(path, options = {}) {
-    const res = await fetch(path, {
-      ...options,
-      headers: authHeaders(options.headers || {}),
+        active.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+      active.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
-    if (res.status === 401) {
-      forgetToken("Session expired — enter the current access token.").catch(() => {});
-      throw new Error("unauthorized");
-    }
-    return res;
   }
 
   async function disablePushSubscription() {
-    if (!canUseWebPush()) return;
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       const sub = await reg?.pushManager?.getSubscription();
@@ -88,9 +202,28 @@
     }
   }
 
+  async function exchangeLogin(body) {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "login failed");
+    }
+    const json = await res.json();
+    const sessionToken = json.sessionToken;
+    if (!sessionToken) throw new Error("login failed");
+    token = sessionToken;
+    localStorage.setItem(SESSION_KEY, token);
+    return json;
+  }
+
   async function forgetToken(message) {
     await disablePushSubscription();
-    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
     token = "";
     closeSocket();
     $("auth-error").textContent = message || "";
@@ -98,19 +231,46 @@
     show("auth");
   }
 
-  function routeFromHash() {
-    const hash = location.hash.replace(/^#/, "") || "/";
+  async function routeFromHash() {
+    if (routePromise) return routePromise;
+    routePromise = routeFromHashOnce().finally(() => {
+      routePromise = null;
+    });
+    return routePromise;
+  }
+
+  async function routeFromHashOnce() {
+    const { hash, fromCode, legacyToken } = loginParamsFromUrl();
     const chatMatch = hash.match(/^\/chat\/([^/]+)/);
-    if (!token) {
-      // QR deep-link: /?token=... or /#/?token=...
-      const params = new URLSearchParams(location.search);
-      const hashParams = new URLSearchParams(hash.split("?")[1] || "");
-      const fromQuery = params.get("token") || hashParams.get("token");
-      if (fromQuery) {
-        token = fromQuery.trim();
-        localStorage.setItem(TOKEN_KEY, token);
+
+    // QR / deep-link login always wins over a stale stored session.
+    if (fromCode || legacyToken) {
+      token = "";
+      localStorage.removeItem(SESSION_KEY);
+      try {
+        if (fromCode) {
+          await exchangeLogin({ code: fromCode.trim() });
+        } else {
+          await exchangeLogin({ token: legacyToken.trim() });
+        }
         history.replaceState({}, "", location.pathname + (chatMatch ? `#/chat/${chatMatch[1]}` : "#/"));
-      } else {
+      } catch (err) {
+        $("auth-error").textContent = err.message || "Sign-in failed";
+        $("auth-error").classList.remove("hidden");
+        show("auth");
+        return;
+      }
+    } else if (!token) {
+      const legacyStored = localStorage.getItem(LEGACY_TOKEN_KEY);
+      if (legacyStored) {
+        try {
+          await exchangeLogin({ token: legacyStored.trim() });
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
+        } catch (_) {
+          localStorage.removeItem(LEGACY_TOKEN_KEY);
+        }
+      }
+      if (!token) {
         show("auth");
         return;
       }
@@ -155,8 +315,7 @@
 
   async function loadProjects() {
     try {
-      const res = await api("/api/projects");
-      const projects = await res.json();
+      const projects = await api("/api/projects");
       projectsById = {};
       (projects || []).forEach((p) => {
         if (p?.id) projectsById[p.id] = p;
@@ -172,10 +331,10 @@
     currentChatId = null;
     closeSocket();
     $("list-error").classList.add("hidden");
+    $("list-empty").classList.add("hidden");
     try {
       await loadProjects();
-      const res = await api("/api/chats");
-      const chats = await res.json();
+      const chats = await api("/api/chats");
       const root = $("chat-list");
       root.innerHTML = "";
       if (!Array.isArray(chats) || chats.length === 0) {
@@ -183,23 +342,22 @@
         return;
       }
       $("list-empty").classList.add("hidden");
-      for (const group of groupChats(chats)) {
-        const section = document.createElement("div");
-        section.className = "group";
+      const groups = groupChats(chats);
+      for (const group of groups) {
         const expanded = expandedProjects.has(group.key);
-        const header = document.createElement("button");
-        header.type = "button";
-        header.className = "group-header";
-        header.innerHTML = `<span class="caret">${expanded ? "▾" : "▸"}</span>
+        const details = document.createElement("details");
+        details.className = "group";
+        details.open = expanded;
+        const summary = document.createElement("summary");
+        summary.className = "group-header";
+        summary.innerHTML = `<span class="caret">${expanded ? "▾" : "▸"}</span>
           <span>${escapeHtml(group.label)} (${group.chats.length})</span>`;
         const body = document.createElement("div");
-        body.className = `group-body${expanded ? "" : " collapsed"}`;
-        header.addEventListener("click", () => {
-          if (expandedProjects.has(group.key)) expandedProjects.delete(group.key);
-          else expandedProjects.add(group.key);
-          const open = expandedProjects.has(group.key);
-          body.classList.toggle("collapsed", !open);
-          header.querySelector(".caret").textContent = open ? "▾" : "▸";
+        body.className = "group-body";
+        details.addEventListener("toggle", () => {
+          if (details.open) expandedProjects.add(group.key);
+          else expandedProjects.delete(group.key);
+          summary.querySelector(".caret").textContent = details.open ? "▾" : "▸";
         });
         for (const chat of group.chats) {
           const btn = document.createElement("button");
@@ -217,9 +375,9 @@
           });
           body.appendChild(btn);
         }
-        section.appendChild(header);
-        section.appendChild(body);
-        root.appendChild(section);
+        details.appendChild(summary);
+        details.appendChild(body);
+        root.appendChild(details);
       }
     } catch (err) {
       if (err.message !== "unauthorized") {
@@ -285,16 +443,7 @@
     setChatLoading(true);
     setChatWorking(false);
     try {
-      const res = await api(`/api/chats/${encodeURIComponent(id)}`);
-      if (res.status === 409) {
-        const body = await res.json().catch(() => ({}));
-        setChatLoading(false);
-        $("chat-error").textContent = body.error || "Unsupported chat";
-        $("chat-error").classList.remove("hidden");
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json();
+      const body = await api(`/api/chats/${encodeURIComponent(id)}`);
       chatMeta = body.chat;
       $("chat-title").textContent = chatMeta.title || id;
       const status = chatMeta.status || "";
@@ -309,6 +458,11 @@
       connectSocket(id);
     } catch (err) {
       setChatLoading(false);
+      if (err.status === 409) {
+        $("chat-error").textContent = err.message || "Unsupported chat";
+        $("chat-error").classList.remove("hidden");
+        return;
+      }
       if (err.message !== "unauthorized") {
         $("chat-error").textContent = err.message || "Failed to load chat";
         $("chat-error").classList.remove("hidden");
@@ -334,9 +488,7 @@
     try {
       const qs = new URLSearchParams({ agent });
       if (directory) qs.set("directory", directory);
-      const res = await api(`/api/slash-commands?${qs}`);
-      if (!res.ok) return [];
-      const list = await res.json();
+      const list = await api(`/api/slash-commands?${qs}`);
       return Array.isArray(list) ? list : [];
     } catch (_) {
       return [];
@@ -345,8 +497,7 @@
 
   async function refreshSlashCommandsForChat() {
     if (!chatMeta) return;
-    const directory = chatMeta.cwd || chatMeta.originDir || "";
-    slashCommands = await fetchSlashCommands(chatMeta.agent || "", directory);
+    slashCommands = await fetchSlashCommands(chatMeta.agent || "", "");
     const fromEvents = commandsFromEvents(events);
     if (fromEvents.length) {
       const seen = new Set(slashCommands.map((c) => c.name.toLowerCase()));
@@ -361,17 +512,21 @@
 
   async function refreshSlashCommandsForNew() {
     const agent = $("new-agent").value;
-    const opt = $("new-project").selectedOptions[0];
-    const directory = opt?.dataset?.directory || "";
-    slashCommands = await fetchSlashCommands(agent, directory);
+    slashCommands = await fetchSlashCommands(agent, "");
   }
 
   function connectSocket(id) {
     closeSocket();
+    socketConnecting = true;
+    $("reconnect").classList.add("hidden");
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const url = `${proto}://${location.host}/ws/chats/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`;
-    socket = new WebSocket(url);
+    const base = `${proto}://${location.host}/ws/chats/${encodeURIComponent(id)}`;
+    const useQuery = socketPreferQueryAuth;
+    const url = useQuery ? `${base}?token=${encodeURIComponent(token)}` : base;
+    const protocols = useQuery ? undefined : [`bearer.${token}`];
+    socket = new WebSocket(url, protocols);
     socket.onopen = () => {
+      socketConnecting = false;
       if (currentChatId === id) $("reconnect").classList.add("hidden");
     };
     socket.onmessage = (ev) => {
@@ -412,8 +567,14 @@
       renderPermission();
     };
     socket.onclose = (ev) => {
-      if (ev.code === 4401 || ev.code === 1008) {
-        forgetToken("Access token rejected. Enter the current token.").catch(() => {});
+      socketConnecting = false;
+      if (!socketPreferQueryAuth && ev.code !== 4401 && ev.code !== 4403 && ev.code !== 1008) {
+        socketPreferQueryAuth = true;
+        if (currentChatId === id) connectSocket(id);
+        return;
+      }
+      if (ev.code === 4401 || ev.code === 4403 || ev.code === 1008) {
+        forgetToken("Session expired or rejected. Sign in again.").catch(() => {});
         return;
       }
       if (currentChatId === id) {
@@ -421,7 +582,8 @@
       }
     };
     socket.onerror = () => {
-      if (currentChatId === id) $("reconnect").classList.remove("hidden");
+      socketConnecting = false;
+      if (currentChatId === id && !socketConnecting) $("reconnect").classList.remove("hidden");
     };
   }
 
@@ -443,53 +605,8 @@
     }
   }
 
-  const TOOL_KIND_PHRASES = {
-    read: "Read file",
-    edit: "Edited file",
-    delete: "Deleted file",
-    move: "Moved file",
-    search: "Searched",
-    execute: "Ran command",
-    think: "Thought",
-    fetch: "Fetched a resource",
-  };
-
-  function summarizeJsonValue(value) {
-    if (value === null || value === undefined) return "";
-    if (Array.isArray(value)) return value.map(summarizeJsonValue).filter(Boolean).join(", ");
-    if (typeof value === "object") {
-      return Object.entries(value)
-        .map(([key, entry]) => {
-          const text = summarizeJsonValue(entry);
-          return text ? `${key}=${text}` : "";
-        })
-        .filter(Boolean)
-        .join(", ");
-    }
-    return String(value);
-  }
-
-  // Agents often echo their arguments back as a JSON payload. A key=value line is readable on a
-  // phone; a wall of braces is not.
-  function toolDetailText(text) {
-    const trimmed = (text || "").trim();
-    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed;
-    try {
-      return summarizeJsonValue(JSON.parse(trimmed));
-    } catch (_) {
-      return trimmed;
-    }
-  }
-
-  function toolBubbleText(ev) {
-    const detail = toolDetailText(ev.summary) || toolDetailText(ev.detail) || (ev.locations || [])[0] || "";
-    const name = (ev.toolName || "").trim();
-    // "tool" is a placeholder the agent sends when it has no name to give, so it must never
-    // stand in as one.
-    const label = name.toLowerCase() === "tool" ? "" : name;
-    const fallback = TOOL_KIND_PHRASES[(ev.kind || "").toLowerCase()] || "Tool call";
-    const text = label && detail ? `${label} — ${detail}` : label || detail || fallback;
-    return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  function isVisibleTranscriptEvent(type) {
+    return type === "user" || type === "assistant" || type === "thinking" || type === "error";
   }
 
   function renderTranscript() {
@@ -499,8 +616,9 @@
     root.innerHTML = "";
     let renderedUserMatch = false;
     for (const ev of events) {
-      const el = document.createElement("div");
       const type = ev.type || "raw";
+      if (!isVisibleTranscriptEvent(type)) continue;
+      const el = document.createElement("div");
       if (type === "user") {
         el.className = "bubble user";
         el.textContent = ev.text || "";
@@ -509,22 +627,11 @@
         el.className = "bubble assistant";
         el.textContent = ev.text || "";
       } else if (type === "thinking") {
-        el.className = "bubble meta";
-        el.textContent = `thinking: ${(ev.text || "").slice(0, 240)}`;
-      } else if (type === "tool" || type === "tool-result") {
-        el.className = "bubble tool";
-        el.textContent = toolBubbleText(ev);
-      } else if (type === "permission") {
-        el.className = "bubble meta";
-        el.textContent = `permission: ${ev.question || ev.toolName || ""}`;
+        el.className = "bubble thinking-text";
+        el.textContent = ev.text || "";
       } else if (type === "error") {
-        el.className = "bubble meta";
+        el.className = "bubble error";
         el.textContent = ev.text || "error";
-      } else if (type === "result") {
-        el.className = "bubble meta";
-        el.textContent = ev.finalText || (ev.success ? "done" : "failed");
-      } else {
-        continue;
       }
       root.appendChild(el);
     }
@@ -626,12 +733,11 @@
     try {
       ensureSocket();
       setChatWorking(true);
-      const res = await api(`/api/chats/${encodeURIComponent(currentChatId)}/respond`, {
+      await api(`/api/chats/${encodeURIComponent(currentChatId)}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ requestId, answers }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       pendingInput = null;
       renderPermission();
     } catch (err) {
@@ -642,11 +748,80 @@
     }
   }
 
+  async function loadAgents() {
+    try {
+      const agents = await api("/api/agents");
+      const select = $("new-agent");
+      if (!select) return agents;
+      const previous = select.value;
+      select.innerHTML = "";
+      (agents || [])
+        .filter((a) => a?.webChat)
+        .forEach((a) => {
+          const opt = document.createElement("option");
+          opt.value = a.id || a.cliName || "";
+          opt.textContent = a.label || a.id || "";
+          select.appendChild(opt);
+        });
+      if ([...select.options].some((o) => o.value === previous)) {
+        select.value = previous;
+      }
+      return agents;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  async function loadModelsForAgent(agentId) {
+    const select = $("new-model");
+    if (!select || !agentId) return;
+    const previous = select.value;
+    newChatRequiresModel = false;
+    newChatDefaultRuntime = null;
+    select.innerHTML = "";
+    select.disabled = true;
+    try {
+      const body = await api(`/api/models?agent=${encodeURIComponent(agentId)}`);
+      newChatRequiresModel = !!body.requiresModel;
+      newChatDefaultRuntime = body.defaultRuntime || null;
+      const models = Array.isArray(body.models) ? body.models : [];
+      if (!models.length && newChatRequiresModel) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No models found";
+        select.appendChild(opt);
+        select.disabled = true;
+        return;
+      }
+      models.forEach((model) => {
+        const opt = document.createElement("option");
+        opt.value = model.id ?? "";
+        opt.textContent = model.label || model.id || "Model";
+        select.appendChild(opt);
+      });
+      const preferred = [previous, body.defaultModel || ""]
+        .find((value) => [...select.options].some((o) => o.value === value));
+      if (preferred != null) {
+        select.value = preferred;
+      } else if (select.options.length) {
+        select.selectedIndex = 0;
+      }
+      select.disabled = false;
+    } catch (_) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "Provider default";
+      select.appendChild(opt);
+      select.disabled = false;
+    }
+  }
+
   async function openNew() {
     show("new");
     $("new-error").classList.add("hidden");
     hideSlashMenu();
     try {
+      await loadAgents();
       const projects = await loadProjects();
       const select = $("new-project");
       const previous = select.value;
@@ -655,12 +830,12 @@
         const opt = document.createElement("option");
         opt.value = p.id;
         opt.textContent = p.name || p.id;
-        opt.dataset.directory = p.directory || "";
         select.appendChild(opt);
       });
       if ([...select.options].some((o) => o.value === previous)) {
         select.value = previous;
       }
+      await loadModelsForAgent($("new-agent").value);
       await refreshSlashCommandsForNew();
     } catch (_) {}
   }
@@ -751,6 +926,7 @@
   }
 
   function bindSlashField(input, menu) {
+    if (!input || !menu) return;
     input.addEventListener("focus", () => {
       slashInput = input;
       slashMenuEl = menu;
@@ -827,8 +1003,7 @@
     if (permission !== "granted") return;
     const reg = await navigator.serviceWorker.register("/sw.js");
     await navigator.serviceWorker.ready;
-    const keyRes = await api("/api/push/vapid-key");
-    const { publicKey } = await keyRes.json();
+    const { publicKey } = await api("/api/push/vapid-key");
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(publicKey),
@@ -841,18 +1016,24 @@
     $("btn-notify").textContent = "Notifications on";
   }
 
-  $("token-save").addEventListener("click", () => {
+  $("token-save").addEventListener("click", async () => {
     const value = $("token-input").value.trim();
     if (!value) {
-      $("auth-error").textContent = "Token required";
+      $("auth-error").textContent = "Token or login code required";
       $("auth-error").classList.remove("hidden");
       return;
     }
-    token = value;
-    localStorage.setItem(TOKEN_KEY, token);
     $("auth-error").classList.add("hidden");
-    location.hash = "#/";
-    routeFromHash();
+    try {
+      const body = value.length <= 24 ? { code: value } : { token: value };
+      await exchangeLogin(body);
+      $("token-input").value = "";
+      location.hash = "#/";
+      routeFromHash();
+    } catch (err) {
+      $("auth-error").textContent = err.message || "Sign-in failed";
+      $("auth-error").classList.remove("hidden");
+    }
   });
 
   $("btn-forget").addEventListener("click", () => {
@@ -872,14 +1053,20 @@
     refreshSlashCommandsForNew();
   });
   $("new-agent").addEventListener("change", () => {
-    refreshSlashCommandsForNew();
+    loadModelsForAgent($("new-agent").value).then(() => refreshSlashCommandsForNew());
   });
 
   bindSlashField($("composer-input"), $("slash-menu"));
   bindSlashField($("new-prompt"), $("new-slash-menu"));
 
-  $("composer-input").addEventListener("focus", () => {
-    syncViewportHeight();
+  $("app").addEventListener("focusin", (ev) => {
+    const target = ev.target;
+    if (
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLInputElement && target.type !== "hidden")
+    ) {
+      syncViewportHeight();
+    }
   });
 
   $("composer").addEventListener("submit", async (ev) => {
@@ -892,12 +1079,11 @@
     setChatWorking(true);
     try {
       ensureSocket();
-      const res = await api(`/api/chats/${encodeURIComponent(currentChatId)}/reply`, {
+      await api(`/api/chats/${encodeURIComponent(currentChatId)}/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       ensureSocket();
     } catch (err) {
       optimisticUserText = null;
@@ -915,24 +1101,26 @@
     hideSlashMenu();
     $("new-error").classList.add("hidden");
     const projectId = $("new-project").value.trim();
-    const projectOpt = $("new-project").selectedOptions[0];
-    const directory = projectOpt?.dataset?.directory || "";
+    const model = $("new-model").value.trim();
+    if (newChatRequiresModel && !model) {
+      $("new-error").textContent = "Choose a model to continue";
+      $("new-error").classList.remove("hidden");
+      return;
+    }
     const body = {
       prompt: $("new-prompt").value.trim(),
       agent: $("new-agent").value,
-      directory: directory || undefined,
       autonomy: $("new-autonomy").value,
-      title: $("new-title").value.trim() || undefined,
       projectId: projectId || undefined,
     };
+    if (model) body.model = model;
+    if (newChatDefaultRuntime) body.runtime = newChatDefaultRuntime;
     try {
-      const res = await api("/api/chats/start", {
+      const json = await api("/api/chats/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       location.hash = `#/chat/${encodeURIComponent(json.id)}`;
     } catch (err) {
       if (err.message !== "unauthorized") {
@@ -943,12 +1131,14 @@
   });
 
   window.addEventListener("hashchange", routeFromHash);
-  window.addEventListener("resize", syncViewportHeight);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", syncViewportHeight);
-    window.visualViewport.addEventListener("scroll", syncViewportHeight);
+  if (!isIOS) {
+    window.addEventListener("resize", syncViewportHeight);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", syncViewportHeight);
+      window.visualViewport.addEventListener("scroll", syncViewportHeight);
+    }
+    syncViewportHeight();
   }
-  syncViewportHeight();
 
   // Only register the service worker in a secure context. On plain HTTP LAN
   // origins registration fails and is not needed for chat.
@@ -956,6 +1146,10 @@
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
   syncNotifyButton();
+  syncSafeAreaTop();
+  requestAnimationFrame(syncSafeAreaTop);
+  window.addEventListener("pageshow", syncSafeAreaTop);
+  window.addEventListener("orientationchange", syncSafeAreaTop);
 
   routeFromHash();
 })();

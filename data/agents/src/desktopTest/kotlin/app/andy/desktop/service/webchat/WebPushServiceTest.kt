@@ -112,6 +112,23 @@ class WebPushServiceTest {
     }
 
     @Test
+    fun subscribeRequiresOwnerFingerprint() = runBlocking {
+        val dir = tempDir()
+        val push = WebPushService(
+            workspaceStore = MemoryWorkspaceStore(),
+            subscriptions = PushSubscriptionStore(File(dir, "push-subscriptions.json")),
+            sendNotification = { _, _ -> 201 },
+        )
+        push.ensureKeys()
+        try {
+            push.subscribe("https://push.example.test/ep", "key", "auth", ownerFingerprint = null)
+            error("expected failure")
+        } catch (error: IllegalArgumentException) {
+            assertTrue(error.message?.contains("authenticated") == true)
+        }
+    }
+
+    @Test
     fun vapidKeypairsDiffer() {
         val a = WebPushService.generateVapidKeyPair()
         val b = WebPushService.generateVapidKeyPair()

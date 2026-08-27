@@ -181,6 +181,7 @@ fun AgentTaskDetail(
     detailsExpanded: Boolean? = null,
     onDetailsExpandedChange: ((Boolean) -> Unit)? = null,
     transcriptScrollMemory: TranscriptScrollMemory? = null,
+    followUpDraftMemory: ChatFollowUpDraftMemory? = null,
     workspaceState: WorkspaceState = WorkspaceState(),
     modifier: Modifier = Modifier,
     /** False while this pane is retained but not visible (e.g. under [RetainedDestination]). */
@@ -199,7 +200,9 @@ fun AgentTaskDetail(
     LaunchedEffect(runtimeKind, skillDirectory) {
         services.agentRuns.refreshSlashCommands(runtimeKind, skillDirectory)
     }
-    var followUpValue by remember(task.id) { mutableStateOf(TextFieldValue("")) }
+    var followUpValue by remember(task.id) {
+        mutableStateOf(followUpDraftMemory?.get(task.id)?.text ?: TextFieldValue(""))
+    }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
@@ -211,8 +214,13 @@ fun AgentTaskDetail(
     val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
         listOfNotNull(task.worktreePath, task.cwd, task.originDir).distinct()
     }
-    var followUpImagePaths by remember(task.id) { mutableStateOf<List<String>>(emptyList()) }
+    var followUpImagePaths by remember(task.id) {
+        mutableStateOf(followUpDraftMemory?.get(task.id)?.imagePaths ?: emptyList())
+    }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
+    LaunchedEffect(task.id, followUpValue, followUpImagePaths) {
+        followUpDraftMemory?.save(task.id, ChatFollowUpDraft(followUpValue, followUpImagePaths))
+    }
     CollectChatComposerInbox(active = dictationActive) { item ->
         val (text, images) = applyChatComposerAttachment(followUpValue, followUpImagePaths, item)
         followUpValue = text

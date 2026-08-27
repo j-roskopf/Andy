@@ -25,9 +25,13 @@ import java.util.Base64
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
 import app.andy.desktop.service.proxy.resolveNetworkAccessHosts
+import app.andy.desktop.service.webchat.NetworkAccessSessionStore
+import app.andy.desktop.service.webchat.AuthFailureLimiter
 import app.andy.desktop.service.webchat.NetworkAccessAuthPlugin
+import app.andy.desktop.service.webchat.NetworkAccessWebConfig
 import app.andy.desktop.service.webchat.WebPushService
 import app.andy.desktop.service.webchat.generateNetworkAccessTokenBytes
+import app.andy.desktop.service.webchat.installNetworkAccessSecurityHeaders
 import app.andy.desktop.service.webchat.installWebChatRoutes
 import app.andy.desktop.service.webchat.remotePeerAddress
 import app.andy.desktop.service.webchat.resolveHost
@@ -61,6 +65,14 @@ class DesktopMcpServerService(
     private var runningPort: Int? = null
     private var runningHost: String? = null
     private val httpLock = Any()
+    private val networkAccessSessions = NetworkAccessSessionStore()
+    private val networkAccessLoginLimiter = AuthFailureLimiter(
+        maxFailures = 5,
+        windowMillis = 60_000L,
+        cooldownMillis = 5 * 60_000L,
+        clock = { System.currentTimeMillis() },
+    )
+    private var lastNetworkAccessMasterToken: String? = null
     private var unixSocketServer: McpUnixSocketServer? = null
     private var agentRuns: AgentRunService? = null
     private var projectWorkflows: ProjectWorkflowService? = null
@@ -97,6 +109,16 @@ class DesktopMcpServerService(
     }
 
     override fun generateNetworkAccessToken(): String = generateNetworkAccessTokenBytes()
+
+    override fun createNetworkLoginCode(): String {
+        if (serverEngine == null) return ""
+        return networkAccessSessions.createLoginCode()
+    }
+
+    /** Clears chat sessions and login codes (e.g. after master token rotation). */
+    override fun invalidateNetworkAccessSessions() {
+        networkAccessSessions.clearAll()
+    }
 
     fun startUnixSocketBlocking(socketPath: File): CommandResult {
         return try {
@@ -144,6 +166,11 @@ class DesktopMcpServerService(
         val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
             .getOrElse { WorkspaceState() }
         val host = workspace.toNetworkAccessBindConfig().resolveHost()
+        val masterToken = workspace.networkAccessToken
+        if (masterToken != lastNetworkAccessMasterToken) {
+            networkAccessSessions.clearAll()
+            lastNetworkAccessMasterToken = masterToken
+        }
 
         if (serverEngine != null) {
             if (runningPort == port && runningHost == host) {
@@ -165,7 +192,9 @@ class DesktopMcpServerService(
             val engine = embeddedServer(Netty, host = host, port = port) {
                 install(DoubleReceive)
                 install(WebSockets)
+                installNetworkAccessSecurityHeaders()
                 install(NetworkAccessAuthPlugin) {
+                    sessionStore = networkAccessSessions
                     tokenProvider = {
                         runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
                             .getOrElse { WorkspaceState() }
@@ -185,17 +214,27 @@ class DesktopMcpServerService(
                         authPeerAddressOverride ?: call.remotePeerAddress()
                     }
                 }
-                mcpStreamableHttp("/mcp-http", enableDnsRebindingProtection = false) {
+                mcpStreamableHttp("/mcp-http", enableDnsRebindingProtection = true) {
                     createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
                 }
+                val webConfig = NetworkAccessWebConfig(
+                    sessionStore = networkAccessSessions,
+                    loginLimiter = networkAccessLoginLimiter,
+                    masterTokenProvider = {
+                        runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                            .getOrElse { WorkspaceState() }
+                            .networkAccessToken
+                    },
+                )
                 installWebChatRoutes(
                     agentRuns = { agentRuns },
                     projectWorkflows = { projectWorkflows },
                     actionConfig = { actionConfig },
                     push = webPush,
+                    networkAccess = webConfig,
                 )
                 routing {
-                    mcp("/mcp", enableDnsRebindingProtection = false) {
+                    mcp("/mcp", enableDnsRebindingProtection = true) {
                         createMcpServer(callerTaskId = call.request.queryParameters["andyTaskId"])
                     }
                 }
