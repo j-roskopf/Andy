@@ -108,6 +108,8 @@ class FileChangesEnrichmentTest {
             assertTrue(WorktreeManager.changeSnapshotInvocations.get() >= 1)
             val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
             assertTrue(store.load(taskId).any { it is AgentEvent.FileChanges })
+            service.events(taskId)
+            service.testAwaitFileChangesEnrichmentJobs()
             assertTrue(service.events(taskId).value.any { it is AgentEvent.FileChanges })
         }
     }
