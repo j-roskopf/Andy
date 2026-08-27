@@ -237,7 +237,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          jar="$(find build/libs -name 'andyd-*.jar' -print -quit)"
+          jar="$(find composeApp/build/libs -name 'andyd-*.jar' -print -quit)"
           if [[ -z "${jar}" ]]; then
             echo "::error::Could not find andyd fat JAR"
             exit 1
@@ -737,14 +737,14 @@ jobs:
       - name: Prepare GitHub Pages artifact
         shell: bash
         run: |
-          touch build/dist/wasmJs/productionExecutable/.nojekyll
-          cp build/dist/wasmJs/productionExecutable/index.html \
-            build/dist/wasmJs/productionExecutable/404.html
+          touch composeApp/build/dist/wasmJs/productionExecutable/.nojekyll
+          cp composeApp/build/dist/wasmJs/productionExecutable/index.html \
+            composeApp/build/dist/wasmJs/productionExecutable/404.html
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: build/dist/wasmJs/productionExecutable
+          path: composeApp/build/dist/wasmJs/productionExecutable
           include-hidden-files: true
 
   web-pages-deploy:

@@ -1,6 +1,6 @@
 plugins {
     kotlin("jvm")
-    id("app.cash.sqldelight")
+    alias(libs.plugins.sqldelight)
 }
 
 java {
@@ -9,8 +9,8 @@ java {
 }
 
 dependencies {
-    api("app.cash.sqldelight:runtime:2.0.2")
-    api("app.cash.sqldelight:sqlite-driver:2.0.2")
+    implementation(libs.sqldelight.runtime)
+    implementation(libs.sqldelight.sqlite.driver)
 }
 
 sqldelight {
@@ -18,5 +18,11 @@ sqldelight {
         create("AndyAgentDatabase") {
             packageName.set("app.andy.store")
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
     }
 }

@@ -1,0 +1,771 @@
+package app.andy.desktop.service.agents
+
+import app.andy.model.AgentAutonomy
+import app.andy.model.AgentKind
+import app.andy.model.AgentReasoningEffort
+import app.andy.model.AgentSandboxMode
+import app.andy.model.AgentTask
+import app.andy.model.followUpCliPayload
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+private fun task(
+    agent: AgentKind,
+    sessionId: String? = null,
+    autonomy: AgentAutonomy = AgentAutonomy.Standard,
+) = AgentTask(
+    id = "task-abc123",
+    title = "test",
+    prompt = "do the thing",
+    agent = agent,
+    cwd = "/tmp/repo",
+    originDir = "/tmp/repo",
+    autonomy = autonomy,
+    vendorSessionId = sessionId,
+    createdAtMillis = 0,
+)
+
+private fun implementationTask(agent: AgentKind): AgentTask = task(agent, autonomy = AgentAutonomy.Full).copy(
+    planMode = false,
+    sandboxMode = AgentSandboxMode.WorkspaceWrite,
+    continuationPrompt = "Begin implementation. Implement the completed plan.",
+)
+
+class ClaudeCodeInteractiveAdapterTest {
+    private val adapter = ClaudeCodeAdapter()
+
+    @Test
+    fun interactiveCommandHasNoHeadlessFlagsAndLeavesPromptForPty() {
+        val argv = adapter.buildInteractiveCommand("/bin/claude", task(AgentKind.ClaudeCode), mcpUrl = null)
+        assertEquals("/bin/claude", argv.first())
+        assertTrue("-p" !in argv)
+        assertTrue("stream-json" !in argv)
+        assertTrue("acceptEdits" in argv)
+        assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun fullAutonomySkipsPermissions() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun scratchWorkspaceSkipsPermissionsForFullAutonomy() {
+        val scratch = AgentScratchWorkspace.path().absolutePath
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full).copy(cwd = scratch),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun scratchWorkspaceSkipsPermissionsForExplicitBypassSandbox() {
+        val scratch = AgentScratchWorkspace.path().absolutePath
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(cwd = scratch, sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+        assertTrue("--permission-mode" !in argv)
+    }
+
+    @Test
+    fun explicitSandboxModeOverridesAutonomy() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-skip-permissions" in argv)
+    }
+
+    @Test
+    fun sendsSelectedModelEffortBudgetAndMcp() {
+        val configured = task(AgentKind.ClaudeCode).copy(
+            model = "opus",
+            reasoningEffort = AgentReasoningEffort.Max,
+            maxBudgetUsd = 12.5,
+        )
+        val argv = adapter.buildInteractiveCommand("/bin/claude", configured, mcpUrl = "http://127.0.0.1:8565/mcp")
+        assertTrue("--model" in argv && "opus" in argv)
+        assertTrue("--effort" in argv && "max" in argv)
+        assertTrue("--max-budget-usd" in argv && "12.5" in argv)
+        assertTrue("--mcp-config" in argv)
+        assertTrue(argv.any { it.contains("http://127.0.0.1:8565/mcp") })
+        // Claude's --mcp-config is variadic; end options before the prompt.
+        assertTrue("--" in argv)
+        assertEquals("do the thing", argv.last())
+        assertEquals("--", argv[argv.lastIndex - 1])
+    }
+
+    @Test
+    fun resumeEndsMcpConfigOptionsBeforeFollowUpPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
+            followUp = "hello",
+        )
+        assertNotNull(argv)
+        assertTrue("--mcp-config" in argv!!)
+        assertEquals("hello", argv.last())
+        assertEquals("--", argv[argv.lastIndex - 1])
+    }
+
+    @Test
+    fun planModeOverridesUnsafePermissionChoices() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+        assertTrue("--permission-mode" in argv && "plan" in argv)
+        assertTrue("--dangerously-skip-permissions" !in argv)
+    }
+
+    @Test
+    fun implementationHandoffUsesWritableFreshCommand() {
+        val argv = adapter.buildInteractiveCommand("/bin/claude", implementationTask(AgentKind.ClaudeCode), mcpUrl = null)
+        assertTrue("acceptEdits" in argv)
+        assertTrue("plan" !in argv)
+        assertTrue(argv.none { it.contains("Plan mode is active") })
+    }
+
+    @Test
+    fun attachedImagesAreNotForcedIntoArgv() {
+        val withImage = task(AgentKind.ClaudeCode).copy(imagePaths = listOf("/tmp/mockup.png"))
+        val argv = adapter.buildInteractiveCommand("/bin/claude", withImage, mcpUrl = null)
+        // Image paths are described inside the prompt text (text-only CLIs).
+        assertTrue(argv.last().contains("/tmp/mockup.png"))
+        assertTrue(argv.last().contains("Attached image file"))
+    }
+
+    @Test
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.ClaudeCode, sessionId = "sid-1")
+        val followUp = baseTask.followUpCliPayload("continue", listOf("/tmp/screenshot.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
+        )
+        assertNotNull(argv)
+        assertTrue(argv!!.last().contains("/tmp/screenshot.png"))
+        assertTrue(argv.last().contains("Attached image file"))
+    }
+
+    @Test
+    fun resumeUsesSessionIdFlag() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" in argv!! && "sid-1" in argv)
+        assertTrue("-p" !in argv)
+        assertEquals("continue", argv.last())
+    }
+
+    @Test
+    fun resumeWithoutSessionReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode).copy(prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" !in argv!!)
+        val embedded = argv.last()
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("hello again"), embedded)
+    }
+
+    @Test
+    fun interactiveResumeShellOneLinerQuotesSession() {
+        val quoted = adapter.interactiveResumeCommand(
+            "/bin/claude",
+            task(AgentKind.ClaudeCode, sessionId = "sid-1"),
+        )
+        assertTrue(quoted.contains("--resume"))
+        assertTrue(quoted.contains("sid-1"))
+    }
+}
+
+class HermesOpenClawAdapterTest {
+    @Test
+    fun hermesUsesInteractiveChatAndMapsModelSkillsAndYolo() {
+        val hermes = HermesAdapter()
+        val argv = hermes.buildInteractiveCommand(
+            "/bin/hermes",
+            task(AgentKind.Hermes, autonomy = AgentAutonomy.Full).copy(
+                model = "openai/gpt-5.5",
+                skills = listOf(app.andy.model.AgentSkill("grill-me", "", "/tmp/SKILL.md")),
+            ),
+            null,
+        )
+        assertEquals(listOf("/bin/hermes", "chat"), argv.take(2))
+        if (HermesProviderIds.resolveForLaunch() != null) {
+            assertTrue("--provider" in argv)
+        }
+        assertTrue("--model" in argv && "openai/gpt-5.5" in argv)
+        assertTrue("-s" in argv && "grill-me" in argv)
+        assertTrue("--yolo" in argv)
+        assertTrue(!hermes.embedsInitialPrompt)
+    }
+
+    @Test
+    fun openClawEmbedsMessageAndSessionOnResume() {
+        val openClaw = OpenClawAdapter()
+        val fresh = openClaw.buildInteractiveCommand("/bin/openclaw", task(AgentKind.OpenClaw), null)
+        assertEquals(listOf("/bin/openclaw", "chat"), fresh.take(2))
+        assertTrue("--session" in fresh && "andy-${task(AgentKind.OpenClaw).id}" in fresh)
+        assertTrue("--message" in fresh && "do the thing" in fresh)
+        val shared = openClaw.buildInteractiveCommand(
+            "/bin/openclaw",
+            task(AgentKind.OpenClaw).copy(openClawNewSession = false),
+            null,
+        )
+        assertTrue("--session" !in shared)
+        val resumed = openClaw.buildInteractiveResumeCommand(
+            "/bin/openclaw", task(AgentKind.OpenClaw, sessionId = "agent:main:incident-42"), null, "continue", emptyList(),
+        )
+        assertTrue("--session" in resumed && "agent:main:incident-42" in resumed)
+        assertTrue("--message" in resumed && "continue" in resumed)
+    }
+}
+
+class CodexInteractiveAdapterTest {
+    private val adapter = CodexAdapter()
+
+    @Test
+    fun interactiveCommandIsNotExecJson() {
+        val repo = File.createTempFile("andy-codex-repo", null).also { it.delete(); it.mkdirs() }
+        try {
+            val argv = adapter.buildInteractiveCommand(
+                "/bin/codex",
+                task(AgentKind.Codex).copy(cwd = repo.absolutePath),
+                mcpUrl = null,
+            )
+            assertEquals("/bin/codex", argv.first())
+            assertTrue("exec" !in argv)
+            assertTrue("--json" !in argv)
+            assertTrue("-C" in argv && repo.absolutePath in argv)
+            assertTrue("--sandbox" in argv && "workspace-write" in argv)
+            assertEquals("do the thing", argv.last())
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun interactiveCommandResolvesMissingCwdToScratch() {
+        val missing = "/definitely/not/a/real/andy/path-${System.nanoTime()}"
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex).copy(cwd = missing),
+            mcpUrl = null,
+        )
+        val cIdx = argv.indexOf("-C")
+        assertTrue(cIdx >= 0 && cIdx + 1 < argv.size, "argv=$argv")
+        val resolved = argv[cIdx + 1]
+        assertTrue(File(resolved).isDirectory, "resolved cwd missing: $resolved")
+        assertTrue(missing !in argv, "stale cwd must not reach Codex: $argv")
+        assertTrue(
+            AgentScratchWorkspace.isScratch(resolved),
+            "missing cwd should fall back to scratch, got=$resolved",
+        )
+    }
+
+    @Test
+    fun explicitNoSandboxOverridesAutonomy() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--dangerously-bypass-approvals-and-sandbox" in argv)
+        assertTrue("--sandbox" !in argv)
+    }
+
+    @Test
+    fun sendsAttachedImagesWithNativeFlag() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex).copy(imagePaths = listOf("/tmp/mockup.png")),
+            mcpUrl = null,
+        )
+        assertTrue("--image" in argv && "/tmp/mockup.png" in argv)
+    }
+
+    @Test
+    fun planModeUsesReadOnlySandbox() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+        assertTrue("--sandbox" in argv && "read-only" in argv)
+        assertTrue(argv.last().contains("Plan mode is active"))
+    }
+
+    @Test
+    fun resumeSendsAttachedImagesWithNativeFlag() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            mcpUrl = null,
+            followUp = "see attached",
+            followUpImagePaths = listOf("/tmp/mockup.png"),
+        )
+        assertNotNull(argv)
+        assertTrue("--image" in argv!! && "/tmp/mockup.png" in argv)
+    }
+
+    @Test
+    fun resumeUsesThreadSubcommand() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            mcpUrl = null,
+        )
+        assertNotNull(argv)
+        assertEquals(listOf("/bin/codex", "resume", "t-42"), argv.take(3))
+        assertTrue("exec" !in argv)
+    }
+
+    @Test
+    fun resumePreservesMcpConfiguration() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, sessionId = "t-42"),
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
+        ).orEmpty()
+        assertTrue("mcp_servers.andy.url=\"http://127.0.0.1:8565/mcp-http\"" in argv)
+    }
+}
+
+class CursorInteractiveAdapterTest {
+    private val adapter = CursorAdapter()
+
+    @Test
+    fun interactiveCommandHasNoHeadlessFlags() {
+        val argv = adapter.buildInteractiveCommand("/bin/cursor-agent", task(AgentKind.Cursor), mcpUrl = null)
+        assertEquals("/bin/cursor-agent", argv.first())
+        assertTrue("-p" !in argv)
+        assertTrue("stream-json" !in argv)
+        assertEquals("do the thing", argv.last())
+    }
+
+    @Test
+    fun planModeUsesPlanSandboxFlags() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, autonomy = AgentAutonomy.Full).copy(planMode = true),
+            mcpUrl = null,
+        )
+        assertTrue("--mode" in argv && "plan" in argv)
+        assertTrue("--sandbox" in argv && "enabled" in argv)
+        assertTrue("--force" !in argv)
+    }
+
+    @Test
+    fun fullAutonomyAddsForceWhenNotPlanning() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, autonomy = AgentAutonomy.Full),
+            mcpUrl = null,
+        )
+        assertTrue("--force" in argv)
+    }
+
+    @Test
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.Cursor, sessionId = "chat-9")
+        val followUp = baseTask.followUpCliPayload("hello again", listOf("/tmp/ui.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
+        )
+        assertNotNull(argv)
+        assertTrue(argv!!.last().contains("/tmp/ui.png"))
+        assertTrue(argv.last().contains("Attached image file"))
+    }
+
+    @Test
+    fun resumeUsesChatId() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, sessionId = "chat-9"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" in argv!! && "chat-9" in argv)
+        assertTrue("--workspace" in argv && "/tmp/repo" in argv)
+        assertEquals("hello again", argv.last())
+    }
+
+    @Test
+    fun freshInteractiveCommandResumesAllocatedChatId() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor, sessionId = "chat-new"),
+            mcpUrl = null,
+        )
+        assertTrue("--resume" in argv && "chat-new" in argv)
+        assertEquals("do the thing", argv.last())
+    }
+
+    @Test
+    fun resumeWithoutChatIdReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/cursor-agent",
+            task(AgentKind.Cursor).copy(prompt = "what is the current timestamp"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--resume" !in argv!!)
+        val embedded = argv.last()
+        assertTrue(embedded.contains("what is the current timestamp"), embedded)
+        assertTrue(embedded.contains("hello again"), embedded)
+    }
+}
+
+class AntigravityInteractiveAdapterTest {
+    private val adapter = AntigravityAdapter()
+
+    @Test
+    fun interactiveCommandHasNoPrintFlag() {
+        val argv = adapter.buildInteractiveCommand("/bin/agy", task(AgentKind.Antigravity), mcpUrl = null)
+        assertEquals("/bin/agy", argv.first())
+        assertTrue("-p" !in argv)
+        assertTrue("--print" !in argv)
+        assertTrue("--mode" in argv && "accept-edits" in argv)
+        assertTrue("--prompt-interactive" in argv)
+        assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun modelFlagIncludesRequiredEffort() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(model = "gemini-3.6-flash"),
+            mcpUrl = null,
+        )
+        assertTrue("--model" in argv && "gemini-3.6-flash" in argv)
+        assertTrue("--effort" in argv && "high" in argv)
+    }
+
+    @Test
+    fun modelFlagOmitsEffortWhenNotSupported() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(model = "claude-sonnet-4-6"),
+            mcpUrl = null,
+        )
+        assertTrue("--model" in argv && "claude-sonnet-4-6" in argv)
+        assertTrue("--effort" !in argv)
+    }
+
+    @Test
+    fun resumeIncludesAttachedImagesInPrompt() {
+        val baseTask = task(AgentKind.Antigravity).copy(prompt = "original ask")
+        val followUp = baseTask.followUpCliPayload("what time is it", listOf("/tmp/mockup.png"), emptyList()).prompt
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            baseTask,
+            mcpUrl = null,
+            followUp = followUp,
+        )
+        assertNotNull(argv)
+        val embedded = argv!![argv.indexOf("--prompt-interactive") + 1]
+        assertTrue(embedded.contains("/tmp/mockup.png"), embedded)
+        assertTrue(embedded.contains("Attached image file"), embedded)
+    }
+
+    @Test
+    fun resumeUsesConversationIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(vendorSessionId = "conv-123", prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "what time is it",
+        )
+        // Stored id is untrusted without a transcript/history match for "original ask".
+        assertNotNull(argv)
+        assertTrue("--continue" !in argv!!)
+        assertTrue("--prompt-interactive" in argv)
+        val promptIdx = argv.indexOf("--prompt-interactive")
+        val embedded = argv[promptIdx + 1]
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("what time is it"), embedded)
+        assertTrue("--conversation" !in argv)
+    }
+
+    @Test
+    fun resumeWithoutConversationIdReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(prompt = "what is the current timestamp"),
+            mcpUrl = null,
+            followUp = "hello",
+        )
+        assertNotNull(argv)
+        assertTrue("--continue" !in argv!!)
+        assertTrue("--conversation" !in argv)
+        assertTrue("--prompt-interactive" in argv)
+        val embedded = argv[argv.indexOf("--prompt-interactive") + 1]
+        assertTrue(embedded.contains("what is the current timestamp"), embedded)
+        assertTrue(embedded.contains("hello"), embedded)
+    }
+
+    @Test
+    fun resumePromptHelperKeepsFollowUpOnlyWhenBound() {
+        val task = task(AgentKind.Antigravity).copy(prompt = "original")
+        assertEquals(
+            "follow",
+            AntigravityAdapter.resumePrompt(task, "follow", boundToConversation = true),
+        )
+        val unbound = AntigravityAdapter.resumePrompt(task, "follow", boundToConversation = false)
+        assertNotNull(unbound)
+        assertTrue(unbound!!.contains("original"))
+        assertTrue(unbound.contains("follow"))
+    }
+
+    @Test
+    fun interactiveResumeShellOneLinerOmitsUntrustedConversation() {
+        val quoted = adapter.interactiveResumeCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(vendorSessionId = "conv-9", prompt = "never sent"),
+        )
+        // Unverified stored ids must not appear in the escape-hatch one-liner.
+        assertTrue("--conversation" !in quoted)
+        assertTrue("--continue" !in quoted)
+    }
+}
+
+class OpenCodeInteractiveAdapterTest {
+    private val adapter = OpenCodeAdapter()
+
+    @Test
+    fun interactiveCommandEmbedsPromptAndModel() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(model = "anthropic/claude-sonnet-5"),
+            mcpUrl = null,
+        )
+        assertEquals("/bin/opencode", argv.first())
+        assertTrue("--model" in argv && "anthropic/claude-sonnet-5" in argv)
+        assertTrue("--prompt" in argv)
+        assertEquals("do the thing", argv[argv.indexOf("--prompt") + 1])
+        // Bare positional args are directories for OpenCode — never put the prompt there.
+        assertTrue("do the thing" !in argv.filterIndexed { index, _ ->
+            index > 0 && argv[index - 1] !in setOf("--prompt", "--model", "--agent", "--file", "--session")
+        })
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun planModeSelectsPlanAgent() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(planMode = true),
+            mcpUrl = null,
+        )
+        assertTrue("--agent" in argv && "plan" in argv)
+        assertTrue("--auto" !in argv)
+    }
+
+    @Test
+    fun fullAutonomyAddsAuto() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode, autonomy = AgentAutonomy.Full).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--auto" in argv)
+    }
+
+    @Test
+    fun resumeUsesSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode, sessionId = "sess-1"),
+            mcpUrl = null,
+            followUp = "hello again",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" in argv!!)
+        assertTrue("sess-1" in argv)
+        assertTrue("--prompt" in argv)
+        assertEquals("hello again", argv[argv.indexOf("--prompt") + 1])
+    }
+
+    @Test
+    fun resumeWithoutSessionReseedsOriginalPrompt() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/opencode",
+            task(AgentKind.OpenCode).copy(prompt = "original ask"),
+            mcpUrl = null,
+            followUp = "follow up",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" !in argv!!)
+        assertTrue("--prompt" in argv)
+        val embedded = argv[argv.indexOf("--prompt") + 1]
+        assertTrue(embedded.contains("original ask"), embedded)
+        assertTrue(embedded.contains("follow up"), embedded)
+    }
+}
+
+class PiInteractiveAdapterTest {
+    private val adapter = PiAdapter()
+
+    @Test
+    fun interactiveCommandEmbedsPromptModelAndThinking() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/pi",
+            task(AgentKind.Pi).copy(
+                model = "anthropic/claude-sonnet-4-5",
+                reasoningEffort = AgentReasoningEffort.High,
+            ),
+            mcpUrl = null,
+        )
+        assertEquals("/bin/pi", argv.first())
+        assertTrue("--model" in argv && "anthropic/claude-sonnet-4-5" in argv)
+        assertTrue("--thinking" in argv && "high" in argv)
+        assertEquals("do the thing", argv.last())
+        assertTrue(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun readOnlyModeAddsPlanAddendum() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/pi",
+            task(AgentKind.Pi).copy(planMode = true),
+            mcpUrl = null,
+        )
+        val prompt = argv.last()
+        assertTrue(prompt.contains("do the thing"), prompt)
+        assertTrue(prompt.contains("read-only"), prompt.lowercase())
+    }
+
+    @Test
+    fun resumeUsesSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/pi",
+            task(AgentKind.Pi, sessionId = "pi-sess"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertNotNull(argv)
+        assertTrue("--session" in argv!!)
+        assertTrue("pi-sess" in argv)
+        assertEquals("continue", argv.last())
+    }
+}
+
+class GooseInteractiveAdapterTest {
+    private val adapter = GooseAdapter()
+
+    @Test
+    fun interactiveCommandNamesSessionAndEnablesDeveloper() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/goose",
+            task(AgentKind.Goose).copy(model = "anthropic/claude-sonnet-4-5"),
+            mcpUrl = "http://127.0.0.1:8565/mcp-http",
+        )
+        assertEquals("/bin/goose", argv.first())
+        assertTrue("session" in argv)
+        assertTrue("--name" in argv && "andy-task-abc123" in argv)
+        assertTrue("--provider" in argv && "anthropic" in argv)
+        assertTrue("--model" in argv && "claude-sonnet-4-5" in argv)
+        assertTrue("--with-builtin" in argv && "developer" in argv)
+        assertTrue("--with-streamable-http-extension" in argv)
+        assertEquals("http://127.0.0.1:8565/mcp-http", argv[argv.indexOf("--with-streamable-http-extension") + 1])
+        assertFalse(adapter.embedsInitialPrompt)
+    }
+
+    @Test
+    fun readOnlyMapsToChatModeEnv() {
+        val env = gooseLaunchEnvironment(task(AgentKind.Goose).copy(planMode = true))
+        assertEquals("chat", env["GOOSE_MODE"])
+        val auto = gooseLaunchEnvironment(
+            task(AgentKind.Goose, autonomy = AgentAutonomy.Full).copy(sandboxMode = AgentSandboxMode.None),
+        )
+        assertEquals("auto", auto["GOOSE_MODE"])
+        val approve = gooseLaunchEnvironment(task(AgentKind.Goose))
+        assertEquals("approve", approve["GOOSE_MODE"])
+        assertEquals("anthropic" to "claude-sonnet-4-5", gooseProviderAndModel(task(AgentKind.Goose).copy(model = "anthropic/claude-sonnet-4-5")))
+        val ollamaGoose = gooseLaunchEnvironment(
+            task(AgentKind.Ollama).copy(localRuntime = app.andy.model.LocalAgentRuntime.Goose, model = "llama3.2"),
+        )
+        assertEquals("ollama", ollamaGoose["GOOSE_PROVIDER"])
+        assertEquals("llama3.2", ollamaGoose["GOOSE_MODEL"])
+        val lmStudioSlashed = gooseLaunchEnvironment(
+            task(AgentKind.LMStudio).copy(
+                localRuntime = app.andy.model.LocalAgentRuntime.Goose,
+                model = "qwen/qwen3.8-27b",
+            ),
+        )
+        assertEquals("lmstudio", lmStudioSlashed["GOOSE_PROVIDER"])
+        assertEquals("qwen/qwen3.8-27b", lmStudioSlashed["GOOSE_MODEL"])
+        assertEquals(
+            "lmstudio" to "qwen/qwen3.8-27b",
+            gooseProviderAndModel(
+                task(AgentKind.LMStudio).copy(
+                    localRuntime = app.andy.model.LocalAgentRuntime.Goose,
+                    model = "lmstudio/qwen/qwen3.8-27b",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun resumeUsesNameWhenSessionIdIsAcpUuid() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/goose",
+            task(AgentKind.Goose, sessionId = "550e8400-e29b-41d4-a716-446655440000"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertTrue("--resume" in argv)
+        assertTrue("--name" in argv && "andy-task-abc123" in argv)
+        assertTrue("--session-id" !in argv)
+    }
+
+    @Test
+    fun resumeUsesCliSessionIdWhenPresent() {
+        val argv = adapter.buildInteractiveResumeCommand(
+            "/bin/goose",
+            task(AgentKind.Goose, sessionId = "20250921_143022"),
+            mcpUrl = null,
+            followUp = "continue",
+        )
+        assertTrue("--resume" in argv)
+        assertTrue("--session-id" in argv && "20250921_143022" in argv)
+    }
+}

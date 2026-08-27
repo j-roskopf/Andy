@@ -1,0 +1,103 @@
+[versions]
+agp = "9.0.1"
+compose = "1.11.1"
+composeMaterial3 = "1.9.0"
+multiplatform-nav3-ui = "1.1.1"
+kotlin = "2.4.0"
+coroutines = "1.10.2"
+ktor = "3.0.1"
+serialization = "1.8.1"
+metro = "1.2.0"
+sqldelight = "2.0.2"
+roborazzi = "1.60.0"
+test-retry = "1.6.4"
+kotlinxBrowser = "0.3"
+markdownRenderer = "0.43.0"
+mcpKotlinSdk = "0.13.0"
+acp = "0.28.1"
+jna = "5.18.1"
+pty4j = "0.13.12"
+directoryWatcher = "0.19.1"
+tomlkt = "0.4.0"
+zxing = "3.5.3"
+webPush = "5.1.2"
+bouncycastle = "1.78.1"
+httpclient = "4.5.14"
+httpasyncclient = "4.1.5"
+grpc = "1.69.0"
+javacv = "1.5.11"
+ffmpeg = "7.1-1.5.11"
+rsyntaxtextarea = "3.6.0"
+composeNativeTray = "1.3.3"
+
+[libraries]
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
+compose-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "composeMaterial3" }
+compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
+compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose" }
+compose-ui-tooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "compose" }
+compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose" }
+jetbrains-navigation3-ui = { module = "org.jetbrains.androidx.navigation3:navigation3-ui", version.ref = "multiplatform-nav3-ui" }
+android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
+compose-compiler-gradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+compose-multiplatform-gradlePlugin = { module = "org.jetbrains.compose:compose-gradle-plugin", version.ref = "compose" }
+kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+kotlin-serialization-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
+metro-gradlePlugin = { module = "dev.zacsweers.metro:gradle-plugin", version.ref = "metro" }
+sqldelight-gradlePlugin = { module = "app.cash.sqldelight:gradle-plugin", version.ref = "sqldelight" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutines" }
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-browser = { module = "org.jetbrains.kotlinx:kotlinx-browser", version.ref = "kotlinxBrowser" }
+markdown-renderer = { module = "com.mikepenz:multiplatform-markdown-renderer", version.ref = "markdownRenderer" }
+markdown-renderer-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
+markdown-renderer-code = { module = "com.mikepenz:multiplatform-markdown-renderer-code", version.ref = "markdownRenderer" }
+mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcpKotlinSdk" }
+acp = { module = "com.agentclientprotocol:acp", version.ref = "acp" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
+ktor-server-sse = { module = "io.ktor:ktor-server-sse", version.ref = "ktor" }
+ktor-server-double-receive = { module = "io.ktor:ktor-server-double-receive", version.ref = "ktor" }
+ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
+ktor-server-http = { module = "io.ktor:ktor-http", version.ref = "ktor" }
+roborazzi-compose-desktop = { module = "io.github.takahirom.roborazzi:roborazzi-compose-desktop", version.ref = "roborazzi" }
+sqldelight-runtime = { module = "app.cash.sqldelight:runtime", version.ref = "sqldelight" }
+sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
+sqldelight-coroutines-extensions = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
+pty4j = { module = "org.jetbrains.pty4j:pty4j", version.ref = "pty4j" }
+directory-watcher = { module = "io.methvin:directory-watcher", version.ref = "directoryWatcher" }
+tomlkt = { module = "net.peanuuutz.tomlkt:tomlkt", version.ref = "tomlkt" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+web-push = { module = "nl.martijndwars:web-push", version.ref = "webPush" }
+bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+httpclient = { module = "org.apache.httpcomponents:httpclient", version.ref = "httpclient" }
+httpasyncclient = { module = "org.apache.httpcomponents:httpasyncclient", version.ref = "httpasyncclient" }
+grpc-api = { module = "io.grpc:grpc-api", version.ref = "grpc" }
+grpc-core = { module = "io.grpc:grpc-core", version.ref = "grpc" }
+grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
+ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "ffmpeg" }
+rsyntaxtextarea = { module = "com.fifesoft:rsyntaxtextarea", version.ref = "rsyntaxtextarea" }
+compose-native-tray = { module = "io.github.kdroidfilter:composenativetray", version.ref = "composeNativeTray" }
+
+[plugins]
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidKotlinMultiplatformLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose" }
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+metro = { id = "dev.zacsweers.metro", version.ref = "metro" }
+testRetry = { id = "org.gradle.test-retry", version.ref = "test-retry" }

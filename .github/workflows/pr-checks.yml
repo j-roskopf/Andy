@@ -147,7 +147,7 @@ jobs:
   assemble:
     name: Desktop assemble (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -332,7 +332,7 @@ jobs:
           fi
 
           rsync -a --delete --exclude .git \
-            build/dist/wasmJs/productionExecutable/ \
+            composeApp/build/dist/wasmJs/productionExecutable/ \
             preview-pages/
           touch preview-pages/.nojekyll
           cp preview-pages/index.html preview-pages/404.html
