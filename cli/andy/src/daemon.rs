@@ -21,11 +21,22 @@ pub fn pid_path() -> PathBuf {
 }
 
 pub async fn ensure_running(socket: &Path) -> Result<()> {
+    ensure_running_with_feedback(socket, |_, _| Ok(())).await
+}
+
+/// Like [ensure_running], but invokes `on_wait(message, frame)` on each poll so
+/// callers (e.g. the TUI) can redraw a loading screen while andyd starts.
+pub async fn ensure_running_with_feedback(
+    socket: &Path,
+    mut on_wait: impl FnMut(&str, u8) -> Result<()>,
+) -> Result<()> {
     if is_socket_live(socket).await {
         return Ok(());
     }
     remove_stale_artifacts(socket);
-    if pid_alive() && wait_for_socket(socket, Duration::from_secs(15)).await {
+    if pid_alive()
+        && wait_for_socket_with_feedback(socket, Duration::from_secs(15), &mut on_wait).await
+    {
         return Ok(());
     }
     if !try_launch()? {
@@ -35,7 +46,7 @@ pub async fn ensure_running(socket: &Path) -> Result<()> {
              or launch the Andy desktop app."
         );
     }
-    if !wait_for_socket(socket, Duration::from_secs(15)).await {
+    if !wait_for_socket_with_feedback(socket, Duration::from_secs(15), &mut on_wait).await {
         bail!(
             "andyd did not become ready at {} within 15s — check ~/.andy/logs/andyd.err.log",
             socket.display()
@@ -94,12 +105,36 @@ fn process_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-async fn wait_for_socket(socket: &Path, timeout: Duration) -> bool {
+/// Poll until the socket accepts connections (no launch). Used for SSH-tunneled remotes.
+pub async fn wait_until_live_with_feedback(
+    socket: &Path,
+    timeout: Duration,
+    mut on_wait: impl FnMut(&str, u8) -> Result<()>,
+) -> Result<()> {
+    if wait_for_socket_with_feedback(socket, timeout, &mut on_wait).await {
+        Ok(())
+    } else {
+        bail!(
+            "andyd socket at {} did not become ready within {}s",
+            socket.display(),
+            timeout.as_secs()
+        )
+    }
+}
+
+async fn wait_for_socket_with_feedback(
+    socket: &Path,
+    timeout: Duration,
+    on_wait: &mut impl FnMut(&str, u8) -> Result<()>,
+) -> bool {
     let deadline = Instant::now() + timeout;
+    let mut frame = 0u8;
     while Instant::now() < deadline {
         if is_socket_live(socket).await {
             return true;
         }
+        let _ = on_wait("Connecting to andyd…", frame);
+        frame = frame.wrapping_add(1);
         thread::sleep(Duration::from_millis(100));
     }
     is_socket_live(socket).await

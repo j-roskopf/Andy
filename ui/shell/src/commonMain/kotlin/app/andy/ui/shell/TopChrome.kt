@@ -328,7 +328,7 @@ private fun ActionRunnerSelector(
                         AndyDropdownMenuItem(
                             label = item.name,
                             onClick = {
-                                onSelectionChange(item.id, item.actions.firstOrNull()?.id)
+                                onSelectionChange(item.id, null)
                                 projectMenuOpen = false
                             },
                         )

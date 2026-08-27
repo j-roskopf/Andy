@@ -50,6 +50,7 @@ class DesktopActionRunService(
 
     private val nextRun = AtomicInteger(1)
     private val handles = ConcurrentHashMap<String, RunHandle>()
+    private val pendingAppends = ConcurrentHashMap<String, MutableList<String>>()
 
     // Serializes the spawn handshake (status check + handle registration) against stop()/clear(),
     // so a run cancelled while its PTY is still spawning never publishes a live backend afterwards.
@@ -78,11 +79,23 @@ class DesktopActionRunService(
     )
 
     override fun run(project: ActionProject, action: ProjectAction): String {
+        val command = action.command.takeIf { it.isNotBlank() }
+        synchronized(lifecycleLock) {
+            val existing = _running.value.lastOrNull {
+                it.projectId == project.id &&
+                    it.actionId == action.id &&
+                    it.status in ACTIVE_STATUSES
+            }
+            if (existing != null && isAppendable(existing.runId)) {
+                if (command != null) appendCommand(existing.runId, command)
+                return existing.runId
+            }
+        }
         clearExistingRuns(project.id, action.id)
         return start(
             project = project,
             action = action,
-            initialCommand = action.command.takeIf { it.isNotBlank() },
+            initialCommand = command,
         )
     }
 
@@ -141,6 +154,7 @@ class DesktopActionRunService(
                     initialCommand?.let { command ->
                         runCatching { rustTerminal.writeText("$command\r") }
                     }
+                    drainPendingAppends(runId, rustTerminal)
                     val exitCode = runCatching {
                         rustTerminal.exitCode.first { it != null }
                     }.getOrNull() ?: -1
@@ -188,6 +202,7 @@ class DesktopActionRunService(
 
     override fun clear(runId: String) {
         val handle = synchronized(lifecycleLock) {
+            pendingAppends.remove(runId)
             val handle = handles.remove(runId)
             _running.update { runs -> runs.filterNot { it.runId == runId } }
             handle
@@ -218,6 +233,30 @@ class DesktopActionRunService(
         _running.value
             .filter { it.projectId == projectId && it.actionId == actionId }
             .forEach { clear(it.runId) }
+    }
+
+    private fun isAppendable(runId: String): Boolean {
+        val terminal = handles[runId]?.rustTerminal ?: return true
+        return terminal.isAlive
+    }
+
+    private fun appendCommand(runId: String, command: String) {
+        val terminal = handles[runId]?.rustTerminal
+        if (terminal != null && terminal.isAlive) {
+            runCatching { terminal.writeText("$command\r") }
+        } else {
+            pendingAppends.computeIfAbsent(runId) { mutableListOf() }.add(command)
+        }
+    }
+
+    private fun drainPendingAppends(runId: String, terminal: RustTerminalBackend) {
+        pendingAppends.remove(runId)?.forEach { command ->
+            runCatching { terminal.writeText("$command\r") }
+        }
+    }
+
+    private companion object {
+        private val ACTIVE_STATUSES = setOf(ActionRunStatus.Starting, ActionRunStatus.Running)
     }
 
     private fun markComplete(runId: String, status: ActionRunStatus, exitCode: Int?) {

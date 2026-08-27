@@ -162,6 +162,9 @@ fun Server.registerAgentProjectTools(
         // Temporary chats are desktop-session-local; another agent must not be able to
         // enumerate or inspect one.
         val tasks = agentRuns.tasks.value.excludingTemporary()
+        val tmuxAvailable = TmuxAndy.isAvailable()
+        // One `list-sessions` answers liveness for every row — not N `has-session` forks.
+        val liveTmuxSessions = if (tmuxAvailable) TmuxAndy.listSessions().toSet() else emptySet()
         val arr = buildJsonArray {
             tasks.forEach { task ->
                 add(
@@ -238,7 +241,10 @@ fun Server.registerAgentProjectTools(
                             )
                         }
                         put("tmuxSession", TmuxAndy.sessionName(task.id))
-                        put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(task.id))
+                        put(
+                            "tmuxAlive",
+                            tmuxAvailable && TmuxAndy.sessionName(task.id) in liveTmuxSessions,
+                        )
                     },
                 )
             }

@@ -768,6 +768,13 @@ private fun ProjectCockpit(
                                     onEditAction = { editingAction = EditingAction(current.id, it) },
                                     onNewAction = { editingAction = EditingAction(current.id, null) },
                                     onRunAction = { action ->
+                                        onUpdateWorkspace {
+                                            it.copy(
+                                                lastActionProjectId = current.id,
+                                                lastActionId = action.id,
+                                                lastActionIdsByProject = it.lastActionIdsByProject + (current.id to action.id),
+                                            )
+                                        }
                                         val runId = services.actionRuns.run(current, action)
                                         onNotifyTerminalRun(runId)
                                     },

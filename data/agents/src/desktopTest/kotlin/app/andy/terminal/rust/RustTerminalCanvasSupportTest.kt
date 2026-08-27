@@ -29,6 +29,28 @@ class RustTerminalCanvasSupportTest {
     }
 
     @Test
+    fun modifierOnlyKeysAreNotEncoded() {
+        assertNull(encodeTerminalKey(keyEvent(Key.ShiftLeft)))
+        assertNull(encodeTerminalKey(keyEvent(Key.ShiftRight)))
+        assertNull(encodeTerminalKey(keyEvent(Key.CtrlLeft)))
+        assertNull(encodeTerminalKey(keyEvent(Key.AltLeft)))
+        assertNull(encodeTerminalKey(keyEvent(Key.MetaLeft, meta = true)))
+    }
+
+    @Test
+    fun awtUndefinedKeyCharIsNotEncoded() {
+        assertNull(
+            encodeTerminalKey(
+                KeyEvent(
+                    key = Key.Unknown,
+                    type = KeyEventType.KeyDown,
+                    codePoint = 0xFFFF,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun formatTerminalPasteWrapsMultilineWhenBracketed() {
         val bytes = formatTerminalPaste("line1\nline2", bracketedPaste = true)
         assertEquals("\u001B[200~line1\nline2\u001B[201~", bytes.decodeToString())
@@ -44,11 +66,13 @@ class RustTerminalCanvasSupportTest {
         key: Key,
         ctrl: Boolean = false,
         meta: Boolean = false,
+        codePoint: Int = 0,
     ): KeyEvent = KeyEvent(
         key = key,
         type = KeyEventType.KeyDown,
         isCtrlPressed = ctrl,
         isMetaPressed = meta,
+        codePoint = codePoint,
     )
 
     @Test

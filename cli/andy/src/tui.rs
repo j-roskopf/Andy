@@ -18,14 +18,32 @@ use crate::acp_view;
 use crate::attach;
 use crate::chats::{self, ListEntry, ProjectGroup};
 use crate::compose;
+use crate::daemon;
+use crate::loading;
 use crate::mcp::McpClient;
 use crate::tmux;
+use std::path::PathBuf;
 
-pub async fn run_dashboard(mut client: McpClient) -> Result<()> {
+pub async fn run_dashboard(socket: PathBuf, ensure_local_daemon: bool) -> Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+
+    if ensure_local_daemon {
+        daemon::ensure_running_with_feedback(&socket, |message, tick| {
+            loading::draw_loading_screen(&mut terminal, " Andy ", message, tick)
+        })
+        .await?;
+    } else {
+        daemon::wait_until_live_with_feedback(
+            &socket,
+            std::time::Duration::from_secs(15),
+            |message, tick| loading::draw_loading_screen(&mut terminal, " Andy ", message, tick),
+        )
+        .await?;
+    }
+    let mut client = McpClient::new(socket);
 
     let mut selected: usize = 0;
     let mut list_state = ListState::default();
@@ -468,13 +486,21 @@ async fn refresh(
     list_state: &mut ListState,
     status: &mut String,
 ) -> Result<()> {
-    *status = "Loading chats…".into();
-    draw_dashboard(terminal, entries, list_state, *selected, status)?;
+    *status = "Loading chats…".to_string();
+    let mut frame = 0u8;
+    let list_fut = client.call_tool("chat.list", Value::Object(Default::default()));
+    tokio::pin!(list_fut);
 
-    match client
-        .call_tool("chat.list", Value::Object(Default::default()))
-        .await
-    {
+    let raw = loop {
+        loading::draw_loading_screen(terminal, " Andy chats ", status, frame)?;
+        frame = frame.wrapping_add(1);
+        tokio::select! {
+            result = &mut list_fut => break result,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+    };
+
+    match raw {
         Ok(raw) => {
             let chats = chats::parse_chats(&raw);
             let chat_count = chats.len();

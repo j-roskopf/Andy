@@ -131,15 +131,25 @@ async fn main() -> Result<()> {
     daemon::ensure_unix_platform()?;
     let cli = Cli::parse();
     let socket = resolve_socket(&cli).await?;
-    if cli.remote.is_none() {
-        daemon::ensure_running(&socket).await?;
-    }
-    let mut client = McpClient::new(socket);
     let json_out = cli.json;
+    let ensure_local_daemon = cli.remote.is_none();
 
     match cli.command {
-        Commands::Tui => tui::run_dashboard(client).await?,
-        Commands::Attach { task_id } => attach::attach_or_reattach(&mut client, &task_id).await?,
+        Commands::Tui => tui::run_dashboard(socket, ensure_local_daemon).await?,
+        cmd => {
+            if ensure_local_daemon {
+                daemon::ensure_running(&socket).await?;
+            }
+            let mut client = McpClient::new(socket);
+            dispatch_command(cmd, &mut client, json_out).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn dispatch_command(cmd: Commands, client: &mut McpClient, json_out: bool) -> Result<()> {
+    match cmd {
+        Commands::Attach { task_id } => attach::attach_or_reattach(client, &task_id).await?,
         Commands::Chat(ChatCmd::List) => {
             let raw = client
                 .call_tool("chat.list", Value::Object(Default::default()))
@@ -202,7 +212,7 @@ async fn main() -> Result<()> {
                 .get("id")
                 .and_then(|id| id.as_str())
                 .with_context(|| format!("unexpected chat.start response: {raw}"))?;
-            if let Err(err) = attach::attach_or_reattach(&mut client, task_id).await {
+            if let Err(err) = attach::attach_or_reattach(client, task_id).await {
                 eprintln!("started {task_id} but attach failed: {err:#}");
                 println!("{raw}");
             }
@@ -234,19 +244,18 @@ async fn main() -> Result<()> {
                 .await?;
             println!("{raw}");
         }
-        Commands::Device(cmd) => device_cli::run_device(&mut client, cmd, json_out).await?,
-        Commands::Emulator(cmd) => device_cli::run_emulator(&mut client, cmd, json_out).await?,
-        Commands::Avd(cmd) => device_cli::run_avd(&mut client, cmd, json_out).await?,
-        Commands::SystemImage(cmd) => {
-            device_cli::run_system_image(&mut client, cmd, json_out).await?
-        }
-        Commands::Snapshot(cmd) => device_cli::run_snapshot(&mut client, cmd, json_out).await?,
-        Commands::Input(cmd) => device_cli::run_input(&mut client, cmd, json_out).await?,
-        Commands::App(cmd) => device_cli::run_app(&mut client, cmd, json_out).await?,
-        Commands::Intent(cmd) => device_cli::run_intent(&mut client, cmd, json_out).await?,
-        Commands::File(cmd) => device_cli::run_file(&mut client, cmd, json_out).await?,
-        Commands::Network(cmd) => device_cli::run_network(&mut client, cmd, json_out).await?,
-        Commands::Tool(cmd) => tool_cmd::run_tool(&mut client, cmd, json_out).await?,
+        Commands::Device(cmd) => device_cli::run_device(client, cmd, json_out).await?,
+        Commands::Emulator(cmd) => device_cli::run_emulator(client, cmd, json_out).await?,
+        Commands::Avd(cmd) => device_cli::run_avd(client, cmd, json_out).await?,
+        Commands::SystemImage(cmd) => device_cli::run_system_image(client, cmd, json_out).await?,
+        Commands::Snapshot(cmd) => device_cli::run_snapshot(client, cmd, json_out).await?,
+        Commands::Input(cmd) => device_cli::run_input(client, cmd, json_out).await?,
+        Commands::App(cmd) => device_cli::run_app(client, cmd, json_out).await?,
+        Commands::Intent(cmd) => device_cli::run_intent(client, cmd, json_out).await?,
+        Commands::File(cmd) => device_cli::run_file(client, cmd, json_out).await?,
+        Commands::Network(cmd) => device_cli::run_network(client, cmd, json_out).await?,
+        Commands::Tool(cmd) => tool_cmd::run_tool(client, cmd, json_out).await?,
+        Commands::Tui => unreachable!("handled in main"),
     }
     Ok(())
 }
