@@ -20,9 +20,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             // Some git installs still default new repos to master.
             git(repo, "checkout", "-B", "main")
             File(repo, "root.txt").writeText("root\n")
@@ -64,9 +62,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             git(repo, "checkout", "-B", "main")
             File(repo, "readme.txt").writeText("hi\n")
             git(repo, "add", ".")
@@ -116,9 +112,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             git(repo, "checkout", "-B", "main")
             File(repo, "root.txt").writeText("root\n")
             git(repo, "add", ".")
@@ -161,9 +155,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             git(repo, "checkout", "-B", "main")
             File(repo, "conflict.txt").writeText("base\n")
             git(repo, "add", ".")
@@ -210,9 +202,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "a.txt").writeText("a\n")
             git(repo, "add", ".")
             git(repo, "commit", "-m", "initial")
@@ -232,9 +222,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "clean.kt").writeText("one\n")
             File(repo, "already-dirty.kt").writeText("base\n")
             File(repo, "untouched-dirty.kt").writeText("base\n")
@@ -302,9 +290,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "touched.kt").writeText("one\n")
             File(repo, "other.kt").writeText("one\n")
             git(repo, "add", ".")
@@ -344,9 +330,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "agent.kt").writeText("one\n")
             File(repo, "user-wip-a.kt").writeText("one\n")
             File(repo, "user-wip-b.kt").writeText("one\n")
@@ -375,9 +359,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "tracked.kt").writeText("base\n")
             git(repo, "add", ".")
             git(repo, "commit", "-m", "initial")
@@ -403,9 +385,7 @@ class WorktreeManagerTest {
             it.mkdirs()
         }
         try {
-            git(repo, "init")
-            git(repo, "config", "user.email", "andy@example.test")
-            git(repo, "config", "user.name", "Andy Test")
+            initTestRepo(repo)
             File(repo, "tracked.kt").writeText("base\n")
             git(repo, "add", ".")
             git(repo, "commit", "-m", "initial")
@@ -423,6 +403,13 @@ class WorktreeManagerTest {
         } finally {
             repo.deleteRecursively()
         }
+    }
+
+    private fun initTestRepo(dir: File) {
+        git(dir, "init")
+        git(dir, "config", "core.autocrlf", "false")
+        git(dir, "config", "user.email", "andy@example.test")
+        git(dir, "config", "user.name", "Andy Test")
     }
 
     private fun git(dir: File, vararg args: String) {
