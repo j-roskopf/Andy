@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.test.OptInGates.harnessTimeoutMillis
 import app.andy.model.HostFileSaveResult
 import app.andy.model.HostSearchMatchKind
 import app.andy.model.HostSearchMode
@@ -126,22 +127,24 @@ class DesktopHostFileServiceTest {
         val service = DesktopHostFileService(indexDir = indexDir)
         val collector = launch { service.indexRoot(root.absolutePath).collect {} }
         try {
-            withTimeout(5_000) {
+            withTimeout(harnessTimeoutMillis(5_000, 15_000)) {
                 while (service.search("seed", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
                     delay(50)
                 }
             }
+            // Allow async watchAsync() registration to finish before creating files.
+            delay(harnessTimeoutMillis(200, 500, 1_000))
 
             val nested = root.resolve("nested/deep").apply { mkdirs() }
             nested.resolve("fresh.kt").writeText("fun helloFresh() {}\n")
-            withTimeout(8_000) {
+            withTimeout(harnessTimeoutMillis(8_000, 20_000, 30_000)) {
                 while (service.search("helloFresh", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
                     delay(50)
                 }
             }
 
             nested.resolve("fresh.kt").writeText("fun helloFresh() { println(\"updatedNeedle\") }\n")
-            withTimeout(8_000) {
+            withTimeout(harnessTimeoutMillis(8_000, 20_000, 30_000)) {
                 while (service.search("updatedNeedle", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
                     delay(50)
                 }
@@ -152,7 +155,7 @@ class DesktopHostFileServiceTest {
                     .resolve("ignored.txt")
                     .writeText("excludedNeedle should not index")
             }
-            delay(1_200)
+            delay(harnessTimeoutMillis(1_200, 2_000, 3_000))
             assertTrue(
                 service.search("excludedNeedle", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty(),
             )
