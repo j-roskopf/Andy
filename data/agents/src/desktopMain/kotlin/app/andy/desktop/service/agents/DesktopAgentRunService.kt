@@ -4744,11 +4744,14 @@ class DesktopAgentRunService(
         if (task.completedChanges != null) return
         val cwd = task.cwd ?: return
         val baseline = task.changeBaselineTree ?: return
-        val paths = touchedPaths(runId, cwd)
-        if (paths.isEmpty()) return
+        val transcriptPaths = touchedPaths(runId, cwd)
+        // Shell/workflow adapters may mutate the worktree without ACP tool-call events;
+        // fall back to the full baseline diff when the transcript has no scoped paths.
+        val snapshotPaths = transcriptPaths.takeIf { it.isNotEmpty() }
         val completedChanges = withContext(Dispatchers.IO) {
-            worktrees.changeSnapshot(cwd, baseline, paths)
+            worktrees.changeSnapshot(cwd, baseline, snapshotPaths)
         } ?: return
+        if (completedChanges.summary.files.isEmpty()) return
         updateTask(runId) { t ->
             if (t.completedChanges == null) t.copy(completedChanges = completedChanges) else t
         }
