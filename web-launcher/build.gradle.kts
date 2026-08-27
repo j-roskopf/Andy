@@ -16,8 +16,8 @@ application {
 }
 
 val syncWebDistribution by tasks.registering(Sync::class) {
-    dependsOn(rootProject.tasks.named("wasmJsBrowserDistribution"))
-    from(rootProject.layout.buildDirectory.dir("dist/wasmJs/productionExecutable"))
+    dependsOn(":composeApp:wasmJsBrowserDistribution")
+    from(rootProject.layout.projectDirectory.dir("composeApp/build/dist/wasmJs/productionExecutable"))
     into(layout.buildDirectory.dir("generated/web-resources/web"))
 }
 
