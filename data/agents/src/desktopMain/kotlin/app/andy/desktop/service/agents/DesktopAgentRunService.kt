@@ -455,6 +455,20 @@ class DesktopAgentRunService(
         appendEvents(taskId, events)
     }
 
+    /** Test-only: force a live status badge (store load recovers ACP Working → Error). */
+    internal fun testSetTaskStatus(taskId: String, status: AgentStatus) {
+        updateTask(taskId) { task ->
+            task.copy(
+                status = status,
+                interrupted = false,
+                finishedAtMillis = when (status) {
+                    AgentStatus.Done, AgentStatus.Error -> task.finishedAtMillis ?: System.currentTimeMillis()
+                    else -> null
+                },
+            )
+        }
+    }
+
     /** True while the local PTY viewer attached to tmux is still running. */
     internal fun isViewerAlive(taskId: String): Boolean = terminals.isViewerAlive(taskId)
 
@@ -5432,10 +5446,16 @@ class DesktopAgentRunService(
     ) {
         val task = currentTask(taskId) ?: return
         if (task.lane != AgentLaneKind.Acp || task.status == AgentStatus.Blocked) return
+        // Finished chats may still need trailing-segment synthesis (legacy transcripts).
+        // Live turns must not grow an edited-files card until the turn ends.
+        val synthesizeTurn = !task.isActive &&
+            (task.status == AgentStatus.Done ||
+                task.status == AgentStatus.Error ||
+                task.finishedAtMillis != null)
         fileChangesEnrichmentJobs[taskId]?.cancel()
         fileChangesEnrichmentJobs[taskId] = scope.launch {
             fileChangesEnrichmentMutex.computeIfAbsent(taskId) { Mutex() }.withLock {
-                runFileChangesEnrichment(taskId, flushBatch, synthesizeTurn = false, atMillis)
+                runFileChangesEnrichment(taskId, flushBatch, synthesizeTurn, atMillis)
             }
         }
     }
@@ -5448,6 +5468,7 @@ class DesktopAgentRunService(
         taskId: String,
         task: AgentTask,
         events: List<AgentEvent>,
+        synthesizeTrailingSegment: Boolean,
     ): FileChangesEnrichmentResult {
         val cwd = task.cwd ?: return FileChangesEnrichmentResult(events, emptyList())
         val baseline = task.changeBaselineTree ?: return FileChangesEnrichmentResult(events, emptyList())
@@ -5456,6 +5477,7 @@ class DesktopAgentRunService(
             cwd = cwd,
             baseline = baseline,
             events = events,
+            synthesizeTrailingSegment = synthesizeTrailingSegment,
             segmentPaths = { segment ->
                 relativeRepoPaths(
                     taskId,
@@ -5497,9 +5519,18 @@ class DesktopAgentRunService(
             if (task.lane != AgentLaneKind.Acp) return@withContext
             if (task.status == AgentStatus.Blocked) return@withContext
 
-            flushEditBatch(taskId, atMillis)?.let { acpTranscriptStore.append(taskId, it) }
+            // Only emit edited-files at turn boundaries / turn completion — never mid-turn.
+            val atTurnEnd = flushBatch || synthesizeTurn
+            if (atTurnEnd) {
+                flushEditBatch(taskId, atMillis)?.let { acpTranscriptStore.append(taskId, it) }
+            }
             val raw = acpTranscriptStore.load(taskId)
-            val enrichment = enrichTranscriptFileChangesIncremental(taskId, task, raw)
+            val enrichment = enrichTranscriptFileChangesIncremental(
+                taskId,
+                task,
+                raw,
+                synthesizeTrailingSegment = atTurnEnd,
+            )
             enrichment.newlyPersisted
                 .filter { synthesized -> !AgentFileChangesEnrichment.fileChangesAlreadyRecorded(raw, synthesized) }
                 .forEach { acpTranscriptStore.append(taskId, it) }
@@ -5511,6 +5542,7 @@ class DesktopAgentRunService(
                     taskId,
                     task,
                     acpTranscriptStore.load(taskId),
+                    synthesizeTrailingSegment = atTurnEnd,
                 ).display
             }
             eventFlows.computeIfAbsent(taskId) { MutableStateFlow(emptyList()) }.update { current ->

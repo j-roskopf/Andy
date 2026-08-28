@@ -1006,6 +1006,47 @@ class AgentTranscriptTest {
     }
 
     @Test
+    fun openTurnFileChangesAreHiddenWhileTurnIsActive() {
+        val snapshot = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 1, 0))),
+            diffs = emptyMap(),
+        )
+        val prior = AgentEvent.FileChanges(atMillis = 1, batchId = "batch-1", baselineTree = "abc", snapshot = snapshot)
+        val events = listOf(
+            prior,
+            AgentEvent.TaskResult(atMillis = 2, success = true, finalText = null),
+            AgentEvent.UserMessage(atMillis = 3, text = "edit more"),
+            AgentEvent.FileChanges(atMillis = 4, batchId = "batch-2", baselineTree = "abc", snapshot = snapshot),
+        )
+
+        val displayed = transcriptDisplayEvents(events, hideOpenTurnFileChanges = true)
+        val cards = displayed.filterIsInstance<AgentEvent.FileChanges>()
+        assertEquals(1, cards.size)
+        assertEquals("batch-1", cards.single().batchId)
+    }
+
+    @Test
+    fun openTurnFileChangesAreHiddenOnFirstTurnWhileActive() {
+        val snapshot = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 1, 0))),
+            diffs = emptyMap(),
+        )
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "edit"),
+            AgentEvent.FileChanges(atMillis = 2, batchId = "batch-1", baselineTree = "abc", snapshot = snapshot),
+        )
+
+        assertFalse(
+            transcriptDisplayEvents(events, hideOpenTurnFileChanges = true)
+                .any { it is AgentEvent.FileChanges },
+        )
+        assertTrue(
+            transcriptDisplayEvents(events, hideOpenTurnFileChanges = false)
+                .any { it is AgentEvent.FileChanges },
+        )
+    }
+
+    @Test
     fun fileChangesEventKeyIsStablePerBatch() {
         val event = AgentEvent.FileChanges(
             atMillis = 1,
