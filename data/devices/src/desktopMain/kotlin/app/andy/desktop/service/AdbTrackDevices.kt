@@ -2,9 +2,11 @@ package app.andy.desktop.service
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.EOFException
 import java.io.IOException
@@ -42,40 +44,47 @@ object AdbTrackDevices {
         connectTimeoutMs: Int = 3_000,
         onUpdate: suspend (payload: String) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        val socket = Socket()
-        // Blocking InputStream.read ignores Job cancellation; closing the socket
-        // unblocks the read when flatMapLatest (or scope cancel) tears us down.
-        val closeOnCancel = coroutineContext.job.invokeOnCancellation {
-            runCatching { socket.close() }
-        }
-        try {
-            socket.use {
-                socket.tcpNoDelay = true
-                socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
-                val input = socket.getInputStream()
-                val output = socket.getOutputStream()
-                writeServiceRequest(output, service)
-                when (val status = readExact(input, 4).decodeToString()) {
-                    "OKAY" -> Unit
-                    "FAIL" -> {
-                        val message = readLengthPrefixed(input)
-                        error("adb $service failed: ${message.ifBlank { "unknown error" }}")
-                    }
-                    else -> error("adb $service returned unexpected status: $status")
-                }
-                while (coroutineContext.isActive) {
-                    coroutineContext.ensureActive()
-                    val payload = readLengthPrefixed(input)
-                    onUpdate(payload)
+        coroutineScope {
+            val socket = Socket()
+            // Blocking InputStream.read ignores Job cancellation. A sibling that
+            // closes the socket when this scope is cancelled unblocks the read so
+            // flatMapLatest backend switches do not stall on an idle ADB connection.
+            val closer = launch {
+                try {
+                    awaitCancellation()
+                } finally {
+                    runCatching { socket.close() }
                 }
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (io: IOException) {
-            coroutineContext.ensureActive()
-            throw io
-        } finally {
-            closeOnCancel.dispose()
+            try {
+                socket.use {
+                    socket.tcpNoDelay = true
+                    socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                    val input = socket.getInputStream()
+                    val output = socket.getOutputStream()
+                    writeServiceRequest(output, service)
+                    when (val status = readExact(input, 4).decodeToString()) {
+                        "OKAY" -> Unit
+                        "FAIL" -> {
+                            val message = readLengthPrefixed(input)
+                            error("adb $service failed: ${message.ifBlank { "unknown error" }}")
+                        }
+                        else -> error("adb $service returned unexpected status: $status")
+                    }
+                    while (coroutineContext.isActive) {
+                        coroutineContext.ensureActive()
+                        val payload = readLengthPrefixed(input)
+                        onUpdate(payload)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (io: IOException) {
+                coroutineContext.ensureActive()
+                throw io
+            } finally {
+                closer.cancel()
+            }
         }
     }
 
