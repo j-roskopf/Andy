@@ -6,7 +6,9 @@ import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentThreadChangeSnapshot
+import app.andy.model.GitBranchInfo
 import app.andy.model.WorktreeMergeOutcome
+import app.andy.model.WorkingTreeStatus
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -38,6 +40,80 @@ class WorktreeManager(
     /** Current branch of [dir], or null when detached HEAD or not a repo. */
     fun currentBranch(dir: String): String? =
         git(dir, "branch", "--show-current").takeIf { it.exitCode == 0 }?.output?.trim()?.ifBlank { null }
+
+    /** Local heads for [dir], current branch first when known. */
+    fun listLocalBranches(dir: String): List<GitBranchInfo> {
+        if (!isGitRepo(dir)) return emptyList()
+        val current = currentBranch(dir)
+        val listed = git(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+        if (listed.exitCode != 0) return emptyList()
+        val names = listed.output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+        return names
+            .map { GitBranchInfo(name = it, isCurrent = it == current) }
+            .sortedWith(
+                compareByDescending<GitBranchInfo> { it.isCurrent }
+                    .thenBy { it.name.lowercase() },
+            )
+    }
+
+    /**
+     * Dirty working-tree summary for the composer branch chip.
+     * File count includes untracked; +/- lines come from tracked diff against HEAD.
+     */
+    fun workingTreeStatus(dir: String): WorkingTreeStatus? {
+        if (!isGitRepo(dir)) return null
+        val branch = currentBranch(dir)
+        val status = git(dir, "status", "--porcelain")
+        if (status.exitCode != 0) return WorkingTreeStatus(branch, 0, 0, 0)
+        val dirtyFileCount = status.output.lineSequence().count { it.isNotBlank() }
+        val numstat = git(dir, "diff", "--numstat", "HEAD")
+        var additions = 0
+        var deletions = 0
+        if (numstat.exitCode == 0) {
+            numstat.output.lineSequence().forEach { line ->
+                val fields = line.split('\t')
+                if (fields.size >= 2) {
+                    additions += fields[0].toIntOrNull() ?: 0
+                    deletions += fields[1].toIntOrNull() ?: 0
+                }
+            }
+        }
+        return WorkingTreeStatus(
+            branch = branch,
+            dirtyFileCount = dirtyFileCount,
+            additions = additions,
+            deletions = deletions,
+        )
+    }
+
+    fun checkoutBranch(dir: String, branch: String): Result<Unit> {
+        val name = branch.trim()
+        if (name.isEmpty()) return Result.failure(IllegalArgumentException("branch name is blank"))
+        val result = git(dir, "switch", name)
+        return if (result.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException(result.output.ifBlank { "git switch failed" }))
+        }
+    }
+
+    fun createAndCheckoutBranch(dir: String, branch: String): Result<Unit> {
+        val name = branch.trim()
+        if (name.isEmpty()) return Result.failure(IllegalArgumentException("branch name is blank"))
+        if (name.contains("..") || name.any { it.isWhitespace() || it == ':' || it == '\\' }) {
+            return Result.failure(IllegalArgumentException("invalid branch name"))
+        }
+        val result = git(dir, "switch", "-c", name)
+        return if (result.exitCode == 0) {
+            Result.success(Unit)
+        } else {
+            Result.failure(IllegalStateException(result.output.ifBlank { "git switch -c failed" }))
+        }
+    }
 
     /** True when [worktreePath] is still registered for [originDir]'s repo and present on disk. */
     fun isLiveWorktree(originDir: String, worktreePath: String): Boolean {

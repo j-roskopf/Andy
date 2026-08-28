@@ -33,6 +33,8 @@ import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
+import app.andy.model.GitBranchInfo
+import app.andy.model.WorkingTreeStatus
 import app.andy.model.fallbackTitle
 import app.andy.model.AgentStatus
 import app.andy.model.hasVendorCli
@@ -3874,6 +3876,28 @@ class DesktopAgentRunService(
 
     override suspend fun currentBranch(dir: String): String? =
         withContext(Dispatchers.IO) { worktrees.currentBranch(dir) }
+
+    override suspend fun listLocalBranches(dir: String): List<GitBranchInfo> =
+        withContext(Dispatchers.IO) { worktrees.listLocalBranches(dir) }
+
+    override suspend fun workingTreeStatus(dir: String): WorkingTreeStatus? =
+        withContext(Dispatchers.IO) { worktrees.workingTreeStatus(dir) }
+
+    override suspend fun checkoutBranch(dir: String, branch: String): CommandResult =
+        withContext(Dispatchers.IO) {
+            worktrees.checkoutBranch(dir, branch).fold(
+                onSuccess = { CommandResult.success() },
+                onFailure = { CommandResult.failure(it.message.orEmpty()) },
+            )
+        }
+
+    override suspend fun createAndCheckoutBranch(dir: String, branch: String): CommandResult =
+        withContext(Dispatchers.IO) {
+            worktrees.createAndCheckoutBranch(dir, branch).fold(
+                onSuccess = { CommandResult.success() },
+                onFailure = { CommandResult.failure(it.message.orEmpty()) },
+            )
+        }
 
     override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> {
         val onDiskPaths = withContext(Dispatchers.IO) {

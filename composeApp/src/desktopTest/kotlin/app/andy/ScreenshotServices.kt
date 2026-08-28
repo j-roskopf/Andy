@@ -775,6 +775,18 @@ internal object ScreenshotServices {
         override suspend fun refreshCliStatuses() = Unit
         override suspend fun isGitRepo(dir: String) = true
         override suspend fun currentBranch(dir: String) = "main"
+        override suspend fun listLocalBranches(dir: String) = listOf(
+            GitBranchInfo(name = "main", isCurrent = true),
+            GitBranchInfo(name = "jr/fresh", isCurrent = false),
+        )
+        override suspend fun workingTreeStatus(dir: String) = WorkingTreeStatus(
+            branch = "main",
+            dirtyFileCount = 1,
+            additions = 5,
+            deletions = 8,
+        )
+        override suspend fun checkoutBranch(dir: String, branch: String) = CommandResult.success()
+        override suspend fun createAndCheckoutBranch(dir: String, branch: String) = CommandResult.success()
         override suspend fun worktreeBaseOptions(originDir: String) = emptyList<WorktreeBaseOption>()
         override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
         override fun mergeCommand(targetDir: String, branch: String) =

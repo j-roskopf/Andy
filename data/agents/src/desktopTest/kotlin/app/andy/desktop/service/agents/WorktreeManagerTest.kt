@@ -14,6 +14,86 @@ import kotlin.test.assertTrue
 
 class WorktreeManagerTest {
     @Test
+    fun listLocalBranchesMarksCurrentAndSorts() {
+        val repo = File.createTempFile("andy-wt-branches", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            initTestRepo(repo)
+            git(repo, "checkout", "-B", "main")
+            File(repo, "readme.txt").writeText("hi\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            git(repo, "checkout", "-b", "feature/a")
+            git(repo, "checkout", "-b", "zzz-other")
+            git(repo, "checkout", "main")
+
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val branches = manager.listLocalBranches(repo.absolutePath)
+            assertEquals(listOf("main", "feature/a", "zzz-other"), branches.map { it.name })
+            assertTrue(branches.first().isCurrent)
+            assertTrue(branches.drop(1).none { it.isCurrent })
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun workingTreeStatusCountsDirtyFilesAndDiffStats() {
+        val repo = File.createTempFile("andy-wt-status", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            initTestRepo(repo)
+            git(repo, "checkout", "-B", "main")
+            File(repo, "tracked.txt").writeText("one\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            File(repo, "tracked.txt").writeText("one\ntwo\nthree\n")
+            File(repo, "new.txt").writeText("fresh\n")
+
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            val status = manager.workingTreeStatus(repo.absolutePath)
+            assertNotNull(status)
+            assertEquals("main", status.branch)
+            assertEquals(2, status.dirtyFileCount)
+            assertTrue(status.additions >= 2)
+            assertEquals(0, status.deletions)
+            assertTrue(status.isDirty)
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun checkoutAndCreateBranchUpdateHead() {
+        val repo = File.createTempFile("andy-wt-switch", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            initTestRepo(repo)
+            git(repo, "checkout", "-B", "main")
+            File(repo, "readme.txt").writeText("hi\n")
+            git(repo, "add", ".")
+            git(repo, "commit", "-m", "initial")
+            git(repo, "branch", "existing")
+
+            val manager = WorktreeManager(File(repo, "worktrees"))
+            assertTrue(manager.checkoutBranch(repo.absolutePath, "existing").isSuccess)
+            assertEquals("existing", manager.currentBranch(repo.absolutePath))
+
+            assertTrue(manager.createAndCheckoutBranch(repo.absolutePath, "brand-new").isSuccess)
+            assertEquals("brand-new", manager.currentBranch(repo.absolutePath))
+            assertTrue(manager.listLocalBranches(repo.absolutePath).any { it.name == "brand-new" && it.isCurrent })
+        } finally {
+            repo.deleteRecursively()
+        }
+    }
+
+    @Test
     fun createWithStartPointForksFromThatRefNotOriginHead() {
         val repo = File.createTempFile("andy-wt-startpoint", null).also {
             it.delete()

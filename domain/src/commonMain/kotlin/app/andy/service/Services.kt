@@ -697,6 +697,14 @@ interface AgentRunService {
     suspend fun isGitRepo(dir: String): Boolean
     /** Current branch of [dir], or null when detached HEAD or not a repo. */
     suspend fun currentBranch(dir: String): String?
+    /** Local branches of [dir] for the composer branch popup. */
+    suspend fun listLocalBranches(dir: String): List<GitBranchInfo>
+    /** Dirty working-tree summary for [dir], or null when not a repo. */
+    suspend fun workingTreeStatus(dir: String): WorkingTreeStatus?
+    /** Check out an existing local branch in [dir]'s working tree. */
+    suspend fun checkoutBranch(dir: String, branch: String): CommandResult
+    /** Create [branch] from HEAD and check it out in [dir]. */
+    suspend fun createAndCheckoutBranch(dir: String, branch: String): CommandResult
     /** Active Andy-tracked worktrees for [originDir]'s repo, for the composer's "base on" picker. */
     suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption>
     /** Full reconciled tree (Andy-tracked + untracked) for the Worktrees tab. */

@@ -1,11 +1,7 @@
 package app.andy.ui.agents
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
@@ -17,10 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
@@ -36,17 +29,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.RoundRect
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -54,19 +36,14 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.git_logo
 import app.andy.model.ActionProject
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentCliStatus
@@ -91,6 +68,8 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTaskDraft
 import app.andy.model.withImportedVendorSession
 import app.andy.model.WorktreeBaseOption
+import app.andy.model.GitBranchInfo
+import app.andy.model.WorkingTreeStatus
 import app.andy.model.WorkspaceState
 import app.andy.model.composerCommandName
 import app.andy.model.composerCommandToken
@@ -114,7 +93,6 @@ import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.ComposerChip
 import app.andy.ui.components.ComposerPlaceholderHint
-import app.andy.ui.components.HoverTooltip
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
@@ -128,7 +106,6 @@ import app.andy.ui.components.insertTextAtCursor
 import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.Cyan
-import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -140,7 +117,6 @@ import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.resources.painterResource
 
 @Composable
 fun AgentTaskComposerPane(
@@ -366,6 +342,8 @@ private class AgentTaskComposerFormState(
      */
     var temporary by mutableStateOf(false)
     var currentBranch by mutableStateOf<String?>(null)
+    var localBranches by mutableStateOf<List<GitBranchInfo>>(emptyList())
+    var workingTreeStatus by mutableStateOf<WorkingTreeStatus?>(null)
     var baseWorktreeTaskId by mutableStateOf<String?>(null)
     var availableBases by mutableStateOf<List<WorktreeBaseOption>>(emptyList())
     /** Last agent whose provider defaults were seeded into this draft; avoids clobbering restored drafts. */
@@ -538,11 +516,13 @@ private fun rememberAgentTaskComposerForm(
         if (!state.directoryIsGitRepo) {
             state.useWorktree = false
             state.currentBranch = null
+            state.localBranches = emptyList()
+            state.workingTreeStatus = null
             state.availableBases = emptyList()
             state.baseWorktreeTaskId = null
             return@LaunchedEffect
         }
-        state.currentBranch = directory?.let { services.agentRuns.currentBranch(it) }
+        refreshComposerGitState(services, directory, state)
         state.availableBases = if (state.useWorktree) {
             directory?.let { services.agentRuns.worktreeBaseOptions(it) }.orEmpty()
         } else {
@@ -766,21 +746,49 @@ private fun AgentChatComposer(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        ComposerBranchWorktreeChip(
-            showGitControls = state.directoryIsGitRepo,
-            branch = state.currentBranch,
-            useWorktree = state.useWorktree,
-            onUseWorktreeChange = { state.useWorktree = it },
-            temporary = state.temporary,
-            onTemporaryChange = { state.temporary = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = AndySpace.Space4),
-        )
         ChatComposerLayout(
             modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
             highlighted = state.imageDragActive,
             drawerItems = drawerItems,
+            contextBar = {
+                ComposerContextBar(
+                    services = form.services,
+                    agent = state.agent,
+                    showGitControls = state.directoryIsGitRepo,
+                    useWorktree = state.useWorktree,
+                    onUseWorktreeChange = { state.useWorktree = it },
+                    branch = state.currentBranch,
+                    workingTreeStatus = state.workingTreeStatus,
+                    branches = state.localBranches,
+                    onRefreshGit = {
+                        form.scope.launch {
+                            refreshComposerGitState(form.services, form.directory, state)
+                        }
+                    },
+                    onCheckoutBranch = checkout@{ name ->
+                        val dir = form.directory ?: return@checkout "No project directory"
+                        val result = form.services.agentRuns.checkoutBranch(dir, name)
+                        if (result.isSuccess) {
+                            refreshComposerGitState(form.services, dir, state)
+                            null
+                        } else {
+                            result.stderr.ifBlank { result.stdout }.ifBlank { "Checkout failed" }
+                        }
+                    },
+                    onCreateAndCheckoutBranch = create@{ name ->
+                        val dir = form.directory ?: return@create "No project directory"
+                        val result = form.services.agentRuns.createAndCheckoutBranch(dir, name)
+                        if (result.isSuccess) {
+                            refreshComposerGitState(form.services, dir, state)
+                            null
+                        } else {
+                            result.stderr.ifBlank { result.stdout }.ifBlank { "Create branch failed" }
+                        }
+                    },
+                    temporary = state.temporary,
+                    onTemporaryChange = { state.temporary = it },
+                )
+            },
             onMentionClick = if (hasAvailableProvider) {
                 {
                     state.promptValue = insertTextAtCursor(state.promptValue, "@")
@@ -1165,193 +1173,22 @@ private fun AgentChatComposer(
 }
 
 /**
- * The row always renders so a temporary chat can be started anywhere — outside a git repo and
- * in chats with no project context, which is exactly where a throwaway question tends to start.
- * Only the branch label and worktree checkbox are gated on being in a repo.
+ * Reloads branch list + dirty status for the new-chat context bar.
  */
-@Composable
-private fun ComposerBranchWorktreeChip(
-    showGitControls: Boolean,
-    branch: String?,
-    useWorktree: Boolean,
-    onUseWorktreeChange: (Boolean) -> Unit,
-    temporary: Boolean,
-    onTemporaryChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
+private suspend fun refreshComposerGitState(
+    services: AndyServices,
+    directory: String?,
+    state: AgentTaskComposerFormState,
 ) {
-    val content = TextSecondary
-    Row(
-        modifier.height(AndyLayout.ControlHeightSm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (showGitControls) {
-            Row(
-                Modifier.weight(1f, fill = false),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Image(
-                    painter = painterResource(Res.drawable.git_logo),
-                    contentDescription = "git",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.size(14.dp),
-                )
-                Text(
-                    branch ?: "detached HEAD",
-                    color = content,
-                    fontFamily = DisplayFont,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-            }
-            Row(
-                Modifier.clickable(role = Role.Checkbox) { onUseWorktreeChange(!useWorktree) },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                ComposerWorktreeCheckbox(checked = useWorktree, color = content)
-                Text(
-                    "worktree",
-                    color = content,
-                    fontFamily = DisplayFont,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                )
-            }
-        }
-        ComposerTemporaryToggle(
-            temporary = temporary,
-            onTemporaryChange = onTemporaryChange,
-            offColor = content,
-        )
+    if (directory == null) {
+        state.currentBranch = null
+        state.localBranches = emptyList()
+        state.workingTreeStatus = null
+        return
     }
-}
-
-/**
- * Icon-only toggle: tinted when on, neutral when off. It carries no label, so the state has to
- * read from the tint alone.
- *
- * Drawn rather than resampled from the source PNG. That artwork is a 100px thin-stroke line icon,
- * and at this size its dashed outline and interior lines land below one pixel and blur into a
- * smudge. Stroke widths here are chosen in dp so they stay crisp at any scale factor, matching
- * how [ComposerWorktreeCheckbox] beside it is drawn.
- */
-@Composable
-private fun ComposerTemporaryToggle(
-    temporary: Boolean,
-    onTemporaryChange: (Boolean) -> Unit,
-    offColor: Color,
-    modifier: Modifier = Modifier,
-) {
-    val tint = if (temporary) Yellow else offColor.copy(alpha = 0.85f)
-    HoverTooltip(
-        text = if (temporary) {
-            "Temporary chat: on — discarded when closed"
-        } else {
-            "Temporary chat — never saved to history"
-        },
-        modifier = modifier,
-    ) {
-        Box(
-            Modifier
-                .size(AndyLayout.ControlHeightSm)
-                .clickable(role = Role.Checkbox) { onTemporaryChange(!temporary) }
-                .semantics {
-                    contentDescription = if (temporary) "temporary chat on" else "temporary chat off"
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(TemporaryIconSize)) {
-                val stroke = 1.3.dp.toPx()
-                val inset = stroke / 2f
-                val bubbleHeight = size.height * 0.72f
-                // A rounded rectangle rather than an ellipse: its straight runs give the dashes
-                // somewhere to read as dashes instead of collapsing into a dotted ring.
-                val bubble = RoundRect(
-                    left = inset,
-                    top = inset,
-                    right = size.width - inset,
-                    bottom = bubbleHeight - inset,
-                    cornerRadius = CornerRadius(size.height * 0.30f),
-                )
-                // Dash lengths must come from dp too — a fixed pixel array turns into a solid
-                // outline at 2x and a dotted one at 1x.
-                drawPath(
-                    path = Path().apply { addRoundRect(bubble) },
-                    color = tint,
-                    style = Stroke(
-                        width = stroke,
-                        pathEffect = PathEffect.dashPathEffect(
-                            floatArrayOf(2.6.dp.toPx(), 1.7.dp.toPx()),
-                            phase = 0f,
-                        ),
-                    ),
-                )
-                // Tail hangs below the bubble rather than crossing into it, and is filled rather
-                // than stroked — an outlined triangle this small collapses into a pinched hook.
-                drawPath(
-                    path = Path().apply {
-                        moveTo(size.width * 0.30f, bubbleHeight - stroke)
-                        lineTo(size.width * 0.25f, size.height - inset)
-                        lineTo(size.width * 0.50f, bubbleHeight - stroke)
-                        close()
-                    },
-                    color = tint,
-                )
-                // Two rows, not the source artwork's three: a third leaves well under a pixel of
-                // gap at this size and all three merge into a solid block.
-                listOf(0.34f to 0.48f, 0.62f to 0.32f).forEach { (y, widthFraction) ->
-                    val lineY = bubbleHeight * y
-                    val start = size.width * 0.26f
-                    drawLine(
-                        color = tint,
-                        start = Offset(start, lineY),
-                        end = Offset(start + size.width * widthFraction, lineY),
-                        strokeWidth = stroke,
-                        cap = StrokeCap.Round,
-                    )
-                }
-            }
-        }
-    }
-}
-
-private val TemporaryIconSize = 17.dp
-
-@Composable
-private fun ComposerWorktreeCheckbox(
-    checked: Boolean,
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier
-            .size(12.dp)
-            .border(1.dp, color.copy(alpha = 0.85f), RoundedCornerShape(2.dp))
-            .background(
-                if (checked) color.copy(alpha = 0.18f) else Color.Transparent,
-                RoundedCornerShape(2.dp),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (checked) {
-            Canvas(Modifier.size(8.dp)) {
-                val stroke = Stroke(width = 1.6f, cap = StrokeCap.Round)
-                val path = Path().apply {
-                    moveTo(size.width * 0.15f, size.height * 0.55f)
-                    lineTo(size.width * 0.42f, size.height * 0.82f)
-                    lineTo(size.width * 0.88f, size.height * 0.22f)
-                }
-                drawPath(path, color, style = stroke)
-            }
-        }
-    }
+    state.currentBranch = services.agentRuns.currentBranch(directory)
+    state.localBranches = services.agentRuns.listLocalBranches(directory)
+    state.workingTreeStatus = services.agentRuns.workingTreeStatus(directory)
 }
 
 /** User-invocable orchestration skills that require Andy MCP attach on new-task submit. */
