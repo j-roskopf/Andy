@@ -34,6 +34,7 @@ import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.logcat.LogcatState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
@@ -627,7 +628,11 @@ internal class ShellState(
 
     fun consumeTerminalRun(runningActions: List<RunningAction>) {
         val runId = terminalRunId ?: return
-        if (runId == handledTerminalRunId) return
+        val alreadyVisible = docks.right.tabOwningRun(runId) != null ||
+            docks.bottom.tabOwningRun(runId) != null
+        // Skip only when we've already opened this run *and* its tab is still present.
+        // Closing the tab must not permanently suppress future reveals for the same runId.
+        if (runId == handledTerminalRunId && alreadyVisible) return
         val run = runningActions.firstOrNull { it.runId == runId } ?: return
         handledTerminalRunId = runId
         activeRunId = runId
@@ -649,6 +654,9 @@ internal class ShellState(
     }
 
     suspend fun refreshDevicesNow(): List<AndroidDevice> {
+        val previousOnlineAndroid = devices
+            .filter { it.state == DeviceConnectionState.Online }
+            .mapTo(mutableSetOf()) { it.serial }
         sdk = services.devices.discoverSdk()
         devices = services.devices.listDevices()
         iosTargets = services.iosDevices.listTargets()
@@ -664,18 +672,22 @@ internal class ShellState(
                     selectedSerial = defaultOnlineAndroidSerial()
                 }
             }
+            persistSelectedTarget()
             return devices
         }
 
-        val current = activeTargetId
-        if (current != null && isTargetAvailable(current)) {
-            return devices
-        }
-        if (selectedIosUdid != null) {
-            selectedIosUdid = null
-            selectedSerial = defaultOnlineAndroidSerial()
-        } else if (selectedSerial != null) {
-            selectedSerial = defaultOnlineAndroidSerial()
+        val reconciled = reconcileDeviceSelection(
+            previousOnlineAndroidSerials = previousOnlineAndroid,
+            devices = devices,
+            iosTargets = iosTargets,
+            selectedSerial = selectedSerial,
+            selectedIosUdid = selectedIosUdid,
+        )
+        if (reconciled.selectedSerial != selectedSerial || reconciled.selectedIosUdid != selectedIosUdid) {
+            if (reconciled.selectedSerial != selectedSerial) foldableHingeAngle = 180f
+            selectedSerial = reconciled.selectedSerial
+            selectedIosUdid = reconciled.selectedIosUdid
+            persistSelectedTarget()
         }
         return devices
     }
@@ -849,6 +861,13 @@ internal class ShellState(
             }
         }
         refreshDevices()
+        scope.launch {
+            services.devices.observeDevicePresence()
+                .debounce(250)
+                .collect {
+                    refreshDevicesNow()
+                }
+        }
     }
 
     fun savePairedWifi(device: PairedWifiDevice) {
@@ -932,8 +951,9 @@ internal class ShellState(
             )
         }
         val runId = services.actionRuns.run(project, action)
-        activeRunId = runId
-        terminalRunId = runId
+        // Always reveal — re-runs of a still-active action reuse the same runId, so setting
+        // terminalRunId alone won't re-fire consumeTerminalRun after the user closed the tab.
+        focusTerminalRun(runId)
         destination = AndyDestination.Actions
     }
 

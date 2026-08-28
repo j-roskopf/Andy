@@ -11,6 +11,12 @@ import kotlinx.coroutines.flow.emptyFlow
 interface DeviceService {
     suspend fun discoverSdk(): SdkDiscovery
     suspend fun listDevices(): List<AndroidDevice>
+    /**
+     * Emits whenever ADB's connected-device membership or state changes.
+     * Default is cold/empty — desktop implementations use `host:track-devices-l`.
+     * Collectors should call [listDevices] (or a richer refresh) on each emission.
+     */
+    fun observeDevicePresence(): Flow<Unit> = emptyFlow()
     suspend fun adbPath(): String? = discoverSdk().adbPath?.takeIf { it.isNotBlank() }
     suspend fun shell(serial: String, command: List<String>): CommandResult
     /**

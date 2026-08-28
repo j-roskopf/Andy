@@ -225,7 +225,11 @@ internal fun CrashesPanel(
                 Text("Select a crash to view details.", color = TextSecondary, fontSize = 12.sp)
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text("Details", color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         OutlinedButton(onClick = { copyText(crashText) }) { Text("Copy", fontSize = 11.sp) }
                         OutlinedButton(onClick = {

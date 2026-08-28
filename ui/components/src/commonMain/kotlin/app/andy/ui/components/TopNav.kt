@@ -52,7 +52,7 @@ fun TopNav(
         modifier
             .fillMaxWidth()
             .padding(start = AndySpace.Space2, end = AndySpace.Space2, top = AndySpace.Space2, bottom = AndySpace.Space1),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
             Modifier.weight(1f),
