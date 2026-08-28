@@ -99,8 +99,12 @@ class FileChangesEnrichmentTest {
     @Test
     fun enrichmentPersistsSynthesizedFileChanges() = runBlocking {
         withGitService(status = AgentStatus.Working) { service, repo, taskId, baseline ->
+            // Store load recovers ACP Working → Error; keep the task live so seed's events()
+            // load does not synthesize FileChanges before we reset the snapshot counter.
+            service.testSetTaskStatus(taskId, AgentStatus.Working)
             // withGitService already leaves src/Main.kt dirty ("one\ntwo\n" vs committed "one\n").
             seedLegacyEditSegment(service, taskId, repoFile = "src/Main.kt")
+            service.testAwaitFileChangesEnrichmentJobs()
             WorktreeManager.resetChangeSnapshotInvocationCount()
 
             service.testRunFileChangesEnrichmentNow(taskId, synthesizeTurn = true)
@@ -271,7 +275,9 @@ class FileChangesEnrichmentTest {
     @Test
     fun eventsAddsValidFileChangesAfterImmediateEnrichment() = runBlocking {
         withGitService(status = AgentStatus.Working) { service, _, taskId, _ ->
+            service.testSetTaskStatus(taskId, AgentStatus.Working)
             seedLegacyEditSegment(service, taskId, repoFile = "src/Main.kt")
+            service.testAwaitFileChangesEnrichmentJobs()
 
             assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
 
