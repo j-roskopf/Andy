@@ -67,7 +67,8 @@ class WorktreeManager(
     fun workingTreeStatus(dir: String): WorkingTreeStatus? {
         if (!isGitRepo(dir)) return null
         val branch = currentBranch(dir)
-        val status = git(dir, "status", "--porcelain")
+        // -uall expands untracked dirs so nested new files are counted individually.
+        val status = git(dir, "status", "--porcelain", "--untracked-files=all")
         if (status.exitCode != 0) return WorkingTreeStatus(branch, 0, 0, 0)
         val dirtyFileCount = status.output.lineSequence().count { it.isNotBlank() }
         val numstat = git(dir, "diff", "--numstat", "HEAD")

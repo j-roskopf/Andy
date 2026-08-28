@@ -54,7 +54,8 @@ class SshRemoteProbes(
 
     suspend fun workingTreeStatus(dir: String): WorkingTreeStatus? = withContext(Dispatchers.IO) {
         val branch = currentBranch(dir)
-        val status = sshExec(listOf("git", "-C", dir, "status", "--porcelain"))
+        // -uall expands untracked dirs so nested new files are counted individually.
+        val status = sshExec(listOf("git", "-C", dir, "status", "--porcelain", "--untracked-files=all"))
         if (status.exitCode != 0 && branch == null) return@withContext null
         val dirtyFileCount = status.stdout.lineSequence().count { it.isNotBlank() }
         val numstat = sshExec(listOf("git", "-C", dir, "diff", "--numstat", "HEAD"))
@@ -84,7 +85,7 @@ class SshRemoteProbes(
         if (result.exitCode == 0) {
             CommandResult.success(result.stdout)
         } else {
-            CommandResult.failure(result.stdout.ifBlank { "git switch failed" }, result.exitCode)
+            CommandResult.failure(sshFailureMessage(result, "git switch failed"), result.exitCode)
         }
     }
 
@@ -98,9 +99,13 @@ class SshRemoteProbes(
         if (result.exitCode == 0) {
             CommandResult.success(result.stdout)
         } else {
-            CommandResult.failure(result.stdout.ifBlank { "git switch -c failed" }, result.exitCode)
+            CommandResult.failure(sshFailureMessage(result, "git switch -c failed"), result.exitCode)
         }
     }
+
+    /** Prefer stderr — git writes ordinary switch failures there over SSH. */
+    private fun sshFailureMessage(result: ExecResult, fallback: String): String =
+        result.stderr.trim().ifBlank { result.stdout.trim() }.ifBlank { fallback }
 
     suspend fun worktreeTree(originDir: String): List<WorktreeNode> = withContext(Dispatchers.IO) {
         val result = sshExec(
