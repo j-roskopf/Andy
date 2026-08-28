@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,7 +27,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,25 +40,29 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.composer_attach
 import app.andy.loadImageBitmap
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
+import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
+import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -74,21 +82,23 @@ data class ChatComposerDrawerItem(
     val imagePath: String? = null,
 )
 
-private val DrawerOverlap = 14.dp
-private val DrawerHandleWidth = 36.dp
-private val DrawerHandleHeight = 4.dp
-
 /**
  * Full-featured Astryx ChatComposer shell — drawer sheet, top action row, input, bottom selectors.
  *
  * Layout mirrors [astryx ChatComposer](https://astryx.atmeta.com/components/ChatComposer):
  * attachment drawer above, @ / attach + context progress on top, model + settings below the input.
+ *
+ * [contextBar] renders in a fixed strip above the input frame (no overlap offset) so the text
+ * field stays anchored when switching between new and existing chats. The attachment drawer
+ * only appears for [drawerItems].
  */
 @Composable
 fun ChatComposerLayout(
     modifier: Modifier = Modifier,
     highlighted: Boolean = false,
     drawerItems: List<ChatComposerDrawerItem> = emptyList(),
+    /** Always-on strip above the input frame — e.g. new-chat git / temporary controls. */
+    contextBar: (@Composable () -> Unit)? = null,
     contextFraction: Float? = null,
     /** Hover label for the context-window gauge; omitted when blank or null. */
     contextTooltip: String? = null,
@@ -104,20 +114,29 @@ fun ChatComposerLayout(
     belowInput: (@Composable ColumnScope.() -> Unit)? = null,
     footer: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
-    val hasDrawer = drawerItems.isNotEmpty()
+    val hasAttachmentDrawer = drawerItems.isNotEmpty()
+    val hasContextBar = contextBar != null
+    val hasUpperArea = hasAttachmentDrawer || hasContextBar
     Column(modifier) {
-        if (hasDrawer) {
-            ChatComposerDrawer(
-                items = drawerItems,
+        if (hasUpperArea) {
+            ChatComposerHeaderArea(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = AndySpace.Space1),
-            )
+                    .fillMaxWidth(0.96f)
+                    .align(Alignment.CenterHorizontally),
+            ) {
+                if (contextBar != null) {
+                    contextBar()
+                }
+                if (hasAttachmentDrawer) {
+                    ChatComposerAttachmentItems(
+                        items = drawerItems,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
         ChatComposerFrame(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(if (hasDrawer) Modifier.offset(y = -DrawerOverlap) else Modifier),
+            modifier = Modifier.fillMaxWidth(),
             highlighted = highlighted,
             contentPadding = PaddingValues(
                 start = AndySpace.Space3,
@@ -147,53 +166,60 @@ fun ChatComposerLayout(
     }
 }
 
-/** Collapsible drawer for referenced files, skills, and other composer context. */
+/** Fixed header area above the input frame for context (git/temporary) and attachments (images/skills). */
+@Composable
+private fun ChatComposerHeaderArea(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(
+        topStart = AndyRadius.Sheet,
+        topEnd = AndyRadius.Sheet,
+        bottomStart = HeaderAreaBottomRadius,
+        bottomEnd = HeaderAreaBottomRadius,
+    )
+    Column(
+        modifier = modifier
+            .shadow(elevation = 1.dp, shape = shape, clip = false)
+            .background(AndyColors.Neutral850, shape)
+            .padding(
+                start = AndySpace.Space3,
+                end = AndySpace.Space3,
+                top = AndySpace.Space2,
+                bottom = AndySpace.Space2,
+            ),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        content = content,
+    )
+}
+
+/** Soft bottom corners on the strip above the chat frame — just enough to read as rounded. */
+private val HeaderAreaBottomRadius: Dp = 4.dp
+
+/** Collapsible flow row for referenced files, skills, and images in the composer header area. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChatComposerDrawer(
+private fun ChatComposerAttachmentItems(
     items: List<ChatComposerDrawerItem>,
     modifier: Modifier = Modifier,
 ) {
-    val shape = RoundedCornerShape(
-        topStart = AndyRadius.Chat,
-        topEnd = AndyRadius.Chat,
-        bottomStart = AndyRadius.Sheet,
-        bottomEnd = AndyRadius.Sheet,
-    )
-    Column(
-        modifier
-            .shadow(elevation = 1.dp, shape = shape, clip = false)
-            .background(AndyColors.Neutral850, shape)
-            .border(1.dp, Border.copy(alpha = 0.65f), shape)
-            .padding(top = AndySpace.Space3, bottom = DrawerOverlap + AndySpace.Space3)
-            .padding(horizontal = AndySpace.Space3),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
-        Box(
-            Modifier
-                .size(width = DrawerHandleWidth, height = DrawerHandleHeight)
-                .clip(RoundedCornerShape(AndyRadius.Pill))
-                .background(TextSecondary.copy(alpha = 0.35f)),
-        )
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-        ) {
-            items.forEach { item ->
-                if (item.imagePath != null) {
-                    ChatComposerDrawerImageChip(
-                        label = item.label,
-                        imagePath = item.imagePath,
-                        onRemove = item.onRemove,
-                    )
-                } else {
-                    ChatComposerDrawerChip(
-                        label = item.label,
-                        onRemove = item.onRemove,
-                    )
-                }
+        items.forEach { item ->
+            if (item.imagePath != null) {
+                ChatComposerDrawerImageChip(
+                    label = item.label,
+                    imagePath = item.imagePath,
+                    onRemove = item.onRemove,
+                )
+            } else {
+                ChatComposerDrawerChip(
+                    label = item.label,
+                    onRemove = item.onRemove,
+                )
             }
         }
     }
@@ -211,6 +237,8 @@ private fun ChatComposerDrawerImageChip(
             runCatching { loadImageBitmap(imagePath) }.getOrNull()
         }
     }
+    var previewOpen by remember(imagePath) { mutableStateOf(false) }
+    val image = bitmap
     val chipShape = RoundedCornerShape(AndyRadius.Interactive)
     Row(
         modifier
@@ -225,10 +253,18 @@ private fun ChatComposerDrawerImageChip(
             Modifier
                 .size(28.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(AndyColors.Neutral900.copy(alpha = 0.65f)),
+                .background(AndyColors.Neutral900.copy(alpha = 0.65f))
+                .then(
+                    if (image != null) {
+                        Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { previewOpen = true }
+                    } else {
+                        Modifier
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            val image = bitmap
             if (image != null) {
                 Image(
                     bitmap = image,
@@ -255,7 +291,17 @@ private fun ChatComposerDrawerImageChip(
             fontSize = 13.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 160.dp),
+            modifier = Modifier
+                .widthIn(max = 160.dp)
+                .then(
+                    if (image != null) {
+                        Modifier
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { previewOpen = true }
+                    } else {
+                        Modifier
+                    },
+                ),
         )
         IconButton(
             onClick = onRemove,
@@ -263,6 +309,67 @@ private fun ChatComposerDrawerImageChip(
             contentDescription = "Remove $label",
         ) {
             ComposerCloseGlyph(color = TextSecondary.copy(alpha = 0.75f), modifier = Modifier.size(10.dp))
+        }
+    }
+    if (previewOpen && image != null) {
+        ChatComposerImagePreviewDialog(
+            bitmap = image,
+            fileName = label,
+            onDismiss = { previewOpen = false },
+        )
+    }
+}
+
+@Composable
+private fun ChatComposerImagePreviewDialog(
+    bitmap: ImageBitmap,
+    fileName: String,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .widthIn(max = 1100.dp)
+                .heightIn(max = 860.dp)
+                .background(
+                    AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong),
+                    RoundedCornerShape(AndyRadius.Control),
+                )
+                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                .clickable(onClick = onDismiss)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Text(
+                fileName.ifBlank { "image" },
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Image(
+                bitmap = bitmap,
+                contentDescription = fileName,
+                modifier = Modifier
+                    .widthIn(max = 1060.dp)
+                    .heightIn(max = 780.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Text(
+                "click to close",
+                color = TextSecondary.copy(alpha = 0.8f),
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+            )
         }
     }
 }
@@ -599,8 +706,6 @@ fun ChatComposerFrame(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = AndyShape.Chat
-    val tokens = andyTokens()
-    val borderColor = if (highlighted) tokens.accent else Border
     Column(
         modifier
             .shadow(
@@ -610,7 +715,6 @@ fun ChatComposerFrame(
             )
             .clip(shape)
             .background(AndyColors.SurfacePopover, shape)
-            .border(1.dp, borderColor, shape)
             .padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         content = content,

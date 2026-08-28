@@ -45,6 +45,8 @@ import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
 import app.andy.model.WorktreeNode
+import app.andy.model.GitBranchInfo
+import app.andy.model.WorkingTreeStatus
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectSpecDraft
@@ -1117,6 +1119,37 @@ class McpAgentRunClient(
         val probes = sshProbes
         if (probes != null) probes.currentBranch(dir) else localWorktrees.currentBranch(dir)
     }
+    override suspend fun listLocalBranches(dir: String): List<GitBranchInfo> = withContext(Dispatchers.IO) {
+        val probes = sshProbes
+        if (probes != null) probes.listLocalBranches(dir) else localWorktrees.listLocalBranches(dir)
+    }
+    override suspend fun workingTreeStatus(dir: String): WorkingTreeStatus? = withContext(Dispatchers.IO) {
+        val probes = sshProbes
+        if (probes != null) probes.workingTreeStatus(dir) else localWorktrees.workingTreeStatus(dir)
+    }
+    override suspend fun checkoutBranch(dir: String, branch: String): CommandResult = withContext(Dispatchers.IO) {
+        val probes = sshProbes
+        if (probes != null) {
+            probes.checkoutBranch(dir, branch)
+        } else {
+            localWorktrees.checkoutBranch(dir, branch).fold(
+                onSuccess = { CommandResult.success() },
+                onFailure = { CommandResult.failure(it.message.orEmpty()) },
+            )
+        }
+    }
+    override suspend fun createAndCheckoutBranch(dir: String, branch: String): CommandResult =
+        withContext(Dispatchers.IO) {
+            val probes = sshProbes
+            if (probes != null) {
+                probes.createAndCheckoutBranch(dir, branch)
+            } else {
+                localWorktrees.createAndCheckoutBranch(dir, branch).fold(
+                    onSuccess = { CommandResult.success() },
+                    onFailure = { CommandResult.failure(it.message.orEmpty()) },
+                )
+            }
+        }
     override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> {
         val tracked = _tasks.value.filter { task ->
             task.originDir == originDir &&

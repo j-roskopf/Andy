@@ -15,6 +15,9 @@ internal data class FileChangesEnrichmentResult(
 /**
  * Synthesizes [AgentEvent.FileChanges] rows for legacy ACP transcript segments that have
  * completed mutating tool calls but no persisted file-changes event yet.
+ *
+ * When [synthesizeTrailingSegment] is false, the open (incomplete) turn is left without a
+ * synthesized card — edited-files UI should only appear at turn end.
  */
 internal object AgentFileChangesEnrichment {
     fun enrichIncremental(
@@ -23,13 +26,14 @@ internal object AgentFileChangesEnrichment {
         baseline: String,
         events: List<AgentEvent>,
         segmentPaths: (List<AgentEvent>) -> Set<String>,
+        synthesizeTrailingSegment: Boolean = true,
     ): FileChangesEnrichmentResult {
         if (events.isEmpty()) return FileChangesEnrichmentResult(events, emptyList())
         val output = mutableListOf<AgentEvent>()
         val newlyPersisted = mutableListOf<AgentEvent.FileChanges>()
         var segment = mutableListOf<AgentEvent>()
 
-        fun flushSegment() {
+        fun flushSegment(synthesizeIfMissing: Boolean) {
             if (segment.isEmpty()) return
             val (enriched, synthesized) = enrichTurnSegment(
                 worktrees = worktrees,
@@ -37,6 +41,7 @@ internal object AgentFileChangesEnrichment {
                 baseline = baseline,
                 segment = segment,
                 segmentPaths = segmentPaths,
+                synthesizeIfMissing = synthesizeIfMissing,
             )
             synthesized?.let { newlyPersisted += it }
             output += enriched
@@ -45,13 +50,15 @@ internal object AgentFileChangesEnrichment {
 
         for (event in events) {
             if (isTranscriptTurnBoundary(event)) {
-                flushSegment()
+                // Closed by a turn boundary — always allow synthesis for legacy segments.
+                flushSegment(synthesizeIfMissing = true)
                 output += event
             } else {
                 segment += event
             }
         }
-        flushSegment()
+        // Trailing open segment: only synthesize when the turn is finishing.
+        flushSegment(synthesizeIfMissing = synthesizeTrailingSegment)
         return FileChangesEnrichmentResult(
             display = stripStaleFileChanges(worktrees, cwd, output),
             newlyPersisted = newlyPersisted,
@@ -81,6 +88,7 @@ internal object AgentFileChangesEnrichment {
         baseline: String,
         segment: List<AgentEvent>,
         segmentPaths: (List<AgentEvent>) -> Set<String>,
+        synthesizeIfMissing: Boolean = true,
     ): Pair<List<AgentEvent>, AgentEvent.FileChanges?> {
         val paths = segmentPaths(segment)
         val baseSegment = segment.filter { it !is AgentEvent.FileChanges || it.undone }
@@ -91,7 +99,7 @@ internal object AgentFileChangesEnrichment {
 
         val fileChanges = when {
             retained.isNotEmpty() -> retained.last()
-            paths.isEmpty() -> null
+            !synthesizeIfMissing || paths.isEmpty() -> null
             else -> {
                 val snapshot = worktrees.changeSnapshot(cwd, baseline, paths) ?: return baseSegment to null
                 if (snapshot.summary.files.isEmpty()) return baseSegment to null

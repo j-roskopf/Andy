@@ -47,13 +47,12 @@ import app.andy.ui.components.AndyDropdownMenu
 import app.andy.ui.components.AndyDropdownMenuItem
 import app.andy.ui.components.AndyDropdownMenuSectionLabel
 import app.andy.ui.components.AndyDropdownTrigger
-import app.andy.ui.components.Button
 import app.andy.ui.components.GhostButton
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.TextButton
 import app.andy.ui.components.TopNav
 import app.andy.ui.components.TopNavHeading
-import app.andy.ui.components.primaryButtonColors
-import app.andy.ui.components.secondaryButtonColors
+import app.andy.ui.components.accentTextButtonColors
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyShape
@@ -379,7 +378,7 @@ private fun ActionRunnerSelector(
             }
         }
 
-        Button(
+        TextButton(
             onClick = {
                 val selectedProject = project
                 val selectedAction = action
@@ -389,11 +388,9 @@ private fun ActionRunnerSelector(
                 }
             },
             enabled = project != null && action != null,
-            colors = primaryButtonColors(),
-            shape = AndyShape.Interactive,
-            contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = 0.dp),
+            colors = accentTextButtonColors(),
         ) {
-            Text("Run", fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium, lineHeight = 12.sp)
+            Text("Run", fontSize = 12.sp)
         }
     }
 }

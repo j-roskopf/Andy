@@ -224,6 +224,11 @@ class SwappableAgentBackend(
     override suspend fun refreshCliStatuses() = runs().refreshCliStatuses()
     override suspend fun isGitRepo(dir: String): Boolean = runs().isGitRepo(dir)
     override suspend fun currentBranch(dir: String): String? = runs().currentBranch(dir)
+    override suspend fun listLocalBranches(dir: String) = runs().listLocalBranches(dir)
+    override suspend fun workingTreeStatus(dir: String) = runs().workingTreeStatus(dir)
+    override suspend fun checkoutBranch(dir: String, branch: String) = runs().checkoutBranch(dir, branch)
+    override suspend fun createAndCheckoutBranch(dir: String, branch: String) =
+        runs().createAndCheckoutBranch(dir, branch)
     override suspend fun worktreeBaseOptions(originDir: String): List<WorktreeBaseOption> =
         runs().worktreeBaseOptions(originDir)
     override suspend fun worktreeTree(originDir: String): List<WorktreeNode> = runs().worktreeTree(originDir)

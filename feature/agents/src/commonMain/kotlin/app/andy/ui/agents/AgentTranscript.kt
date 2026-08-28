@@ -238,11 +238,12 @@ fun AgentTranscript(
     val compositionCounter = LocalTranscriptCompositionCounter.current
     SideEffect { compositionCounter?.let { it.rootRestarts++ } }
     val scope = rememberCoroutineScope()
-    val displayItems = remember(events, collapseActivityBetweenMessages, autoExpandThinkingSections) {
+    val displayItems = remember(events, collapseActivityBetweenMessages, autoExpandThinkingSections, isActive) {
         transcriptDisplayItems(
             events,
             collapseActivityBetweenMessages = collapseActivityBetweenMessages,
             keepThinkingOnTimeline = autoExpandThinkingSections,
+            hideOpenTurnFileChanges = isActive,
         )
     }
     val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths, originalSkills)
@@ -697,7 +698,10 @@ private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleI
  * again in their completion record. The completion record owns that response
  * in the transcript so it is visible once, with its completed state.
  */
-fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> {
+fun transcriptDisplayEvents(
+    events: List<AgentEvent>,
+    hideOpenTurnFileChanges: Boolean = false,
+): List<AgentEvent> {
     val coalesced = coalesceAcpTranscriptEvents(events)
     val displayable = coalesced.mapNotNull { event ->
         when {
@@ -720,6 +724,19 @@ fun transcriptDisplayEvents(events: List<AgentEvent>): List<AgentEvent> {
         val completion = displayable.getOrNull(index + 1) as? AgentEvent.TaskResult
         event !is AgentEvent.AssistantText || completion?.finalText?.trim() != event.text.trim()
     }.let(::coalesceFileChangesInTurnSegments)
+        .let { if (hideOpenTurnFileChanges) suppressOpenTurnFileChanges(it) else it }
+}
+
+/**
+ * While a turn is still running, hide edited-files cards that belong to the open turn
+ * (after the last [AgentEvent.TaskResult] / [AgentEvent.TaskError]). Prior turns keep theirs.
+ */
+fun suppressOpenTurnFileChanges(events: List<AgentEvent>): List<AgentEvent> {
+    val openTurnStart = events.indexOfLast { it is AgentEvent.TaskResult || it is AgentEvent.TaskError }
+        .let { if (it < 0) 0 else it + 1 }
+    return events.mapIndexedNotNull { index, event ->
+        if (index >= openTurnStart && event is AgentEvent.FileChanges) null else event
+    }
 }
 
 /** Hard boundaries that split edit bursts — a new user/assistant message or turn result. */
@@ -834,8 +851,10 @@ fun transcriptDisplayItems(
     events: List<AgentEvent>,
     collapseActivityBetweenMessages: Boolean = false,
     keepThinkingOnTimeline: Boolean = false,
+    hideOpenTurnFileChanges: Boolean = false,
 ): List<TranscriptDisplayItem> {
-    val display = transcriptDisplayEvents(events).filterNot { it is AgentEvent.ContextUsage }
+    val display = transcriptDisplayEvents(events, hideOpenTurnFileChanges = hideOpenTurnFileChanges)
+        .filterNot { it is AgentEvent.ContextUsage }
     val items = mutableListOf<TranscriptDisplayItem>()
     var index = 0
     while (index < display.size) {

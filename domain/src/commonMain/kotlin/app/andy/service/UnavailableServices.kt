@@ -369,6 +369,10 @@ object UnavailableAgentRunService : AgentRunService {
     override suspend fun refreshCliStatuses() = Unit
     override suspend fun isGitRepo(dir: String) = false
     override suspend fun currentBranch(dir: String): String? = null
+    override suspend fun listLocalBranches(dir: String) = emptyList<GitBranchInfo>()
+    override suspend fun workingTreeStatus(dir: String): WorkingTreeStatus? = null
+    override suspend fun checkoutBranch(dir: String, branch: String) = unavailable()
+    override suspend fun createAndCheckoutBranch(dir: String, branch: String) = unavailable()
     override suspend fun worktreeBaseOptions(originDir: String) = emptyList<WorktreeBaseOption>()
     override suspend fun worktreeTree(originDir: String) = emptyList<WorktreeNode>()
     override fun mergeCommand(targetDir: String, branch: String) =

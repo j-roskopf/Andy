@@ -99,11 +99,15 @@ class FileChangesEnrichmentTest {
     @Test
     fun enrichmentPersistsSynthesizedFileChanges() = runBlocking {
         withGitService(status = AgentStatus.Working) { service, repo, taskId, baseline ->
+            // Store load recovers ACP Working → Error; keep the task live so seed's events()
+            // load does not synthesize FileChanges before we reset the snapshot counter.
+            service.testSetTaskStatus(taskId, AgentStatus.Working)
             // withGitService already leaves src/Main.kt dirty ("one\ntwo\n" vs committed "one\n").
             seedLegacyEditSegment(service, taskId, repoFile = "src/Main.kt")
+            service.testAwaitFileChangesEnrichmentJobs()
             WorktreeManager.resetChangeSnapshotInvocationCount()
 
-            service.testRunFileChangesEnrichmentNow(taskId)
+            service.testRunFileChangesEnrichmentNow(taskId, synthesizeTurn = true)
 
             assertTrue(WorktreeManager.changeSnapshotInvocations.get() >= 1)
             val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
@@ -111,6 +115,41 @@ class FileChangesEnrichmentTest {
             service.events(taskId)
             service.testAwaitFileChangesEnrichmentJobs()
             assertTrue(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+        }
+    }
+
+    @Test
+    fun midTurnEnrichmentDoesNotEmitFileChanges() = runBlocking {
+        withGitService(status = AgentStatus.Working) { service, _, taskId, _ ->
+            // Store load recovers ACP Working → Error; restore a live in-progress turn.
+            service.testSetTaskStatus(taskId, AgentStatus.Working)
+            assertTrue(service.tasks.value.single { it.id == taskId }.isActive)
+
+            val store = AcpTranscriptStore(fileFor = { service.testTranscriptFile(it) })
+            store.append(taskId, AgentEvent.UserMessage(1, "edit something"))
+            store.append(
+                taskId,
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "edit",
+                    summary = "src/Main.kt",
+                    detail = "src/Main.kt",
+                    toolCallId = "call-edit-1",
+                    kind = AgentToolKind.Edit,
+                    state = AgentToolState.Completed,
+                    locations = listOf("src/Main.kt"),
+                ),
+            )
+            WorktreeManager.resetChangeSnapshotInvocationCount()
+
+            service.testRunFileChangesEnrichmentNow(taskId)
+            assertEquals(0, WorktreeManager.changeSnapshotInvocations.get())
+            assertFalse(store.load(taskId).any { it is AgentEvent.FileChanges })
+
+            service.events(taskId)
+            service.testAwaitFileChangesEnrichmentJobs()
+            assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
+            assertFalse(store.load(taskId).any { it is AgentEvent.FileChanges })
         }
     }
 
@@ -236,10 +275,13 @@ class FileChangesEnrichmentTest {
     @Test
     fun eventsAddsValidFileChangesAfterImmediateEnrichment() = runBlocking {
         withGitService(status = AgentStatus.Working) { service, _, taskId, _ ->
+            service.testSetTaskStatus(taskId, AgentStatus.Working)
             seedLegacyEditSegment(service, taskId, repoFile = "src/Main.kt")
+            service.testAwaitFileChangesEnrichmentJobs()
 
             assertFalse(service.events(taskId).value.any { it is AgentEvent.FileChanges })
 
+            service.testRunFileChangesEnrichmentNow(taskId, synthesizeTurn = true)
             service.testAwaitFileChangesEnrichmentJobs()
 
             assertTrue(service.events(taskId).value.any { it is AgentEvent.FileChanges })

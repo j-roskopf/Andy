@@ -3,8 +3,11 @@ package app.andy.desktop.service.remote
 import app.andy.desktop.service.agents.skillRootsFor
 import app.andy.model.AgentKind
 import app.andy.model.AgentSkill
+import app.andy.model.GitBranchInfo
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeNode
+import app.andy.model.WorkingTreeStatus
+import app.andy.service.CommandResult
 import app.andy.terminal.TmuxAndy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,6 +33,79 @@ class SshRemoteProbes(
         if (result.exitCode != 0) return@withContext null
         result.stdout.trim().takeIf { it.isNotBlank() }
     }
+
+    suspend fun listLocalBranches(dir: String): List<GitBranchInfo> = withContext(Dispatchers.IO) {
+        val current = currentBranch(dir)
+        val listed = sshExec(
+            listOf("git", "-C", dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/"),
+        )
+        if (listed.exitCode != 0) return@withContext emptyList()
+        listed.stdout.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .map { GitBranchInfo(name = it, isCurrent = it == current) }
+            .sortedWith(
+                compareByDescending<GitBranchInfo> { it.isCurrent }
+                    .thenBy { it.name.lowercase() },
+            )
+            .toList()
+    }
+
+    suspend fun workingTreeStatus(dir: String): WorkingTreeStatus? = withContext(Dispatchers.IO) {
+        val branch = currentBranch(dir)
+        // -uall expands untracked dirs so nested new files are counted individually.
+        val status = sshExec(listOf("git", "-C", dir, "status", "--porcelain", "--untracked-files=all"))
+        if (status.exitCode != 0 && branch == null) return@withContext null
+        val dirtyFileCount = status.stdout.lineSequence().count { it.isNotBlank() }
+        val numstat = sshExec(listOf("git", "-C", dir, "diff", "--numstat", "HEAD"))
+        var additions = 0
+        var deletions = 0
+        if (numstat.exitCode == 0) {
+            numstat.stdout.lineSequence().forEach { line ->
+                val fields = line.split('\t')
+                if (fields.size >= 2) {
+                    additions += fields[0].toIntOrNull() ?: 0
+                    deletions += fields[1].toIntOrNull() ?: 0
+                }
+            }
+        }
+        WorkingTreeStatus(
+            branch = branch,
+            dirtyFileCount = dirtyFileCount,
+            additions = additions,
+            deletions = deletions,
+        )
+    }
+
+    suspend fun checkoutBranch(dir: String, branch: String): CommandResult = withContext(Dispatchers.IO) {
+        val name = branch.trim()
+        if (name.isEmpty()) return@withContext CommandResult.failure("branch name is blank")
+        val result = sshExec(listOf("git", "-C", dir, "switch", name))
+        if (result.exitCode == 0) {
+            CommandResult.success(result.stdout)
+        } else {
+            CommandResult.failure(sshFailureMessage(result, "git switch failed"), result.exitCode)
+        }
+    }
+
+    suspend fun createAndCheckoutBranch(dir: String, branch: String): CommandResult = withContext(Dispatchers.IO) {
+        val name = branch.trim()
+        if (name.isEmpty()) return@withContext CommandResult.failure("branch name is blank")
+        if (name.contains("..") || name.any { it.isWhitespace() || it == ':' || it == '\\' }) {
+            return@withContext CommandResult.failure("invalid branch name")
+        }
+        val result = sshExec(listOf("git", "-C", dir, "switch", "-c", name))
+        if (result.exitCode == 0) {
+            CommandResult.success(result.stdout)
+        } else {
+            CommandResult.failure(sshFailureMessage(result, "git switch -c failed"), result.exitCode)
+        }
+    }
+
+    /** Prefer stderr — git writes ordinary switch failures there over SSH. */
+    private fun sshFailureMessage(result: ExecResult, fallback: String): String =
+        result.stderr.trim().ifBlank { result.stdout.trim() }.ifBlank { fallback }
 
     suspend fun worktreeTree(originDir: String): List<WorktreeNode> = withContext(Dispatchers.IO) {
         val result = sshExec(

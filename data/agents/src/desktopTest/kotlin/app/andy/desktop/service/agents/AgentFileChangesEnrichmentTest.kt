@@ -123,6 +123,53 @@ class AgentFileChangesEnrichmentTest {
     }
 
     @Test
+    fun openTurnSegmentDoesNotSynthesizeFileChangesUntilTurnEnds() {
+        withRepo { repo, manager, baseline ->
+            File(repo, "src/A.kt").writeText("new\n")
+            val events = listOf(
+                AgentEvent.UserMessage(0, "edit"),
+                AgentEvent.ToolCall(
+                    atMillis = 1,
+                    toolName = "edit",
+                    summary = "src/A.kt",
+                    toolCallId = "call-1",
+                    kind = AgentToolKind.Edit,
+                    state = AgentToolState.Completed,
+                    locations = listOf("src/A.kt"),
+                ),
+            )
+            val segmentPaths: (List<AgentEvent>) -> Set<String> = { segment ->
+                segment.filterIsInstance<AgentEvent.ToolCall>()
+                    .filter { it.state == AgentToolState.Completed }
+                    .flatMap { it.locations }
+                    .toSet()
+            }
+
+            val midTurn = AgentFileChangesEnrichment.enrichIncremental(
+                worktrees = manager,
+                cwd = repo.absolutePath,
+                baseline = baseline,
+                events = events,
+                segmentPaths = segmentPaths,
+                synthesizeTrailingSegment = false,
+            )
+            assertTrue(midTurn.newlyPersisted.isEmpty())
+            assertFalse(midTurn.display.any { it is AgentEvent.FileChanges })
+
+            val atEnd = AgentFileChangesEnrichment.enrichIncremental(
+                worktrees = manager,
+                cwd = repo.absolutePath,
+                baseline = baseline,
+                events = events,
+                segmentPaths = segmentPaths,
+                synthesizeTrailingSegment = true,
+            )
+            assertEquals(1, atEnd.newlyPersisted.size)
+            assertTrue(atEnd.display.any { it is AgentEvent.FileChanges })
+        }
+    }
+
+    @Test
     fun fileChangesAlreadyRecordedMatchesPathsAndBaseline() {
         val snapshot = AgentThreadChangeSnapshot(
             summary = AgentChangeSummary(listOf(AgentFileChange("src/A.kt", 1, 0))),

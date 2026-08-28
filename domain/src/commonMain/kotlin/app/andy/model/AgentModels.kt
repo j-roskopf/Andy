@@ -751,6 +751,26 @@ data class WorktreeBaseOption(
     val path: String,
 )
 
+/** Local branch listed for the new-chat composer branch popup. */
+data class GitBranchInfo(
+    val name: String,
+    val isCurrent: Boolean,
+)
+
+/**
+ * Working-tree dirty summary for the composer branch chip / popup.
+ * [additions]/[deletions] come from `git diff --numstat HEAD` (tracked changes only);
+ * [dirtyFileCount] includes untracked paths from `git status --porcelain`.
+ */
+data class WorkingTreeStatus(
+    val branch: String?,
+    val dirtyFileCount: Int,
+    val additions: Int,
+    val deletions: Int,
+) {
+    val isDirty: Boolean get() = dirtyFileCount > 0
+}
+
 /** One node in the reconciled worktree tree for a repo. */
 data class WorktreeNode(
     val path: String,
