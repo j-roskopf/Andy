@@ -1,10 +1,13 @@
 package app.andy.desktop.service
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
 import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -39,25 +42,40 @@ object AdbTrackDevices {
         connectTimeoutMs: Int = 3_000,
         onUpdate: suspend (payload: String) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        Socket().use { socket ->
-            socket.tcpNoDelay = true
-            socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
-            val input = socket.getInputStream()
-            val output = socket.getOutputStream()
-            writeServiceRequest(output, service)
-            when (val status = readExact(input, 4).decodeToString()) {
-                "OKAY" -> Unit
-                "FAIL" -> {
-                    val message = readLengthPrefixed(input)
-                    error("adb $service failed: ${message.ifBlank { "unknown error" }}")
+        val socket = Socket()
+        // Blocking InputStream.read ignores Job cancellation; closing the socket
+        // unblocks the read when flatMapLatest (or scope cancel) tears us down.
+        val closeOnCancel = coroutineContext.job.invokeOnCancellation {
+            runCatching { socket.close() }
+        }
+        try {
+            socket.use {
+                socket.tcpNoDelay = true
+                socket.connect(InetSocketAddress(host, port), connectTimeoutMs)
+                val input = socket.getInputStream()
+                val output = socket.getOutputStream()
+                writeServiceRequest(output, service)
+                when (val status = readExact(input, 4).decodeToString()) {
+                    "OKAY" -> Unit
+                    "FAIL" -> {
+                        val message = readLengthPrefixed(input)
+                        error("adb $service failed: ${message.ifBlank { "unknown error" }}")
+                    }
+                    else -> error("adb $service returned unexpected status: $status")
                 }
-                else -> error("adb $service returned unexpected status: $status")
+                while (coroutineContext.isActive) {
+                    coroutineContext.ensureActive()
+                    val payload = readLengthPrefixed(input)
+                    onUpdate(payload)
+                }
             }
-            while (coroutineContext.isActive) {
-                coroutineContext.ensureActive()
-                val payload = readLengthPrefixed(input)
-                onUpdate(payload)
-            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (io: IOException) {
+            coroutineContext.ensureActive()
+            throw io
+        } finally {
+            closeOnCancel.dispose()
         }
     }
 
