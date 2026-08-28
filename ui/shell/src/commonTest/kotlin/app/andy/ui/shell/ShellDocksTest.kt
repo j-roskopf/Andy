@@ -112,6 +112,24 @@ class ShellDocksTest {
     }
 
     @Test
+    fun focusingAClosedRunRecreatesItsTab() {
+        // Close the dock tab (PTY may still be alive); re-focus must open a fresh workspace.
+        val closed = ShellDocks()
+            .withTerminalExclusive(DockPlacement.Right, "run-1", newTabId = "tab-1", newLeafId = "leaf-1")
+            .update(DockPlacement.Right) { it.closeTab("tab-1") }
+        assertNull(closed.right.tabOwningRun("run-1"))
+
+        val reopened = closed.withTerminalExclusive(
+            DockPlacement.Right,
+            "run-1",
+            newTabId = "tab-2",
+            newLeafId = "leaf-2",
+        )
+        assertEquals("tab-2", reopened.right.tabOwningRun("run-1")?.id)
+        assertTrue(reopened.right.visible)
+    }
+
+    @Test
     fun terminalMovesBetweenPlacements() {
         val docks = ShellDocks()
             .withTerminalExclusive(DockPlacement.Right, "run-1", newTabId = "tab-1", newLeafId = "leaf-1")

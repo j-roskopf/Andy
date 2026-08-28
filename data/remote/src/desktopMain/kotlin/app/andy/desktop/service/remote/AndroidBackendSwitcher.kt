@@ -84,7 +84,12 @@ class AndroidBackendSwitcher(
         }
 
         val remoteDevices = TunneledRemoteDeviceService(
-            inner = DesktopDeviceService(remoteRunner, sdkLocator, workspaceStore),
+            inner = DesktopDeviceService(
+                remoteRunner,
+                sdkLocator,
+                workspaceStore,
+                adbServerPort = { tunnel.localAdbPort },
+            ),
             remoteSdk = remoteSdk,
         )
         val bridge = object : AdbForwardBridge {
@@ -143,6 +148,7 @@ class TunneledRemoteDeviceService(
 
     override suspend fun discoverSdk(): SdkDiscovery = remoteSdk
     override suspend fun listDevices(): List<AndroidDevice> = inner.listDevices()
+    override fun observeDevicePresence() = inner.observeDevicePresence()
     override suspend fun shell(serial: String, command: List<String>): CommandResult =
         inner.shell(serial, command)
     override suspend fun emu(serial: String, command: List<String>): CommandResult =

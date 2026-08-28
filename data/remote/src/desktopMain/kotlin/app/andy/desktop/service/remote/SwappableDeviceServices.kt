@@ -11,21 +11,28 @@ import app.andy.model.VirtualDevice
 import app.andy.service.AvdService
 import app.andy.service.CommandResult
 import app.andy.service.DeviceService
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import java.util.concurrent.atomic.AtomicReference
 
 class SwappableDeviceService(
     initial: DeviceService,
 ) : DeviceService {
     private val active = AtomicReference(initial)
+    private val activeFlow = MutableStateFlow(initial)
 
     fun switchTo(next: DeviceService) {
         active.set(next)
+        activeFlow.value = next
     }
 
     private fun svc(): DeviceService = active.get()
 
     override suspend fun discoverSdk(): SdkDiscovery = svc().discoverSdk()
     override suspend fun listDevices(): List<AndroidDevice> = svc().listDevices()
+    override fun observeDevicePresence(): Flow<Unit> =
+        activeFlow.flatMapLatest { it.observeDevicePresence() }
     override suspend fun shell(serial: String, command: List<String>): CommandResult =
         svc().shell(serial, command)
     override suspend fun emu(serial: String, command: List<String>): CommandResult =

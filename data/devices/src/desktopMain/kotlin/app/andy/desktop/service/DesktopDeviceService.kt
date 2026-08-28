@@ -12,7 +12,12 @@ import app.andy.model.dedupeWifiDeviceAliases
 import app.andy.service.CommandResult
 import app.andy.service.DeviceService
 import app.andy.service.WorkspaceStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
@@ -22,9 +27,35 @@ class DesktopDeviceService(
     private val runner: CommandRunner,
     private val locator: SdkLocator,
     private val store: WorkspaceStore,
+    private val adbServerHost: String = AdbTrackDevices.DefaultHost,
+    private val adbServerPort: () -> Int = { AdbTrackDevices.resolveServerPort() },
 ) : DeviceService {
     override suspend fun discoverSdk(): SdkDiscovery {
         return locator.discover(store.load().selectedSdkPath)
+    }
+
+    override fun observeDevicePresence(): Flow<Unit> = channelFlow {
+        while (isActive) {
+            val adb = runCatching { discoverSdk().adbPath }.getOrNull()
+            if (adb.isNullOrBlank()) {
+                delay(2_000)
+                continue
+            }
+            // Ensure the server is up before opening the track socket.
+            runCatching { runner.run(listOf(adb, "start-server"), 15) }
+            try {
+                AdbTrackDevices.collectUpdates(
+                    host = adbServerHost,
+                    port = adbServerPort(),
+                ) {
+                    send(Unit)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                delay(1_000)
+            }
+        }
     }
 
     override suspend fun listDevices(): List<AndroidDevice> {

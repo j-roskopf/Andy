@@ -42,6 +42,29 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun parsesTrackDevicesPayloadWithoutHeader() {
+        val output = """
+            5A080DLCH000UR         device usb:1-1 product:blazer model:Pixel_10_Pro device:blazer transport_id:1
+            emulator-5554	offline
+        """.trimIndent()
+
+        val devices = AndroidParsers.parseAdbDevices(output)
+
+        assertEquals(2, devices.size)
+        assertEquals("5A080DLCH000UR", devices[0].serial)
+        assertEquals("Pixel 10 Pro", devices[0].displayName)
+        assertEquals(DeviceConnectionState.Online, devices[0].state)
+        assertEquals("emulator-5554", devices[1].serial)
+        assertEquals(DeviceConnectionState.Offline, devices[1].state)
+    }
+
+    @Test
+    fun parsesEmptyTrackDevicesPayloadAsNoDevices() {
+        assertEquals(emptyList(), AndroidParsers.parseAdbDevices(""))
+        assertEquals(emptyList(), AndroidParsers.parseAdbDevices("\n"))
+    }
+
+    @Test
     fun classifiesWifiTransportFromIpPortSerial() {
         val output = """
             List of devices attached

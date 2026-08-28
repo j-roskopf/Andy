@@ -9,11 +9,12 @@ import org.xml.sax.InputSource
 object AndroidParsers {
     fun parseAdbDevices(output: String): List<AndroidDevice> {
         return output.lineSequence()
-            .drop(1)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            // `adb devices` prints a header; `host:track-devices[-l]` payloads do not.
+            .filterNot { it.equals("List of devices attached", ignoreCase = true) }
             .mapNotNull { line ->
-                val trimmed = line.trim()
-                if (trimmed.isBlank()) return@mapNotNull null
-                val parts = trimmed.split(Regex("\\s+"))
+                val parts = line.split(Regex("\\s+"))
                 val serial = parts.getOrNull(0) ?: return@mapNotNull null
                 val stateRaw = parts.getOrNull(1) ?: "unknown"
                 val fields = parts.drop(2)
