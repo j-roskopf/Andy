@@ -37,7 +37,8 @@ Optional override: `ANDY_TMUX=/path/to/tmux`
 | `tmux -L andy-test[-wN]` | Isolated socket(s) used by `desktopTest` so tests cannot `kill-server` live chats; parallel forks append `-w<worker>` |
 | `andy-task-<taskId>` | Per-task tmux session name |
 
-Optional socket override: `ANDY_TMUX_SOCKET=name` (defaults to `andy`).
+Optional socket override: `ANDY_TMUX_SOCKET=name` (defaults to `andy`), or an absolute
+path for `tmux -S` (used by `andy remote` / `--remote` for the forwarded remote server).
 
 ## Run the daemon
 
@@ -151,9 +152,10 @@ andy remote user@mac.local     # subshell tunneled to remote andyd (exit to disc
 andy --remote user@mac.local chat list   # one-shot SSH tunnel
 ```
 
-`andy remote` mirrors the GUI Host switcher: it forwards `~/.andy/andyd.sock` over
-SSH, sets `ANDY_SOCKET` / `ANDY_REMOTE` in a child shell, then tears the tunnel down
-when that shell exits. The remote host must already be running `andyd`.
+`andy remote` mirrors the GUI Host switcher: it forwards `~/.andy/andyd.sock` and the
+remote `tmux -L andy` server over SSH, sets `ANDY_SOCKET` / `ANDY_TMUX_SOCKET` /
+`ANDY_REMOTE` in a child shell, then tears the tunnel down when that shell exits.
+The remote host must already be running `andyd`.
 
 ### Remote access from mobile (SSH + Tailscale)
 

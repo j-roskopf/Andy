@@ -43,14 +43,32 @@ fn which_tmux() -> Option<String> {
     None
 }
 
+/// Socket selector for Andy's tmux server.
+///
+/// - Absolute `ANDY_TMUX_SOCKET` path → `tmux -S <path>` (SSH-forwarded remote server)
+/// - Bare name → `tmux -L <name>` (defaults to `andy`)
+pub fn socket_args() -> Vec<String> {
+    if let Ok(raw) = std::env::var("ANDY_TMUX_SOCKET") {
+        let value = raw.trim();
+        if !value.is_empty() {
+            if value.starts_with('/') {
+                return vec!["-S".into(), value.to_string()];
+            }
+            return vec!["-L".into(), value.to_string()];
+        }
+    }
+    vec!["-L".into(), "andy".into()]
+}
+
 fn tmux_command(args: &[&str]) -> Result<Command> {
     let mut command = Command::new(tmux_binary()?);
+    command.args(socket_args());
     command.args(args);
     Ok(command)
 }
 
 /// Run a tmux command with null stdio; returns Err when the process fails to spawn
-/// or exits non-zero.
+/// or exits non-zero. Socket selector is prepended automatically.
 pub fn run_tmux(args: &[&str]) -> Result<()> {
     let status = tmux_command(args)?
         .stdin(Stdio::null())
@@ -68,7 +86,7 @@ pub fn has_session(task_id: &str) -> bool {
     let name = session_name(task_id);
     // Null stderr: a missing Andy tmux server otherwise floods the TTY with
     // "no server running on /private/tmp/tmux-*/andy" during attach polls.
-    tmux_command(&["-L", "andy", "has-session", "-t", &name])
+    tmux_command(&["has-session", "-t", &name])
         .ok()
         .and_then(|mut command| {
             command
@@ -91,7 +109,7 @@ pub fn session_looks_broken(task_id: &str) -> bool {
         return false;
     }
     let name = session_name(task_id);
-    let output = tmux_command(&["-L", "andy", "capture-pane", "-p", "-t", &name])
+    let output = tmux_command(&["capture-pane", "-p", "-t", &name])
         .ok()
         .and_then(|mut command| command.output().ok())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -110,8 +128,6 @@ pub fn detach_hint() -> &'static str {
 fn ensure_detach_keys() {
     // Idempotent; also covers older andyd builds before these were in SERVER_OPTIONS.
     let _ = tmux_command(&[
-        "-L",
-        "andy",
         "bind-key",
         "-n",
         "F12",
@@ -153,7 +169,7 @@ pub fn attach(task_id: &str, title: &str, status: &str) -> Result<()> {
     viewer_chrome::print_attach_banner(task_id, title, status);
     // Best-effort: older/broken tmux still gets the banner + detach keys.
     let _ = viewer_chrome::apply_tmux_session_chrome(task_id, title, status);
-    let attach_status = tmux_command(&["-L", "andy", "attach-session", "-t", &name])?
+    let attach_status = tmux_command(&["attach-session", "-t", &name])?
         .status()
         .context("spawn tmux attach")?;
     let _ = viewer_chrome::clear_tmux_session_chrome(task_id);
@@ -161,4 +177,49 @@ pub fn attach(task_id: &str, title: &str, status: &str) -> Result<()> {
         bail!("tmux attach failed for session {name}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn socket_args_default_to_andy_server() {
+        // Avoid depending on ambient ANDY_TMUX_SOCKET from the test runner.
+        let prev = std::env::var("ANDY_TMUX_SOCKET").ok();
+        std::env::remove_var("ANDY_TMUX_SOCKET");
+        assert_eq!(socket_args(), vec!["-L".to_string(), "andy".to_string()]);
+        match prev {
+            Some(v) => std::env::set_var("ANDY_TMUX_SOCKET", v),
+            None => std::env::remove_var("ANDY_TMUX_SOCKET"),
+        }
+    }
+
+    #[test]
+    fn socket_args_absolute_path_uses_dash_s() {
+        let prev = std::env::var("ANDY_TMUX_SOCKET").ok();
+        std::env::set_var("ANDY_TMUX_SOCKET", "/tmp/andy-remote-tmux.sock");
+        assert_eq!(
+            socket_args(),
+            vec!["-S".to_string(), "/tmp/andy-remote-tmux.sock".to_string()]
+        );
+        match prev {
+            Some(v) => std::env::set_var("ANDY_TMUX_SOCKET", v),
+            None => std::env::remove_var("ANDY_TMUX_SOCKET"),
+        }
+    }
+
+    #[test]
+    fn socket_args_named_server_uses_dash_l() {
+        let prev = std::env::var("ANDY_TMUX_SOCKET").ok();
+        std::env::set_var("ANDY_TMUX_SOCKET", "andy-test");
+        assert_eq!(
+            socket_args(),
+            vec!["-L".to_string(), "andy-test".to_string()]
+        );
+        match prev {
+            Some(v) => std::env::set_var("ANDY_TMUX_SOCKET", v),
+            None => std::env::remove_var("ANDY_TMUX_SOCKET"),
+        }
+    }
 }

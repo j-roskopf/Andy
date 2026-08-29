@@ -71,9 +71,11 @@ pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result
         WaitOutcome::Ready => {}
         WaitOutcome::TimedOut | WaitOutcome::TerminalStatus => {
             if parsed.get("tmuxAlive").and_then(|b| b.as_bool()) == Some(true) {
+                let socket = tmux::socket_args().join(" ");
                 bail!(
-                    "andyd reports a live session for {task_id}, but local `tmux -L andy` cannot see it\n\
-                     Hint: ensure the CLI and Andy share the same tmux server (check TMPDIR/TMUX_TMPDIR)"
+                    "andyd reports a live session for {task_id}, but `tmux {socket}` cannot see it\n\
+                     Hint: ensure the CLI and Andy share the same tmux server \
+                     (check TMPDIR/TMUX_TMPDIR, or use `andy remote` / ANDY_TMUX_SOCKET for remote hosts)"
                 );
             }
             bail!(

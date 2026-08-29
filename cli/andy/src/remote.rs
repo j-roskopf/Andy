@@ -1,12 +1,14 @@
 //! SSH tunnel to a remote `andyd` socket — CLI counterpart of the GUI Host switcher.
 //!
 //! `andy remote user@host` opens a ControlMaster forward of the remote andyd Unix
-//! socket, then spawns a subshell with `ANDY_SOCKET` / `ANDY_REMOTE` set so subsequent
-//! `andy …` commands talk to that machine until the shell exits.
+//! socket **and** the remote `tmux -L andy` server, then spawns a subshell with
+//! `ANDY_SOCKET` / `ANDY_TMUX_SOCKET` / `ANDY_REMOTE` set so subsequent `andy …`
+//! commands (including Terminal-lane attach) talk to that machine until the shell
+//! exits.
 //!
 //! OpenSSH does not expand `~` in `-L` remote socket paths, so we resolve
-//! `$HOME/.andy/andyd.sock` to an absolute path over SSH before forwarding (same as
-//! the GUI Host switcher).
+//! `$HOME/.andy/andyd.sock` (and the tmux server path) to absolute paths over SSH
+//! before forwarding (same as the GUI Host switcher).
 
 use anyhow::{bail, Context, Result};
 use std::collections::hash_map::DefaultHasher;
@@ -18,10 +20,11 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Live SSH ControlMaster + local Unix socket forward.
+/// Live SSH ControlMaster + local Unix socket forwards (andyd + tmux).
 pub struct RemoteTunnel {
     target: String,
     local_socket: PathBuf,
+    local_tmux: PathBuf,
     control_path: PathBuf,
     /// Parent dir `/tmp/andy-r{pid}` — removed on drop if empty.
     work_dir: PathBuf,
@@ -30,6 +33,10 @@ pub struct RemoteTunnel {
 impl RemoteTunnel {
     pub fn local_socket(&self) -> &Path {
         &self.local_socket
+    }
+
+    pub fn local_tmux(&self) -> &Path {
+        &self.local_tmux
     }
 
     pub fn target(&self) -> &str {
@@ -41,13 +48,20 @@ impl Drop for RemoteTunnel {
     fn drop(&mut self) {
         exit_master(&self.control_path);
         let _ = std::fs::remove_file(&self.local_socket);
+        let _ = std::fs::remove_file(&self.local_tmux);
         let _ = std::fs::remove_file(&self.control_path);
         let _ = std::fs::remove_dir(&self.work_dir);
+        // Clear process-local overrides set by open_tunnel for one-shot --remote.
+        if std::env::var_os("ANDY_TMUX_SOCKET").as_deref()
+            == Some(self.local_tmux.as_os_str())
+        {
+            std::env::remove_var("ANDY_TMUX_SOCKET");
+        }
     }
 }
 
-/// Open an SSH tunnel to `target`'s andyd socket. Caller must keep the returned
-/// value alive for the duration of use; Drop tears down the ControlMaster.
+/// Open an SSH tunnel to `target`'s andyd + tmux sockets. Caller must keep the
+/// returned value alive for the duration of use; Drop tears down the ControlMaster.
 pub fn open_tunnel(target: &str) -> Result<RemoteTunnel> {
     let target = target.trim();
     if target.is_empty() {
@@ -61,8 +75,10 @@ pub fn open_tunnel(target: &str) -> Result<RemoteTunnel> {
         .with_context(|| format!("create {}", work_dir.display()))?;
 
     let local_socket = work_dir.join(format!("{key}.a"));
+    let local_tmux = work_dir.join(format!("{key}.t"));
     let control_path = work_dir.join(format!("{key}.c"));
     let _ = std::fs::remove_file(&local_socket);
+    let _ = std::fs::remove_file(&local_tmux);
     let _ = std::fs::remove_file(&control_path);
 
     if let Err(err) = start_master(target, &control_path) {
@@ -70,8 +86,8 @@ pub fn open_tunnel(target: &str) -> Result<RemoteTunnel> {
         return Err(err);
     }
 
-    let remote_sock = match resolve_remote_andyd(target, &control_path) {
-        Ok(path) => path,
+    let remote_paths = match resolve_remote_paths(target, &control_path) {
+        Ok(paths) => paths,
         Err(err) => {
             exit_master(&control_path);
             let _ = std::fs::remove_file(&control_path);
@@ -80,18 +96,31 @@ pub fn open_tunnel(target: &str) -> Result<RemoteTunnel> {
         }
     };
 
-    if let Err(err) = add_unix_forward(&control_path, &local_socket, &remote_sock) {
+    if let Err(err) = add_unix_forward(&control_path, &local_socket, &remote_paths.andyd) {
         exit_master(&control_path);
         let _ = std::fs::remove_file(&control_path);
         let _ = std::fs::remove_dir(&work_dir);
         return Err(err).with_context(|| {
-            format!("forward {remote_sock} from {target}")
+            format!("forward {} from {target}", remote_paths.andyd)
+        });
+    }
+
+    // tmux may not exist until a Terminal-lane session is created; still forward so
+    // later attaches work (same as the GUI Host switcher).
+    if let Err(err) = add_unix_forward(&control_path, &local_tmux, &remote_paths.tmux) {
+        exit_master(&control_path);
+        let _ = std::fs::remove_file(&local_socket);
+        let _ = std::fs::remove_file(&control_path);
+        let _ = std::fs::remove_dir(&work_dir);
+        return Err(err).with_context(|| {
+            format!("forward {} from {target}", remote_paths.tmux)
         });
     }
 
     let tunnel = RemoteTunnel {
         target: target.to_string(),
         local_socket,
+        local_tmux,
         control_path,
         work_dir,
     };
@@ -105,30 +134,37 @@ pub fn open_tunnel(target: &str) -> Result<RemoteTunnel> {
 
     probe_mcp(tunnel.local_socket(), Duration::from_secs(10)).with_context(|| {
         format!(
-            "remote andyd at {remote_sock} did not speak MCP — is andyd running on {target}?"
+            "remote andyd at {} did not speak MCP — is andyd running on {target}?",
+            remote_paths.andyd
         )
     })?;
+
+    // One-shot `andy --remote … attach` runs in this process; point tmux at the forward.
+    std::env::set_var("ANDY_TMUX_SOCKET", tunnel.local_tmux());
 
     Ok(tunnel)
 }
 
-/// Connect to `target`, then spawn an interactive shell with `ANDY_SOCKET` pointing
-/// at the tunnel. Exiting the shell disconnects.
+/// Connect to `target`, then spawn an interactive shell with `ANDY_SOCKET` /
+/// `ANDY_TMUX_SOCKET` pointing at the tunnel. Exiting the shell disconnects.
 pub fn run_session(target: &str) -> Result<()> {
     let tunnel = open_tunnel(target)?;
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     eprintln!(
-        "Connected to {} (andyd via SSH).\n\
+        "Connected to {} (andyd + tmux via SSH).\n\
          andy commands in this shell talk to the remote daemon.\n\
          Type exit (or Ctrl-D) to disconnect.\n\
-         ANDY_SOCKET={}",
+         ANDY_SOCKET={}\n\
+         ANDY_TMUX_SOCKET={}",
         tunnel.target(),
-        tunnel.local_socket().display()
+        tunnel.local_socket().display(),
+        tunnel.local_tmux().display()
     );
 
     let status = Command::new(&shell)
         .env("ANDY_SOCKET", tunnel.local_socket())
+        .env("ANDY_TMUX_SOCKET", tunnel.local_tmux())
         .env("ANDY_REMOTE", tunnel.target())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -183,17 +219,26 @@ fn start_master(target: &str, control_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn resolve_remote_andyd(target: &str, control_path: &Path) -> Result<String> {
-    // Same probe as DesktopRemoteSessionService.resolveRemotePaths — expand $HOME and
-    // require a live socket before forwarding (OpenSSH will not expand ~ in -L paths).
+struct RemotePaths {
+    andyd: String,
+    tmux: String,
+}
+
+fn resolve_remote_paths(target: &str, control_path: &Path) -> Result<RemotePaths> {
+    // Same probe as DesktopRemoteSessionService.resolveRemotePaths — expand $HOME /
+    // TMUX_TMPDIR and require a live andyd socket before forwarding (OpenSSH will not
+    // expand ~ in -L paths). tmux may be absent until a session exists.
     let remote_command = concat!(
         "set -e; ",
         "ANDY_SOCK=\"$HOME/.andy/andyd.sock\"; ",
         "if [ ! -S \"$ANDY_SOCK\" ]; then echo \"andyd_missing:$ANDY_SOCK\" >&2; exit 2; fi; ",
-        "printf '%s\\n' \"$ANDY_SOCK\"",
+        "UID_N=$(id -u); ",
+        "TMP=${TMUX_TMPDIR:-${TMPDIR:-/tmp}}; ",
+        "TMUX_SOCK=\"$TMP/tmux-$UID_N/andy\"; ",
+        "printf '%s\\n%s\\n' \"$ANDY_SOCK\" \"$TMUX_SOCK\"",
     );
     let output = mux_ssh(control_path, target, &[remote_command])
-        .with_context(|| format!("resolve andyd socket on {target}"))?;
+        .with_context(|| format!("resolve andyd/tmux sockets on {target}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.code() == Some(2) || stderr.contains("andyd_missing") {
@@ -206,22 +251,26 @@ fn resolve_remote_andyd(target: &str, control_path: &Path) -> Result<String> {
         let detail = stderr.trim();
         if detail.is_empty() {
             bail!(
-                "could not resolve remote andyd socket on {target} (exit {})",
+                "could not resolve remote andyd/tmux sockets on {target} (exit {})",
                 output.status
             );
         }
-        bail!("could not resolve remote andyd socket on {target}: {detail}");
+        bail!("could not resolve remote andyd/tmux sockets on {target}: {detail}");
     }
-    let path = stdout
+    let lines: Vec<&str> = stdout
         .lines()
         .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string();
-    if path.is_empty() || !path.starts_with('/') {
-        bail!("unexpected remote andyd path from {target}: {stdout:?}");
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        bail!("unexpected remote andyd/tmux paths from {target}: {stdout:?}");
     }
-    Ok(path)
+    let andyd = lines[0].to_string();
+    let tmux = lines[1].to_string();
+    if !andyd.starts_with('/') || !tmux.starts_with('/') {
+        bail!("unexpected remote andyd/tmux paths from {target}: {stdout:?}");
+    }
+    Ok(RemotePaths { andyd, tmux })
 }
 
 fn add_unix_forward(control_path: &Path, local: &Path, remote_abs: &str) -> Result<()> {
