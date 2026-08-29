@@ -43,12 +43,18 @@ fun Tooltip(
     text: String,
     modifier: Modifier = Modifier,
     delayMillis: Long = TooltipDelayMillis,
+    /** When non-null, drives visibility directly (e.g. ephemeral "Copied" feedback). */
+    forceVisible: Boolean? = null,
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(hovered, text) {
+    LaunchedEffect(hovered, text, forceVisible) {
+        if (forceVisible != null) {
+            visible = forceVisible
+            return@LaunchedEffect
+        }
         if (!hovered) {
             visible = false
             return@LaunchedEffect
@@ -91,7 +97,7 @@ fun Tooltip(
     }
 }
 
-private class TooltipAboveAnchorPositionProvider(private val gapPx: Int) : PopupPositionProvider {
+internal class TooltipAboveAnchorPositionProvider(private val gapPx: Int) : PopupPositionProvider {
     override fun calculatePosition(
         anchorBounds: IntRect,
         windowSize: IntSize,

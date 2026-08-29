@@ -9,6 +9,9 @@ fun currentTimeMillis(): Long = Clock.System.now().toEpochMilliseconds()
 
 expect fun formatDisplayDateTime(epochMillis: Long): String
 
+/** Wall-clock time in the host locale/timezone, e.g. `2:08 PM`. */
+expect fun formatDisplayTime(epochMillis: Long): String
+
 expect fun hostTimeZoneId(): String
 
 fun formatDecimal(value: Number, fractionDigits: Int): String {

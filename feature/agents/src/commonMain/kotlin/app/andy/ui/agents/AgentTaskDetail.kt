@@ -669,6 +669,7 @@ fun AgentTaskDetail(
                         originalPrompt = task.prompt.ifBlank { task.title },
                         originalImagePaths = task.imagePaths,
                         originalSkills = task.skills,
+                        originalPromptAtMillis = task.createdAtMillis,
                         restoreScrollKey = task.id,
                         scrollMemory = transcriptScrollMemory,
                         scrollToLatestRequest = scrollToLatestRequest,

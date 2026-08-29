@@ -352,14 +352,25 @@ object AcpToolCallPresentation {
         isString && (content.contains('\n') || content.length > InlineValueLimit)
 
     private fun renderJsonMarkdown(element: JsonElement): String = when (element) {
-        is JsonObject -> element.entries.joinToString("\n") { (key, value) ->
-            val label = humanize(key)
-            when {
-                value is JsonPrimitive && value.isBlockText() -> "- **$label:**\n${fencedBlock(value.content)}"
-                value is JsonPrimitive -> "- **$label:** ${renderPrimitive(value)}"
-                else -> {
-                    val nested = renderJsonMarkdown(value)
-                    "- **$label:**\n${nested.prependIndent("  ")}"
+        is JsonObject -> {
+            // Prefer a sibling path so a Read/ Grep `content` fence can carry `kotlin` / `ts` / …
+            val pathHint = pathKeys.firstNotNullOfOrNull { key ->
+                (element[key] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            }
+            element.entries.joinToString("\n") { (key, value) ->
+                val label = humanize(key)
+                when {
+                    // Nest the fence under the list item (2-space indent). A column-0 fence ends the
+                    // list, so mid-file fragments with uneven absolute indent look like they "escaped"
+                    // the content: label — less-indented lines align with the bullet while deeper
+                    // lines still sit under it.
+                    value is JsonPrimitive && value.isBlockText() ->
+                        "- **$label:**\n${fencedBlock(value.content, pathHint).prependIndent("  ")}"
+                    value is JsonPrimitive -> "- **$label:** ${renderPrimitive(value)}"
+                    else -> {
+                        val nested = renderJsonMarkdown(value)
+                        "- **$label:**\n${nested.prependIndent("  ")}"
+                    }
                 }
             }
         }
@@ -374,15 +385,84 @@ object AcpToolCallPresentation {
     }
 
     /** Fence long enough to survive backticks in the body, so Markdown cannot break mid-payload. */
-    private fun fencedBlock(body: String): String {
-        val longestRun = Regex("`+").findAll(body).maxOfOrNull { it.value.length } ?: 0
+    private fun fencedBlock(body: String, pathHint: String? = null): String {
+        val dedented = dedentCommonIndent(body.trimEnd())
+        val longestRun = Regex("`+").findAll(dedented).maxOfOrNull { it.value.length } ?: 0
         val fence = "`".repeat(maxOf(3, longestRun + 1))
-        return "$fence${payloadLanguage(body)}\n${body.trimEnd()}\n$fence"
+        return "$fence${payloadLanguage(dedented, pathHint)}\n$dedented\n$fence"
     }
 
-    private fun payloadLanguage(body: String): String =
-        if (body.startsWith("diff --git") || diffHunkHeader.containsMatchIn(body)) "diff" else ""
+    /**
+     * Strip the shared leading indent from a file/command fragment. Read tools often return a slice
+     * that still carries the surrounding function's indent; without this, "main-level" lines in the
+     * fragment sit flush with the tool-row bullet while nested lines look correctly nested.
+     */
+    fun dedentCommonIndent(text: String): String {
+        val lines = text.replace("\r\n", "\n").split('\n')
+        val indents = lines.mapNotNull { line ->
+            if (line.isBlank()) null
+            else line.indexOfFirst { it != ' ' && it != '\t' }.takeIf { it >= 0 }
+        }
+        val indent = indents.minOrNull() ?: return text
+        if (indent == 0) return text
+        return lines.joinToString("\n") { line ->
+            if (line.isBlank()) ""
+            else line.drop(minOf(indent, line.length))
+        }
+    }
 
+    private val pathKeys = listOf(
+        "path", "file_path", "filePath", "file", "target_file", "uri", "notebook_path",
+    )
+
+    private fun payloadLanguage(body: String, pathHint: String? = null): String {
+        languageForPath(pathHint)?.let { return it }
+        if (body.startsWith("diff --git") || diffHunkHeader.containsMatchIn(body)) return "diff"
+        return languageFromContent(body).orEmpty()
+    }
+
+    private fun languageForPath(path: String?): String? {
+        val ext = path?.substringAfterLast('.', "")?.lowercase().orEmpty()
+        if (ext.isEmpty() || ext == path?.lowercase()) return null
+        return when (ext) {
+            "kt", "kts" -> "kotlin"
+            "java" -> "java"
+            "js", "mjs", "cjs" -> "javascript"
+            "ts", "tsx" -> "typescript"
+            "py" -> "python"
+            "rs" -> "rust"
+            "go" -> "go"
+            "rb" -> "ruby"
+            "sh", "bash", "zsh" -> "shell"
+            "json" -> "json"
+            "yaml", "yml" -> "yaml"
+            "md", "markdown" -> "markdown"
+            "html", "htm" -> "html"
+            "css" -> "css"
+            "sql" -> "sql"
+            "xml" -> "xml"
+            "c", "h" -> "c"
+            "cpp", "cc", "cxx", "hpp" -> "cpp"
+            "swift" -> "swift"
+            else -> null
+        }
+    }
+
+    /** Best-effort language when the payload has no path (Cursor Read often sends only `content`). */
+    private fun languageFromContent(body: String): String? {
+        val sample = body.lineSequence().take(40).joinToString("\n")
+        return when {
+            Regex("""\b(fun |val |var |suspend fun |data class |@Composable)\b""").containsMatchIn(sample) -> "kotlin"
+            Regex("""\b(def |async def |from \w+ import |elif )\b""").containsMatchIn(sample) -> "python"
+            Regex("""\b(fn |let mut |impl |pub struct )\b""").containsMatchIn(sample) -> "rust"
+            Regex("""\b(func |package main|:=)\b""").containsMatchIn(sample) -> "go"
+            Regex("""\b(const |let |function |=>|export )\b""").containsMatchIn(sample) &&
+                (sample.contains("interface ") || sample.contains(": string") || sample.contains(": number")) ->
+                "typescript"
+            Regex("""\b(function |const |let |=>|export )\b""").containsMatchIn(sample) -> "javascript"
+            else -> null
+        }
+    }
     private fun renderPrimitive(value: JsonPrimitive): String {
         val content = value.contentOrNull ?: value.toString()
         return when {

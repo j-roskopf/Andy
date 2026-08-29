@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -84,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import app.andy.formatDisplayTime
 import app.andy.loadImageBitmap
 import app.andy.domain.ToolCallFileContent
 import app.andy.domain.detectUnifiedDiff
@@ -210,6 +210,8 @@ fun AgentTranscript(
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     originalSkills: List<AgentSkill> = emptyList(),
+    /** Wall time for the launch prompt bubble when it is synthesized (not from [AgentEvent.UserMessage]). */
+    originalPromptAtMillis: Long? = null,
     completedContent: (@Composable () -> Unit)? = null,
     /** Scrolls with the transcript on the live edge, below pending input and above events. */
     trailingContent: (@Composable () -> Unit)? = null,
@@ -571,16 +573,25 @@ fun AgentTranscript(
                 if (originalPromptVisible) {
                     item(key = "original-prompt", contentType = "message") {
                         SelectionContainer {
+                            val originalTimestamp = originalPromptAtMillis
+                                ?.takeIf { it > 0L }
+                                ?.let(::formatDisplayTime)
+                            val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
                             ChatMessageBubble(
                                 sender = ChatBubbleSender.User,
                                 testTag = "user-message-bubble",
-                                metadata = originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                metadata = if (originalTimestamp != null || originalCopyText != null) {
                                     {
                                         ChatMessageMetadata(
+                                            timestamp = originalTimestamp,
                                             reverse = true,
-                                            footer = { ChatMessageCopyAction(prompt) },
+                                            footer = originalCopyText?.let { prompt ->
+                                                { ChatMessageCopyAction(prompt) }
+                                            },
                                         )
                                     }
+                                } else {
+                                    null
                                 },
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -974,7 +985,11 @@ private fun TranscriptEvent(
                 event.text.stripTrailingConnectionStallError(),
             )
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
-            AgentResponse(group = bubbleGroup, copyText = visibleText) {
+            AgentResponse(
+                group = bubbleGroup,
+                copyText = visibleText,
+                atMillis = event.atMillis,
+            ) {
                 ChatMarkdown(visibleText, lineHeight = 21.sp)
             }
         }
@@ -989,17 +1004,21 @@ private fun TranscriptEvent(
             val displayText = userMessageDisplayText(event)
             val copyText = displayText.takeIf { it.isNotBlank() }
                 ?: event.skills.takeIf { it.isNotEmpty() }?.joinToString(" ") { "/${it.name}" }
+            val timestamp = event.atMillis.takeIf { it > 0L }?.let(::formatDisplayTime)
             ChatMessageBubble(
                 sender = ChatBubbleSender.User,
                 group = bubbleGroup,
                 testTag = "user-message-bubble",
-                metadata = copyText?.let { text ->
+                metadata = if (timestamp != null || copyText != null) {
                     {
                         ChatMessageMetadata(
+                            timestamp = timestamp,
                             reverse = true,
-                            footer = { ChatMessageCopyAction(text) },
+                            footer = copyText?.let { text -> { ChatMessageCopyAction(text) } },
                         )
                     }
+                } else {
+                    null
                 },
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1270,18 +1289,24 @@ private fun ChatUserText(text: String) {
 private fun AgentResponse(
     group: ChatBubbleGroup = ChatBubbleGroup.Single,
     copyText: String? = null,
+    atMillis: Long? = null,
     content: @Composable () -> Unit,
 ) {
+    val timestamp = atMillis?.takeIf { it > 0L }?.let(::formatDisplayTime)
+    val copyable = copyText?.takeIf { it.isNotBlank() }
     ChatMessageBubble(
         sender = ChatBubbleSender.Assistant,
         variant = ChatBubbleVariant.Ghost,
         group = group,
-        metadata = copyText?.takeIf { it.isNotBlank() }?.let { text ->
+        metadata = if (timestamp != null || copyable != null) {
             {
                 ChatMessageMetadata(
-                    footer = { ChatMessageCopyAction(text) },
+                    timestamp = timestamp,
+                    footer = copyable?.let { text -> { ChatMessageCopyAction(text) } },
                 )
             }
+        } else {
+            null
         },
     ) {
         content()
@@ -1319,7 +1344,10 @@ private fun AgentCompletion(
             }
         }
         event.finalText?.takeIf { it.isNotBlank() }?.let {
-            AgentResponse(copyText = stripDecisionCheckpointMarkup(it)) {
+            AgentResponse(
+                copyText = stripDecisionCheckpointMarkup(it),
+                atMillis = event.atMillis,
+            ) {
                 ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
             }
         }
@@ -2137,9 +2165,10 @@ private fun codeLanguageForPath(path: String?): String = when (path?.substringAf
 
 /** Wraps [body] in a Markdown fence long enough to survive any backtick runs already inside it. */
 private fun fencedCodeBlock(body: String, language: String = ""): String {
-    val longestRun = Regex("`+").findAll(body).maxOfOrNull { it.value.length } ?: 0
+    val dedented = AcpToolCallPresentation.dedentCommonIndent(body.trimEnd())
+    val longestRun = Regex("`+").findAll(dedented).maxOfOrNull { it.value.length } ?: 0
     val fence = "`".repeat(maxOf(3, longestRun + 1))
-    return "$fence$language\n$body\n$fence"
+    return "$fence$language\n$dedented\n$fence"
 }
 
 @Composable
@@ -2245,17 +2274,7 @@ private fun TranscriptExpandableRow(
                         },
                     ),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (expandable) {
-                    Text(
-                        if (expanded) "v" else ">",
-                        color = headlineColor.copy(alpha = 0.7f),
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        modifier = Modifier.width(10.dp),
-                    )
-                }
                 if (headlineContent != null) {
                     Box(Modifier.weight(1f, fill = false)) { headlineContent() }
                 } else {

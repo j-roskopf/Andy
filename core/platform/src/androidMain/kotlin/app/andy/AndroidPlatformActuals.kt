@@ -81,11 +81,21 @@ actual suspend fun readClipboardImagePaths(): List<String> = emptyList()
 private val displayDateTimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a", Locale.getDefault())
 
+private val displayTimeFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+
 actual fun hostTimeZoneId(): String = ZoneId.systemDefault().id
 
 actual fun formatDisplayDateTime(epochMillis: Long): String {
     if (epochMillis <= 0L) return "-"
     return displayDateTimeFormatter.format(
+        Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()),
+    )
+}
+
+actual fun formatDisplayTime(epochMillis: Long): String {
+    if (epochMillis <= 0L) return "-"
+    return displayTimeFormatter.format(
         Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()),
     )
 }
