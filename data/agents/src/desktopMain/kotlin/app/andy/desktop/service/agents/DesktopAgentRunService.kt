@@ -2016,7 +2016,7 @@ class DesktopAgentRunService(
         }
     }
 
-    private fun agentMessageDeliveryMode(): AgentMessageDeliveryMode =
+    fun agentMessageDeliveryMode(): AgentMessageDeliveryMode =
         workspaceStore.state?.value?.agentMessageDeliveryMode ?: AgentMessageDeliveryMode.Immediate
 
     override suspend fun retry(taskId: String) {

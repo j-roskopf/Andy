@@ -60,6 +60,8 @@ struct QueuedFollowUp {
 struct LiveSnapshot {
     status: String,
     queued_follow_ups: Vec<QueuedFollowUp>,
+    /// True when workspace delivery mode is Queue (vs Immediate inject).
+    prefer_queue: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,8 @@ struct ViewState {
     events: Vec<AgentEvent>,
     status: String,
     queued_follow_ups: Vec<QueuedFollowUp>,
+    /// Workspace AgentMessageDeliveryMode == Queue.
+    prefer_queue: bool,
     input: String,
     image_paths: Vec<String>,
     scroll: u16,
@@ -143,6 +147,7 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             events: Vec::new(),
             status: meta.status.clone(),
             queued_follow_ups: meta.queued_follow_ups.clone(),
+            prefer_queue: false,
             input: String::new(),
             image_paths: Vec::new(),
             scroll: 0,
@@ -265,6 +270,11 @@ async fn run_loop(
         if last_status_poll.elapsed() >= STATUS_POLL_INTERVAL {
             refresh_live_state(client, &meta.id, state).await;
             last_status_poll = Instant::now();
+            // Finished closes subscribe; another client (or auto-dispatched queue)
+            // may start a new turn — reopen so we receive its transcript events.
+            if is_active_status(&state.status) && !state.subscribe_open {
+                return Ok(LoopAction::Retry);
+            }
         }
 
         let slash_commands = available_slash_commands(meta, state);
@@ -604,6 +614,10 @@ fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
             .unwrap_or("")
             .to_string(),
         queued_follow_ups: parse_queued_follow_ups(v.get("queuedFollowUps")),
+        prefer_queue: v
+            .get("messageDeliveryMode")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("Queue")),
     }
 }
 
@@ -631,6 +645,7 @@ async fn refresh_live_state(client: &mut McpClient, task_id: &str, state: &mut V
     let Some(snap) = fetch_live_snapshot(client, task_id).await else {
         return;
     };
+    state.prefer_queue = snap.prefer_queue;
     if !snap.status.is_empty()
         && !matches!(state.status.as_str(), "Stopping")
         && state.status != snap.status
@@ -825,6 +840,7 @@ async fn submit_follow_up(
             state.status = snap.status;
         }
         state.queued_follow_ups = snap.queued_follow_ups;
+        state.prefer_queue = snap.prefer_queue;
     }
     let tool = follow_up_tool_for_status(&state.status);
     refresh_cached_skills(meta, state);
@@ -841,20 +857,30 @@ async fn submit_follow_up(
     if !state.image_paths.is_empty() {
         args["imagePaths"] = json!(state.image_paths);
     }
-    client
+    let raw = client
         .call_tool(tool, args)
         .await
         .with_context(|| tool.to_string())?;
     state.input.clear();
     state.image_paths.clear();
     if tool == "chat.queue_follow_up" {
-        // Optimistic local append; the 2s status poll reconciles with the daemon.
-        // Skipping an immediate refresh avoids briefly wiping the row if the
-        // daemon hasn't persisted the queue yet.
-        state.queued_follow_ups.push(QueuedFollowUp {
-            text: follow_up.clone(),
-        });
-        state.status_flash = Some(format!("queued via {tool}"));
+        let queued = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("queued").and_then(|q| q.as_bool()))
+            .unwrap_or(state.prefer_queue);
+        if queued {
+            // Optimistic local append; the 2s status poll reconciles with the daemon.
+            state.queued_follow_ups.push(QueuedFollowUp {
+                text: follow_up.clone(),
+            });
+            state.status_flash = Some(format!("queued via {tool}"));
+        } else {
+            // Immediate delivery injects into the live ACP session.
+            state.status = "Working".into();
+            state.presence_started = Instant::now();
+            state.status_flash = Some(format!("sent via {tool}"));
+            refresh_live_state(client, &meta.id, state).await;
+        }
     } else {
         state.status = "Working".into();
         state.presence_started = Instant::now();
@@ -1021,8 +1047,9 @@ fn draw(
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let will_queue = is_active_status(&state.status) || !state.queued_follow_ups.is_empty();
-    let composer_title = if will_queue && is_active_status(&state.status) {
+    let will_queue = !state.queued_follow_ups.is_empty()
+        || (state.prefer_queue && is_active_status(&state.status));
+    let composer_title = if will_queue {
         " Follow-up · will queue "
     } else {
         " Follow-up "
@@ -1518,6 +1545,7 @@ mod tests {
             events: Vec::new(),
             status: "Idle".into(),
             queued_follow_ups: Vec::new(),
+            prefer_queue: false,
             input: String::new(),
             image_paths: Vec::new(),
             scroll: 0,
@@ -1973,6 +2001,7 @@ mod tests {
     fn parse_live_snapshot_reads_queue() {
         let v = json!({
             "status": "Working",
+            "messageDeliveryMode": "Queue",
             "queuedFollowUps": [
                 { "text": "first" },
                 { "text": "" },
@@ -1981,6 +2010,7 @@ mod tests {
         });
         let snap = parse_live_snapshot(&v);
         assert_eq!(snap.status, "Working");
+        assert!(snap.prefer_queue);
         assert_eq!(
             snap.queued_follow_ups,
             vec![
@@ -1993,6 +2023,11 @@ mod tests {
                 },
             ]
         );
+        let immediate = parse_live_snapshot(&json!({
+            "status": "Working",
+            "messageDeliveryMode": "Immediate"
+        }));
+        assert!(!immediate.prefer_queue);
     }
 
     #[test]

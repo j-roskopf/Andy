@@ -857,13 +857,30 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
         val imagePaths = parseImagePathsArg(args)
+        val queuedBefore = agentRuns.tasks.value.excludingTemporary()
+            .firstOrNull { it.id == id }
+            ?.queuedFollowUps
+            ?.size
+            ?: 0
         agentRuns.queueFollowUp(
             id,
             followUp,
             imagePaths = imagePaths,
             contextBundleIds = strList(args, "contextBundleIds"),
         )
-        textResult("""{"ok":true,"id":"$id"}""")
+        val queuedAfter = agentRuns.tasks.value.excludingTemporary()
+            .firstOrNull { it.id == id }
+            ?.queuedFollowUps
+            ?.size
+            ?: 0
+        // Immediate delivery injects into the live session without growing the queue.
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("id", id)
+                put("queued", queuedAfter > queuedBefore)
+            }.toString(),
+        )
     }
 
     register(
@@ -984,6 +1001,13 @@ fun Server.registerAgentProjectTools(
                 put("tmuxSession", TmuxAndy.sessionName(id))
                 put("cwd", task?.cwd.orEmpty())
                 put("originDir", task?.originDir.orEmpty())
+                put(
+                    "messageDeliveryMode",
+                    (agentRuns as? DesktopAgentRunService)
+                        ?.agentMessageDeliveryMode()
+                        ?.name
+                        ?: "Immediate",
+                )
                 // CLI attach viewer polls this for the queue panel; keep shape aligned with chat.list.
                 task?.queuedFollowUps?.takeIf { it.isNotEmpty() }?.let { queuedFollowUps ->
                     put(
