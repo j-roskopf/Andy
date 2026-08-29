@@ -29,6 +29,23 @@ class RustTerminalCanvasSupportTest {
     }
 
     @Test
+    fun ctrlCEncodesSigintWhenAwtDeliversEtxCodePoint() {
+        // Real Compose Desktop events: AWT keyChar for Ctrl+C is ETX (0x03), not 'c'.
+        assertEquals(
+            listOf(0x03),
+            encodeTerminalKey(keyEvent(Key.C, ctrl = true, codePoint = 0x03))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlDEncodesEofWhenAwtDeliversEotCodePoint() {
+        assertEquals(
+            listOf(0x04),
+            encodeTerminalKey(keyEvent(Key.D, ctrl = true, codePoint = 0x04))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
     fun modifierOnlyKeysAreNotEncoded() {
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftLeft)))
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftRight)))

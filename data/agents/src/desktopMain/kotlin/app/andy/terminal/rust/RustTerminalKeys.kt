@@ -82,38 +82,23 @@ internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
 }
 
 private fun encodeCtrl(event: KeyEvent): ByteArray? {
+    // Prefer the physical key. AWT KEY_PRESSED for Ctrl+letter sets keyChar to the C0
+    // control (Ctrl+C → ETX 0x03), not the letter — deriving from utf16CodePoint alone
+    // would lowercase 0x03 and miss the 'c' → 0x03 mapping, so SIGINT never reached the PTY.
+    ctrlLetterFromKey(event.key)?.let { letter ->
+        return byteArrayOf((letter.code - 'a'.code + 1).toByte())
+    }
+    val cp = event.utf16CodePoint
+    if (cp in 0x01..0x1F) {
+        return byteArrayOf(cp.toByte())
+    }
     val ch = when {
-        event.utf16CodePoint != 0 && Character.isValidCodePoint(event.utf16CodePoint) ->
-            event.utf16CodePoint.toChar().lowercaseChar()
-        else -> ctrlLetterFromKey(event.key) ?: return null
+        cp != 0 &&
+            cp != KEY_CHAR_UNDEFINED &&
+            Character.isValidCodePoint(cp) -> cp.toChar().lowercaseChar()
+        else -> return null
     }
     val ctrl = when (ch) {
-        'a' -> 0x01
-        'b' -> 0x02
-        'c' -> 0x03
-        'd' -> 0x04
-        'e' -> 0x05
-        'f' -> 0x06
-        'g' -> 0x07
-        'h' -> 0x08
-        'i' -> 0x09
-        'j' -> 0x0A
-        'k' -> 0x0B
-        'l' -> 0x0C
-        'm' -> 0x0D
-        'n' -> 0x0E
-        'o' -> 0x0F
-        'p' -> 0x10
-        'q' -> 0x11
-        'r' -> 0x12
-        's' -> 0x13
-        't' -> 0x14
-        'u' -> 0x15
-        'v' -> 0x16
-        'w' -> 0x17
-        'x' -> 0x18
-        'y' -> 0x19
-        'z' -> 0x1A
         '[' -> 0x1B
         '\\' -> 0x1C
         ']' -> 0x1D
