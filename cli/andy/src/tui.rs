@@ -452,10 +452,11 @@ fn draw_dashboard(
                             .style(Style::default().fg(Color::Cyan))
                     }
                     ListEntry::Chat(chat) => {
-                        let live = if chat.tmux_alive { " live" } else { "" };
                         ListItem::new(format!(
-                            "   {}  [{}{}]  {}",
-                            chat.id, chat.status, live, chat.title
+                            "   {}  {}  {}",
+                            chat.id,
+                            chats::format_status_badge(chat),
+                            chat.title
                         ))
                     }
                 };

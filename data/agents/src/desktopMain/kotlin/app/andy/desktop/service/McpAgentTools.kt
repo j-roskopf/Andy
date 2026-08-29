@@ -975,6 +975,7 @@ fun Server.registerAgentProjectTools(
         textResult(
             buildJsonObject {
                 put("id", id)
+                put("title", task?.title.orEmpty())
                 put("status", task?.status?.name.orEmpty())
                 put("lane", task?.lane?.name.orEmpty())
                 put("autonomy", task?.autonomy?.name.orEmpty())
@@ -983,6 +984,24 @@ fun Server.registerAgentProjectTools(
                 put("tmuxSession", TmuxAndy.sessionName(id))
                 put("cwd", task?.cwd.orEmpty())
                 put("originDir", task?.originDir.orEmpty())
+                // CLI attach viewer polls this for the queue panel; keep shape aligned with chat.list.
+                task?.queuedFollowUps?.takeIf { it.isNotEmpty() }?.let { queuedFollowUps ->
+                    put(
+                        "queuedFollowUps",
+                        buildJsonArray {
+                            queuedFollowUps.forEach { queued ->
+                                add(
+                                    buildJsonObject {
+                                        put("text", queued.text)
+                                        put("contextBundleIds", buildJsonArray {
+                                            queued.contextBundleIds.forEach { bid -> add(JsonPrimitive(bid)) }
+                                        })
+                                    },
+                                )
+                            }
+                        },
+                    )
+                }
             }.toString(),
         )
     }
