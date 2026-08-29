@@ -1897,7 +1897,10 @@ class DesktopAgentRunService(
     ) {
         val task = currentTask(taskId) ?: return
         val preferQueue = agentMessageDeliveryMode() == AgentMessageDeliveryMode.Queue
-        if (!task.isActive && !isLaneLive(taskId) && !preferQueue) return
+        // Leftover queue rows (e.g. after stop) must stay FIFO even if the workspace
+        // was later switched to Immediate — never drop or jump the line.
+        val hasQueued = task.queuedFollowUps.isNotEmpty()
+        if (!task.isActive && !isLaneLive(taskId) && !preferQueue && !hasQueued) return
 
         val text = followUp.trim()
         if (text.isBlank() && imagePaths.isEmpty()) return
@@ -1906,7 +1909,7 @@ class DesktopAgentRunService(
             this.skills(task.runtimeKind(), skillDirectory).value.any { it.path == skill.path }
         }
 
-        if (!preferQueue) {
+        if (!preferQueue && !hasQueued) {
             if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
                 val now = System.currentTimeMillis()
                 val acpPrompt = task.followUpCliPayload(text, imagePaths, selectedSkills).prompt
@@ -1939,7 +1942,7 @@ class DesktopAgentRunService(
                 resume(taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance)
                 return
             }
-        } else if (!task.isActive && !isLaunchInProgress(taskId) && task.queuedFollowUps.isEmpty()) {
+        } else if (!task.isActive && !isLaunchInProgress(taskId) && !hasQueued) {
             resume(taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance)
             return
         }
