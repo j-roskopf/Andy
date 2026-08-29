@@ -573,19 +573,25 @@ fun AgentTranscript(
                 if (originalPromptVisible) {
                     item(key = "original-prompt", contentType = "message") {
                         SelectionContainer {
+                            val originalTimestamp = originalPromptAtMillis
+                                ?.takeIf { it > 0L }
+                                ?.let(::formatDisplayTime)
+                            val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
                             ChatMessageBubble(
                                 sender = ChatBubbleSender.User,
                                 testTag = "user-message-bubble",
-                                metadata = originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                metadata = if (originalTimestamp != null || originalCopyText != null) {
                                     {
                                         ChatMessageMetadata(
-                                            timestamp = originalPromptAtMillis
-                                                ?.takeIf { it > 0L }
-                                                ?.let(::formatDisplayTime),
+                                            timestamp = originalTimestamp,
                                             reverse = true,
-                                            footer = { ChatMessageCopyAction(prompt) },
+                                            footer = originalCopyText?.let { prompt ->
+                                                { ChatMessageCopyAction(prompt) }
+                                            },
                                         )
                                     }
+                                } else {
+                                    null
                                 },
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -979,7 +985,11 @@ private fun TranscriptEvent(
                 event.text.stripTrailingConnectionStallError(),
             )
             if (visibleText.isBlank() || visibleText.isRetriableConnectionStallMessage()) return
-            AgentResponse(group = bubbleGroup, copyText = visibleText) {
+            AgentResponse(
+                group = bubbleGroup,
+                copyText = visibleText,
+                atMillis = event.atMillis,
+            ) {
                 ChatMarkdown(visibleText, lineHeight = 21.sp)
             }
         }
@@ -994,18 +1004,21 @@ private fun TranscriptEvent(
             val displayText = userMessageDisplayText(event)
             val copyText = displayText.takeIf { it.isNotBlank() }
                 ?: event.skills.takeIf { it.isNotEmpty() }?.joinToString(" ") { "/${it.name}" }
+            val timestamp = event.atMillis.takeIf { it > 0L }?.let(::formatDisplayTime)
             ChatMessageBubble(
                 sender = ChatBubbleSender.User,
                 group = bubbleGroup,
                 testTag = "user-message-bubble",
-                metadata = copyText?.let { text ->
+                metadata = if (timestamp != null || copyText != null) {
                     {
                         ChatMessageMetadata(
-                            timestamp = event.atMillis.takeIf { it > 0L }?.let(::formatDisplayTime),
+                            timestamp = timestamp,
                             reverse = true,
-                            footer = { ChatMessageCopyAction(text) },
+                            footer = copyText?.let { text -> { ChatMessageCopyAction(text) } },
                         )
                     }
+                } else {
+                    null
                 },
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1276,18 +1289,24 @@ private fun ChatUserText(text: String) {
 private fun AgentResponse(
     group: ChatBubbleGroup = ChatBubbleGroup.Single,
     copyText: String? = null,
+    atMillis: Long? = null,
     content: @Composable () -> Unit,
 ) {
+    val timestamp = atMillis?.takeIf { it > 0L }?.let(::formatDisplayTime)
+    val copyable = copyText?.takeIf { it.isNotBlank() }
     ChatMessageBubble(
         sender = ChatBubbleSender.Assistant,
         variant = ChatBubbleVariant.Ghost,
         group = group,
-        metadata = copyText?.takeIf { it.isNotBlank() }?.let { text ->
+        metadata = if (timestamp != null || copyable != null) {
             {
                 ChatMessageMetadata(
-                    footer = { ChatMessageCopyAction(text) },
+                    timestamp = timestamp,
+                    footer = copyable?.let { text -> { ChatMessageCopyAction(text) } },
                 )
             }
+        } else {
+            null
         },
     ) {
         content()
@@ -1325,7 +1344,10 @@ private fun AgentCompletion(
             }
         }
         event.finalText?.takeIf { it.isNotBlank() }?.let {
-            AgentResponse(copyText = stripDecisionCheckpointMarkup(it)) {
+            AgentResponse(
+                copyText = stripDecisionCheckpointMarkup(it),
+                atMillis = event.atMillis,
+            ) {
                 ChatMarkdown(stripDecisionCheckpointMarkup(it), lineHeight = 18.sp)
             }
         }
