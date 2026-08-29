@@ -95,6 +95,12 @@ data class WorkspaceState(
     val projectListPaneWidth: Float = 300f,
     val liveDevicePaneWidth: Float = 720f,
     val liveControlsPaneHeight: Float = 320f,
+    /**
+     * When true, a visible Live/Design/Inspector mirror automatically records a rolling ~30s
+     * window (logcat, screens, metrics, hierarchy) for the Bug button. Off by default — the
+     * pollers add guest CPU load.
+     */
+    val autoBugCaptureEnabled: Boolean = false,
     val appsListPaneWidth: Float = 520f,
     val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,

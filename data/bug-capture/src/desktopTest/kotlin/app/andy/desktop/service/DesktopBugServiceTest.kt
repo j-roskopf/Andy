@@ -679,7 +679,7 @@ class DesktopBugServiceTest {
                 state = DeviceConnectionState.Online,
             ),
         )
-        val service = DesktopBugService(mirror, FakeLogcatService(), home, devices)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, devices, workspaceStore = autoBugWorkspace())
 
         mirror.session.value = androidMirrorSession("emulator-5554")
         withTimeout(15_000) {
@@ -693,10 +693,28 @@ class DesktopBugServiceTest {
     }
 
     @Test
+    fun mirrorSessionDoesNotAutoCaptureWhenPreferenceDisabled() = runBlocking {
+        val home = Files.createTempDirectory("andy-bugs-session-opt-out-test").toFile()
+        val mirror = FakeMirrorEngine()
+        val service = DesktopBugService(
+            mirror,
+            FakeLogcatService(),
+            home,
+            workspaceStore = FakeWorkspaceStore(WorkspaceState(autoBugCaptureEnabled = false)),
+        )
+
+        mirror.session.value = androidMirrorSession("emulator-5554")
+        delay(400)
+        assertFalse(service.status.value.active, "auto bug capture is opt-in")
+
+        service.stopCapture()
+    }
+
+    @Test
     fun iosMirrorSessionStartsCaptureAndSaveBugFillsDeviceModelFromRegistry() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-ios-test").toFile()
         val mirror = FakeMirrorEngine()
-        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, workspaceStore = autoBugWorkspace())
         val udid = "CA4B2892-6294-4CD4-AA5A-6031551226BA"
         IosTargetRegistry.update(
             listOf(
@@ -732,7 +750,7 @@ class DesktopBugServiceTest {
     fun mirrorSessionObserverStopsCaptureWhenSessionCleared() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-session-stop-test").toFile()
         val mirror = FakeMirrorEngine()
-        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, workspaceStore = autoBugWorkspace())
 
         mirror.session.value = androidMirrorSession("emulator-5554")
         withTimeout(15_000) {
@@ -750,7 +768,7 @@ class DesktopBugServiceTest {
     fun mirrorSessionStatsUpdatesDoNotRestartCapture() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-session-stats-test").toFile()
         val mirror = FakeMirrorEngine()
-        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, workspaceStore = autoBugWorkspace())
 
         mirror.session.value = androidMirrorSession("emulator-5554")
         withTimeout(15_000) {
@@ -780,7 +798,7 @@ class DesktopBugServiceTest {
     fun mirrorSessionObserverDoesNotStopDuringExplicitRecording() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-session-recording-test").toFile()
         val mirror = FakeMirrorEngine()
-        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, workspaceStore = autoBugWorkspace())
 
         mirror.session.value = androidMirrorSession("emulator-5554")
         withTimeout(15_000) {
@@ -808,7 +826,7 @@ class DesktopBugServiceTest {
     fun rollingCaptureFollowsMirrorVisibility() = runBlocking {
         val home = Files.createTempDirectory("andy-bugs-visibility-test").toFile()
         val mirror = FakeMirrorEngine()
-        val service = DesktopBugService(mirror, FakeLogcatService(), home)
+        val service = DesktopBugService(mirror, FakeLogcatService(), home, workspaceStore = autoBugWorkspace())
 
         mirror.session.value = androidMirrorSession("emulator-5554")
         withTimeout(15_000) {
@@ -938,12 +956,16 @@ internal class FakeAppService : AppService by UnavailableAppService {
         AndroidAppDetails(versionName = "1.2.3", versionCode = "42", minSdk = "24", targetSdk = "34", debuggable = true)
 }
 
-internal class FakeWorkspaceStore(private var value: WorkspaceState) : WorkspaceStore {
-    override suspend fun load(): WorkspaceState = value
+internal class FakeWorkspaceStore(initial: WorkspaceState) : WorkspaceStore {
+    private val mutableState = MutableStateFlow(initial)
+    override val state = mutableState
+    override suspend fun load(): WorkspaceState = mutableState.value
     override suspend fun save(state: WorkspaceState) {
-        this.value = state
+        mutableState.value = state
     }
 }
+
+private fun autoBugWorkspace() = FakeWorkspaceStore(WorkspaceState(autoBugCaptureEnabled = true))
 
 internal class FakeActionConfigStore(private var config: ActionsConfig) : ActionConfigStore {
     override suspend fun load(): ActionsConfig = config

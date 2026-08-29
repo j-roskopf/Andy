@@ -157,14 +157,14 @@ fun ChatMessageBubble(
                 content = content,
             )
             if (metadata != null) {
-                // Keep copy under the bubble edge — fillMaxWidth here used to stretch user
-                // bubbles to the chat width and park the icon far from short skill pills.
+                // Start a touch right of the text inset so time/copy trail the first glyph.
+                // Avoid fillMaxWidth — it used to stretch user bubbles and park the icon far away.
                 Box(
                     Modifier
-                        .align(if (alignEnd) Alignment.End else Alignment.Start)
+                        .align(Alignment.Start)
                         .padding(
-                            start = AndySpace.Space3,
-                            end = AndySpace.Space3,
+                            start = horizontalPad + AndySpace.Space1,
+                            end = horizontalPad,
                             top = if (alignEnd) 2.dp else 0.dp,
                             bottom = AndySpace.Space1,
                         ),

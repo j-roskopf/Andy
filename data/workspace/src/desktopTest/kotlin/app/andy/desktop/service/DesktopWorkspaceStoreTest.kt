@@ -35,6 +35,9 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
 
+        DesktopWorkspaceStore(file).save(saved.copy(autoBugCaptureEnabled = true))
+        assertEquals(true, DesktopWorkspaceStore(file).load().autoBugCaptureEnabled)
+
         val messaging = saved.copy(agentMessageDeliveryMode = AgentMessageDeliveryMode.Queue)
         DesktopWorkspaceStore(file).save(messaging)
         assertEquals(AgentMessageDeliveryMode.Queue, DesktopWorkspaceStore(file).load().agentMessageDeliveryMode)

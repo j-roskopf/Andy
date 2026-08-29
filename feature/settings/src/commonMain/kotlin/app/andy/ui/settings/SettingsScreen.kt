@@ -165,6 +165,7 @@ private enum class DesktopSettingsCategory(
 ) {
     Appearance("Appearance", "Tint, background, editor, and terminal"),
     Navigation("Navigation", "Show or hide sidebar pages"),
+    Live("Live", "Mirror and rolling bug capture"),
     Agents("Agents", "Sessions, orchestration, and notifications"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
@@ -229,6 +230,7 @@ fun SettingsScreen(
                 update = onUpdateWorkspace,
                 destinations = services.capabilities.destinations,
             )
+            DesktopSettingsCategory.Live -> LivePanel(workspaceState, onUpdateWorkspace)
             DesktopSettingsCategory.Agents -> {
                 if (services.orchestrationPreferences !is UnavailableOrchestrationPreferencesService) {
                     OrchestrationPreferencesPanel(services.orchestrationPreferences, providerModels)
@@ -775,6 +777,27 @@ private fun NavigationPanel(
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun LivePanel(
+    workspace: WorkspaceState,
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    SettingsGroup(
+        title = "Bug capture",
+        description = "When a Live (or Design/Inspector) mirror is on screen, Andy can keep a rolling " +
+            "~30 second window of device video, logcat, foreground screens, crashes, performance " +
+            "samples, and view hierarchy. The Live Bug button saves that window as a report. " +
+            "Off by default because the background pollers add CPU load on the emulator and host.",
+    ) {
+        SettingsToggleRow(
+            label = "Auto-capture while mirroring",
+            checked = workspace.autoBugCaptureEnabled,
+            onCheckedChange = { value -> update { it.copy(autoBugCaptureEnabled = value) } },
+            description = "Starts the rolling window whenever a mirror is visible. Turn on to use the Bug button in Live.",
+        )
     }
 }
 

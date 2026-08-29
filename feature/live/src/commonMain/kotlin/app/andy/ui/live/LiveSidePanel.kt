@@ -39,6 +39,7 @@ import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.SegmentedControl
 import app.andy.ui.components.TabBar
+import app.andy.ui.components.Tooltip
 import app.andy.ui.components.WorkspaceSectionLabel
 import app.andy.ui.controls.FoldableControlsPanel
 import app.andy.ui.controls.FoldablePosture
@@ -88,6 +89,7 @@ internal fun LiveSidePanel(
     liveActionStatus: String,
     liveActionStatusColor: androidx.compose.ui.graphics.Color,
     onSaveBug: () -> Unit,
+    bugCaptureEnabled: Boolean = true,
     onStopEmulator: () -> Unit,
     stoppingEmulator: Boolean,
     stopStatus: String,
@@ -183,6 +185,7 @@ internal fun LiveSidePanel(
                     liveActionStatus = liveActionStatus,
                     liveActionStatusColor = liveActionStatusColor,
                     onSaveBug = onSaveBug,
+                    bugCaptureEnabled = bugCaptureEnabled,
                     onStopEmulator = onStopEmulator,
                     stoppingEmulator = stoppingEmulator,
                     stopStatus = stopStatus,
@@ -235,6 +238,7 @@ private fun LiveInfoTabContent(
     liveActionStatus: String,
     liveActionStatusColor: androidx.compose.ui.graphics.Color,
     onSaveBug: () -> Unit,
+    bugCaptureEnabled: Boolean = true,
     onStopEmulator: () -> Unit,
     stoppingEmulator: Boolean,
     stopStatus: String,
@@ -342,7 +346,15 @@ private fun LiveInfoTabContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(onClick = onSaveBug, enabled = serial != null) { Text("Save bug") }
+            val saveBugEnabled = serial != null && bugCaptureEnabled
+            val saveBugButton = @Composable {
+                Button(onClick = onSaveBug, enabled = saveBugEnabled) { Text("Save bug") }
+            }
+            if (!bugCaptureEnabled) {
+                Tooltip(text = BugCaptureDisabledTooltip) { saveBugButton() }
+            } else {
+                saveBugButton()
+            }
             if (transferBusy) {
                 OutlinedButton(onClick = onCancelTransfer) { Text("Cancel transfer") }
             }
