@@ -4,6 +4,7 @@ import app.andy.desktop.service.CommandRunner
 import app.andy.service.DeviceService
 import app.andy.desktop.parser.AndroidParsers
 import app.andy.desktop.service.emulatorGuestRefreshShellCommands
+import app.andy.desktop.service.emulatorVsyncRate
 import app.andy.desktop.service.emulator.EMULATOR_IMAGE_BYTES_PER_PIXEL
 import app.andy.desktop.service.emulator.EmulatorGrpcClient
 import app.andy.desktop.service.emulator.EmulatorMappedFramebuffer
@@ -620,6 +621,8 @@ class DesktopMirrorEngine(
         val job = videoJob
         videoJob = null
         job?.cancel()
+        val serial = connectedSerial
+        val adb = devices.adbPath()
         synchronized(controlLock) {
             runCatching { controlOutput?.close() }
             controlOutput = null
@@ -635,12 +638,16 @@ class DesktopMirrorEngine(
         videoProcess = null
         videoForwardPort?.let { port ->
             forwardBridge?.beforeForwardClosed(port)
-            val adb = devices.adbPath()
-            if (adb != null && connectedSerial != null) {
-                runner.run(listOf(adb, "-s", connectedSerial!!, "forward", "--remove", "tcp:$port"), 3)
+            if (adb != null && serial != null) {
+                runner.run(listOf(adb, "-s", serial, "forward", "--remove", "tcp:$port"), 3)
             }
         }
         videoForwardPort = null
+        // Live may have lowered peak/min to maxFps; restore the launch ceiling so the
+        // guest is not left throttled after disconnect.
+        if (adb != null && serial != null && serial.isEmulatorSerial()) {
+            applyEmulatorGuestRefreshRate(adb, serial, emulatorVsyncRate())
+        }
         connectedSerial = null
         connectedConfig = null
         connectedAtNanos = 0L
@@ -919,12 +926,13 @@ class DesktopMirrorEngine(
     }
 
     /**
-     * Align system peak/min refresh (and preferred mode) with Live [maxFps] before scrcpy captures.
+     * Align system peak/min refresh (and preferred mode) with [rateHz] before scrcpy captures.
      * Launch `-vsync-rate` stays at [emulatorVsyncRate] (default 120) as a mode ceiling only —
      * Android still renders at Live maxFps (default 60) until these settings match.
+     * [tearDownSession] restores [emulatorVsyncRate] so a low Live cap does not stick.
      */
-    private suspend fun applyEmulatorGuestRefreshRate(adb: String, serial: String, maxFps: Int) {
-        val rate = maxFps.coerceIn(1, 240)
+    private suspend fun applyEmulatorGuestRefreshRate(adb: String, serial: String, rateHz: Int) {
+        val rate = rateHz.coerceIn(1, 240)
         // A display mode is a hardware-panel mode, so it must stay in the panel's natural
         // orientation. Passing the rotated logical size (for example 2424x1080) makes Android
         // reject/reset the mode and snap a force-rotated emulator back to portrait during the
