@@ -696,9 +696,13 @@ fn queue_panel_height(queued: &[QueuedFollowUp]) -> u16 {
     if queued.is_empty() {
         return 0;
     }
-    // One content row per visible item (+ optional “… more”), capped; +2 for borders.
-    let rows = 1u16.saturating_add(queued.len() as u16).min(MAX_QUEUE_PANEL_ROWS);
-    rows.saturating_add(2)
+    // Match render_queue_panel: up to (MAX-1) item rows, plus “… more” only when truncated.
+    let max_items = MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize;
+    let visible = queued.len().min(max_items);
+    let more_row = if queued.len() > visible { 1u16 } else { 0 };
+    (visible as u16)
+        .saturating_add(more_row)
+        .saturating_add(2) // borders
 }
 
 /// Pure key → action mapping for the ACP composer/viewer (unit-tested).
