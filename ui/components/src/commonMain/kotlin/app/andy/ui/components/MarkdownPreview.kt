@@ -246,7 +246,9 @@ private fun AndyMarkdown(
         markdownState = markdownState,
         colors = markdownColor(
             text = if (thinking) TextSecondary else TextPrimary,
-            codeBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.35f else 0.55f),
+            // Thinking/tool rows sit on a near-black aside — keep code chrome strong enough that a
+            // Read fragment's less-indented lines still read as inside the fence, not as body text.
+            codeBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.72f else 0.55f),
             inlineCodeBackground = AndyColors.Neutral700.copy(alpha = if (thinking) 0.45f else 0.72f),
             dividerColor = Border.copy(alpha = if (thinking) 0.35f else 0.45f),
             tableBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.4f else 0.65f),

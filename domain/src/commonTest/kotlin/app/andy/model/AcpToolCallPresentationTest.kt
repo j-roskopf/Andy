@@ -251,16 +251,63 @@ class AcpToolCallPresentationTest {
             """
             - **exitCode:** 0
             - **stdout:**
-            ```
-            first line
-            second line
-            ```
+              ```
+              first line
+              second line
+              ```
             - **stderr:** —
             """.trimIndent(),
             body,
         )
         assertEquals(listOf("first line\nsecond line"), AcpToolCallPresentation.payloadTextValues(payload))
         assertTrue(AcpToolCallPresentation.payloadTextValues("plain text output").isEmpty())
+    }
+
+    @Test
+    fun readContentFenceDedentsAndNestsUnderTheLabel() {
+        val snippet = """
+            |            variant == ChatBubbleVariant.Ghost -> Color.Transparent
+            |        }
+            |        val shape = chatBubbleShape(group, alignEnd)
+        """.trimMargin()
+        val escaped = snippet.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        val payload = """{"content":"$escaped"}"""
+
+        val body = AcpToolCallPresentation.displayDetail(payload)
+
+        assertEquals(
+            """
+            - **content:**
+              ```kotlin
+                  variant == ChatBubbleVariant.Ghost -> Color.Transparent
+              }
+              val shape = chatBubbleShape(group, alignEnd)
+              ```
+            """.trimIndent(),
+            body,
+        )
+    }
+
+    @Test
+    fun readContentFenceUsesPathExtensionForLanguage() {
+        val payload =
+            """{"path":"src/Main.kt","content":"    fun main() {\n        println(42)\n    }"}"""
+
+        val body = AcpToolCallPresentation.displayDetail(payload)
+
+        assertTrue(body.contains("```kotlin\n"))
+        assertTrue(body.contains("fun main() {"))
+        assertFalse(body.contains("    fun main() {"), "common indent should be stripped")
+    }
+
+    @Test
+    fun dedentCommonIndentPreservesRelativeStructure() {
+        val text = "        val a = 1\n            val b = 2\n        val c = 3"
+        assertEquals(
+            "val a = 1\n    val b = 2\nval c = 3",
+            AcpToolCallPresentation.dedentCommonIndent(text),
+        )
+        assertEquals("fun x() {}", AcpToolCallPresentation.dedentCommonIndent("fun x() {}"))
     }
 
     @Test

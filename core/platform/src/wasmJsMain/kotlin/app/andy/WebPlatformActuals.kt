@@ -93,7 +93,17 @@ actual fun formatDisplayDateTime(epochMillis: Long): String {
     return formatJsDisplayDateTime(epochMillis.toDouble()).toString()
 }
 
+actual fun formatDisplayTime(epochMillis: Long): String {
+    if (epochMillis <= 0L) return "-"
+    return formatJsDisplayTime(epochMillis.toDouble()).toString()
+}
+
 private fun formatJsDisplayDateTime(epochMillis: Double): JsString =
     js(
         "(new Date(epochMillis)).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })",
+    )
+
+private fun formatJsDisplayTime(epochMillis: Double): JsString =
+    js(
+        "(new Date(epochMillis)).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })",
     )

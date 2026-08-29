@@ -1,7 +1,10 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,17 +15,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
@@ -32,11 +48,12 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
+import app.andy.ui.theme.Green
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.andyTokens
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.painterResource
-import androidx.compose.foundation.Image
 
 enum class ChatBubbleSender {
     User,
@@ -85,28 +102,31 @@ fun ChatMessageBubble(
         ChatBubbleGroup.Middle, ChatBubbleGroup.Last -> -ChatBubbleGroupPullUp
         else -> 0.dp
     }
+    // Chat radius is 28dp — keep content clear of the curve. Metadata sits outside the
+    // bubble, so bottom padding stays full even when a copy/timestamp row follows.
+    val horizontalPad = AndySpace.Space4
     val verticalPadding = when (group) {
         ChatBubbleGroup.First -> PaddingValues(
-            start = AndySpace.Space3,
-            end = AndySpace.Space3,
-            top = AndySpace.Space2,
-            bottom = AndySpace.Space1,
-        )
-        ChatBubbleGroup.Middle -> PaddingValues(
-            start = AndySpace.Space3,
-            end = AndySpace.Space3,
-            top = AndySpace.Space1,
-            bottom = AndySpace.Space1,
-        )
-        ChatBubbleGroup.Last -> PaddingValues(
-            start = AndySpace.Space3,
-            end = AndySpace.Space3,
-            top = AndySpace.Space1,
+            start = horizontalPad,
+            end = horizontalPad,
+            top = AndySpace.Space3,
             bottom = AndySpace.Space2,
         )
+        ChatBubbleGroup.Middle -> PaddingValues(
+            start = horizontalPad,
+            end = horizontalPad,
+            top = AndySpace.Space2,
+            bottom = AndySpace.Space2,
+        )
+        ChatBubbleGroup.Last -> PaddingValues(
+            start = horizontalPad,
+            end = horizontalPad,
+            top = AndySpace.Space2,
+            bottom = AndySpace.Space3,
+        )
         ChatBubbleGroup.Single -> PaddingValues(
-            horizontal = AndySpace.Space3,
-            vertical = AndySpace.Space2,
+            horizontal = horizontalPad,
+            vertical = AndySpace.Space3,
         )
     }
     Column(
@@ -137,7 +157,18 @@ fun ChatMessageBubble(
                 content = content,
             )
             if (metadata != null) {
-                Column(Modifier.padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1)) {
+                // Keep copy under the bubble edge — fillMaxWidth here used to stretch user
+                // bubbles to the chat width and park the icon far from short skill pills.
+                Box(
+                    Modifier
+                        .align(if (alignEnd) Alignment.End else Alignment.Start)
+                        .padding(
+                            start = AndySpace.Space3,
+                            end = AndySpace.Space3,
+                            top = if (alignEnd) 2.dp else 0.dp,
+                            bottom = AndySpace.Space1,
+                        ),
+                ) {
                     metadata()
                 }
             }
@@ -172,7 +203,6 @@ fun ChatBubbleText(
 
 /**
  * Astryx ChatMessageMetadata — `timestamp · footer · status`.
- * Andy currently ships copy-only footer content.
  */
 @Composable
 fun ChatMessageMetadata(
@@ -185,9 +215,7 @@ fun ChatMessageMetadata(
     val hasContent = timestamp != null || footer != null || status != null
     if (!hasContent) return
     Row(
-        modifier
-            .padding(top = AndySpace.Space1)
-            .fillMaxWidth(),
+        modifier,
         horizontalArrangement = if (reverse) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -206,6 +234,8 @@ fun ChatMessageMetadata(
     }
 }
 
+private const val CopiedFeedbackMillis = 1_400L
+
 /** Icon-only copy control for [ChatMessageMetadata] footer. */
 @Composable
 fun ChatMessageCopyAction(
@@ -214,17 +244,48 @@ fun ChatMessageCopyAction(
 ) {
     if (text.isBlank()) return
     val copyText = rememberCopyText()
-    IconButton(
-        onClick = { copyText(text) },
-        modifier = modifier.size(28.dp),
-        contentDescription = "Copy message",
-    ) {
-        Image(
-            painter = painterResource(Res.drawable.markdown_copy),
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-            colorFilter = ColorFilter.tint(TextSecondary.copy(alpha = 0.72f)),
-        )
+    var justCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(justCopied) {
+        if (!justCopied) return@LaunchedEffect
+        delay(CopiedFeedbackMillis)
+        justCopied = false
+    }
+    // Material's default 48dp touch target leaves a large empty gap under short bubbles.
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+        Tooltip(text = "Copied", forceVisible = justCopied, delayMillis = 0) {
+            Box(
+                modifier
+                    .size(16.dp)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .semantics {
+                        role = Role.Button
+                        contentDescription = if (justCopied) "Copied" else "Copy message"
+                    }
+                    .clickable(onClickLabel = "Copy message", enabled = !justCopied) {
+                        copyText(text)
+                        justCopied = true
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (justCopied) {
+                    Text(
+                        "✓",
+                        color = Green,
+                        fontSize = 12.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(Res.drawable.markdown_copy),
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        colorFilter = ColorFilter.tint(TextSecondary.copy(alpha = 0.72f)),
+                    )
+                }
+            }
+        }
     }
 }
 

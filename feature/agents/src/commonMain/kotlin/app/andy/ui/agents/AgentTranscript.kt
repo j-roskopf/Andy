@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -84,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import app.andy.formatDisplayTime
 import app.andy.loadImageBitmap
 import app.andy.domain.ToolCallFileContent
 import app.andy.domain.detectUnifiedDiff
@@ -210,6 +210,8 @@ fun AgentTranscript(
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
     originalSkills: List<AgentSkill> = emptyList(),
+    /** Wall time for the launch prompt bubble when it is synthesized (not from [AgentEvent.UserMessage]). */
+    originalPromptAtMillis: Long? = null,
     completedContent: (@Composable () -> Unit)? = null,
     /** Scrolls with the transcript on the live edge, below pending input and above events. */
     trailingContent: (@Composable () -> Unit)? = null,
@@ -577,6 +579,9 @@ fun AgentTranscript(
                                 metadata = originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
                                     {
                                         ChatMessageMetadata(
+                                            timestamp = originalPromptAtMillis
+                                                ?.takeIf { it > 0L }
+                                                ?.let(::formatDisplayTime),
                                             reverse = true,
                                             footer = { ChatMessageCopyAction(prompt) },
                                         )
@@ -996,6 +1001,7 @@ private fun TranscriptEvent(
                 metadata = copyText?.let { text ->
                     {
                         ChatMessageMetadata(
+                            timestamp = event.atMillis.takeIf { it > 0L }?.let(::formatDisplayTime),
                             reverse = true,
                             footer = { ChatMessageCopyAction(text) },
                         )
@@ -2137,9 +2143,10 @@ private fun codeLanguageForPath(path: String?): String = when (path?.substringAf
 
 /** Wraps [body] in a Markdown fence long enough to survive any backtick runs already inside it. */
 private fun fencedCodeBlock(body: String, language: String = ""): String {
-    val longestRun = Regex("`+").findAll(body).maxOfOrNull { it.value.length } ?: 0
+    val dedented = AcpToolCallPresentation.dedentCommonIndent(body.trimEnd())
+    val longestRun = Regex("`+").findAll(dedented).maxOfOrNull { it.value.length } ?: 0
     val fence = "`".repeat(maxOf(3, longestRun + 1))
-    return "$fence$language\n$body\n$fence"
+    return "$fence$language\n$dedented\n$fence"
 }
 
 @Composable
@@ -2245,17 +2252,7 @@ private fun TranscriptExpandableRow(
                         },
                     ),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (expandable) {
-                    Text(
-                        if (expanded) "v" else ">",
-                        color = headlineColor.copy(alpha = 0.7f),
-                        fontFamily = MonoFont,
-                        fontSize = 11.sp,
-                        modifier = Modifier.width(10.dp),
-                    )
-                }
                 if (headlineContent != null) {
                     Box(Modifier.weight(1f, fill = false)) { headlineContent() }
                 } else {
