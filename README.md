@@ -308,7 +308,8 @@ andy chat list
 andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
 andy attach <taskId>
 andy project list
-andy --remote user@host.local chat list   # SSH-tunnel ~/.andy/andyd.sock
+andy remote user@host.local               # subshell: andy cmds hit remote andyd
+andy --remote user@host.local chat list   # one-shot SSH tunnel
 
 # Device / network scripting (same MCP socket)
 andy device list

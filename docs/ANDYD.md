@@ -147,8 +147,13 @@ andy chat start --no-attach --agent ClaudeCode "fire and forget JSON only"
 andy attach <taskId>           # ACP: native viewer · Terminal: tmux (or quiet reattach)
 andy tui                       # n new chat · grouped projects · a / Enter attach
 andy chat resume <taskId> "…"  # when quiet reattach isn't possible
-andy --remote user@mac.local chat list   # SSH tunnel the socket
+andy remote user@mac.local     # subshell tunneled to remote andyd (exit to disconnect)
+andy --remote user@mac.local chat list   # one-shot SSH tunnel
 ```
+
+`andy remote` mirrors the GUI Host switcher: it forwards `~/.andy/andyd.sock` over
+SSH, sets `ANDY_SOCKET` / `ANDY_REMOTE` in a child shell, then tears the tunnel down
+when that shell exits. The remote host must already be running `andyd`.
 
 ### Remote access from mobile (SSH + Tailscale)
 

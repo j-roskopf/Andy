@@ -7,13 +7,13 @@ use andy_cli::device_cli::{
 };
 use andy_cli::file_picker;
 use andy_cli::mcp::{default_socket_path, McpClient};
+use andy_cli::remote::{self, RemoteTunnel};
 use andy_cli::tool_cmd::{self, ToolCmd};
 use andy_cli::tui;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -24,11 +24,11 @@ use std::process::Command;
 use `andy tool call` for any MCP tool by name. Device serial: --serial or ANDY_SERIAL."
 )]
 struct Cli {
-    /// Path to andyd unix socket
+    /// Path to andyd unix socket (also: ANDY_SOCKET)
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
 
-    /// SSH host to tunnel the andyd socket from (macOS/Linux remote)
+    /// SSH host to tunnel the andyd socket from (one-shot; see also `andy remote`)
     #[arg(long, global = true)]
     remote: Option<String>,
 
@@ -83,6 +83,11 @@ enum Commands {
     /// Generic MCP tool list / call (full parity escape hatch)
     #[command(subcommand)]
     Tool(ToolCmd),
+    /// Open a shell tunneled to a remote andyd (GUI Host switcher)
+    Remote {
+        /// user@host or ssh Host alias
+        target: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -130,9 +135,22 @@ enum ProjectCmd {
 async fn main() -> Result<()> {
     daemon::ensure_unix_platform()?;
     let cli = Cli::parse();
-    let socket = resolve_socket(&cli).await?;
+
+    if let Commands::Remote { target } = &cli.command {
+        if cli.remote.is_some() {
+            anyhow::bail!("do not combine `andy remote` with --remote; use one or the other");
+        }
+        if cli.socket.is_some() {
+            anyhow::bail!("do not combine `andy remote` with --socket");
+        }
+        return remote::run_session(target);
+    }
+
+    // Keep the tunnel alive for the whole command when --remote is set.
+    let mut tunnel: Option<RemoteTunnel> = None;
+    let socket = resolve_socket(&cli, &mut tunnel)?;
     let json_out = cli.json;
-    let ensure_local_daemon = cli.remote.is_none();
+    let ensure_local_daemon = cli.remote.is_none() && std::env::var_os("ANDY_REMOTE").is_none();
 
     match cli.command {
         Commands::Tui => tui::run_dashboard(socket, ensure_local_daemon).await?,
@@ -144,6 +162,7 @@ async fn main() -> Result<()> {
             dispatch_command(cmd, &mut client, json_out).await?;
         }
     }
+    drop(tunnel);
     Ok(())
 }
 
@@ -255,47 +274,26 @@ async fn dispatch_command(cmd: Commands, client: &mut McpClient, json_out: bool)
         Commands::File(cmd) => device_cli::run_file(client, cmd, json_out).await?,
         Commands::Network(cmd) => device_cli::run_network(client, cmd, json_out).await?,
         Commands::Tool(cmd) => tool_cmd::run_tool(client, cmd, json_out).await?,
-        Commands::Tui => unreachable!("handled in main"),
+        Commands::Tui | Commands::Remote { .. } => unreachable!("handled in main"),
     }
     Ok(())
 }
 
-async fn resolve_socket(cli: &Cli) -> Result<PathBuf> {
-    let Some(remote) = cli.remote.as_deref() else {
-        return Ok(cli.socket.clone().unwrap_or_else(default_socket_path));
-    };
-
-    // Always bind the forward to a fresh local path so an existing ~/.andy/andyd.sock
-    // is never mistaken for the remote tunnel.
-    let local = PathBuf::from(format!(
-        "/tmp/andy-remote-local-{}.sock",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&local);
-    let remote_path = "~/.andy/andyd.sock";
-    let status = Command::new("ssh")
-        .args([
-            "-f",
-            "-N",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-L",
-            &format!("{}:{}", local.display(), remote_path),
-            remote,
-        ])
-        .status()
-        .with_context(|| format!("ssh tunnel to {remote}"))?;
-    if !status.success() {
-        anyhow::bail!("ssh tunnel to {remote} failed with status {status}");
+fn resolve_socket(cli: &Cli, tunnel_out: &mut Option<RemoteTunnel>) -> Result<PathBuf> {
+    if let Some(remote) = cli.remote.as_deref() {
+        let tunnel = remote::open_tunnel(remote)?;
+        let path = tunnel.local_socket().to_path_buf();
+        *tunnel_out = Some(tunnel);
+        return Ok(path);
     }
-    for _ in 0..20 {
-        if local.exists() {
-            return Ok(local);
+    if let Some(socket) = &cli.socket {
+        return Ok(socket.clone());
+    }
+    if let Ok(path) = std::env::var("ANDY_SOCKET") {
+        let path = PathBuf::from(path);
+        if !path.as_os_str().is_empty() {
+            return Ok(path);
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    anyhow::bail!(
-        "ssh tunnel to {remote} did not create local socket at {}",
-        local.display()
-    )
+    Ok(default_socket_path())
 }
