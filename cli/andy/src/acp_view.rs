@@ -568,8 +568,10 @@ fn toggle_last_tool_expand(state: &mut ViewState) {
     }
 }
 
-fn follow_up_tool_for_status(status: &str) -> &'static str {
-    if matches!(status, "Working" | "Blocked" | "Stopping") {
+fn follow_up_tool_for_status(status: &str, has_queued: bool) -> &'static str {
+    // Preserve FIFO when a stopped/idle chat still has queued items — resume
+    // would jump the newly typed message ahead of the existing queue.
+    if has_queued || matches!(status, "Working" | "Blocked" | "Stopping") {
         "chat.queue_follow_up"
     } else {
         "chat.resume"
@@ -842,7 +844,7 @@ async fn submit_follow_up(
         state.queued_follow_ups = snap.queued_follow_ups;
         state.prefer_queue = snap.prefer_queue;
     }
-    let tool = follow_up_tool_for_status(&state.status);
+    let tool = follow_up_tool_for_status(&state.status, !state.queued_follow_ups.is_empty());
     refresh_cached_skills(meta, state);
     let selected = skills_referenced_in_prompt(&text, &state.cached_skills);
     let follow_up = if text.is_empty() {
@@ -1714,12 +1716,22 @@ mod tests {
 
     #[test]
     fn follow_up_routes_active_status_to_queue() {
-        assert_eq!(follow_up_tool_for_status("Done"), "chat.resume");
-        assert_eq!(follow_up_tool_for_status("Idle"), "chat.resume");
-        assert_eq!(follow_up_tool_for_status("Working"), "chat.queue_follow_up");
-        assert_eq!(follow_up_tool_for_status("Blocked"), "chat.queue_follow_up");
+        assert_eq!(follow_up_tool_for_status("Done", false), "chat.resume");
+        assert_eq!(follow_up_tool_for_status("Idle", false), "chat.resume");
         assert_eq!(
-            follow_up_tool_for_status("Stopping"),
+            follow_up_tool_for_status("Done", true),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Working", false),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Blocked", false),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Stopping", false),
             "chat.queue_follow_up"
         );
     }
