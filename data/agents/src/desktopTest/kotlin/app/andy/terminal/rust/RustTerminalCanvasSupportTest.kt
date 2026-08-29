@@ -29,6 +29,48 @@ class RustTerminalCanvasSupportTest {
     }
 
     @Test
+    fun ctrlCEncodesSigintWhenAwtDeliversEtxCodePoint() {
+        // Real Compose Desktop events: AWT keyChar for Ctrl+C is ETX (0x03), not 'c'.
+        assertEquals(
+            listOf(0x03),
+            encodeTerminalKey(keyEvent(Key.C, ctrl = true, codePoint = 0x03))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlDEncodesEofWhenAwtDeliversEotCodePoint() {
+        assertEquals(
+            listOf(0x04),
+            encodeTerminalKey(keyEvent(Key.D, ctrl = true, codePoint = 0x04))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun altGrPrintableSurvivesWhenAwtReportsCtrl() {
+        // German AltGr+Q → '@'; AWT often exposes AltGr as Ctrl+Alt with a printable code point.
+        assertEquals(
+            listOf('@'.code),
+            encodeTerminalKey(keyEvent(Key.Q, ctrl = true, codePoint = '@'.code))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlEnterKeepsCarriageReturnWhenAwtDeliversLf() {
+        assertEquals(
+            listOf('\r'.code),
+            encodeTerminalKey(keyEvent(Key.Enter, ctrl = true, codePoint = 0x0A))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlBackspaceKeepsDeleteWhenAwtDeliversBs() {
+        assertEquals(
+            listOf(0x7F),
+            encodeTerminalKey(keyEvent(Key.Backspace, ctrl = true, codePoint = 0x08))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
     fun modifierOnlyKeysAreNotEncoded() {
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftLeft)))
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftRight)))

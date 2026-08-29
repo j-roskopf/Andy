@@ -82,44 +82,45 @@ internal fun encodeTerminalKey(event: KeyEvent): ByteArray? {
 }
 
 private fun encodeCtrl(event: KeyEvent): ByteArray? {
-    val ch = when {
-        event.utf16CodePoint != 0 && Character.isValidCodePoint(event.utf16CodePoint) ->
-            event.utf16CodePoint.toChar().lowercaseChar()
-        else -> ctrlLetterFromKey(event.key) ?: return null
+    val cp = event.utf16CodePoint
+    // AWT KEY_PRESSED for Ctrl+letter sets keyChar to the C0 control (Ctrl+C → ETX
+    // 0x03), not the letter. Prefer the physical key only in that case (or when no
+    // useful char arrived). Printable code points with Ctrl held — e.g. AltGr exposed
+    // as Ctrl+Alt producing '@' — must fall through to the UTF-8 path.
+    val codePointIsC0OrMissing =
+        cp == 0 || cp == KEY_CHAR_UNDEFINED || cp in 0x01..0x1F
+
+    if (codePointIsC0OrMissing) {
+        ctrlLetterFromKey(event.key)?.let { letter ->
+            return byteArrayOf((letter.code - 'a'.code + 1).toByte())
+        }
+        // Named keys have explicit encodings in encodeTerminalKey; don't override
+        // them with AWT's raw C0 (Ctrl+Enter → LF, Ctrl+Backspace → BS).
+        if (event.key.hasNamedTerminalEncoding()) return null
+        if (cp in 0x01..0x1F) {
+            return byteArrayOf(cp.toByte())
+        }
+        return null
     }
+
+    if (!Character.isValidCodePoint(cp)) return null
+    val ch = cp.toChar().lowercaseChar()
     val ctrl = when (ch) {
-        'a' -> 0x01
-        'b' -> 0x02
-        'c' -> 0x03
-        'd' -> 0x04
-        'e' -> 0x05
-        'f' -> 0x06
-        'g' -> 0x07
-        'h' -> 0x08
-        'i' -> 0x09
-        'j' -> 0x0A
-        'k' -> 0x0B
-        'l' -> 0x0C
-        'm' -> 0x0D
-        'n' -> 0x0E
-        'o' -> 0x0F
-        'p' -> 0x10
-        'q' -> 0x11
-        'r' -> 0x12
-        's' -> 0x13
-        't' -> 0x14
-        'u' -> 0x15
-        'v' -> 0x16
-        'w' -> 0x17
-        'x' -> 0x18
-        'y' -> 0x19
-        'z' -> 0x1A
+        in 'a'..'z' -> ch.code - 'a'.code + 1
         '[' -> 0x1B
         '\\' -> 0x1C
         ']' -> 0x1D
         else -> return null
     }
     return byteArrayOf(ctrl.toByte())
+}
+
+private fun Key.hasNamedTerminalEncoding(): Boolean = when (this) {
+    Key.Enter, Key.NumPadEnter, Key.Tab, Key.Backspace, Key.Escape,
+    Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight,
+    Key.MoveHome, Key.MoveEnd, Key.PageUp, Key.PageDown, Key.Delete,
+    -> true
+    else -> false
 }
 
 private fun ctrlLetterFromKey(key: Key): Char? = when (key) {
