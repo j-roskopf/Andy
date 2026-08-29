@@ -857,13 +857,30 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
         val imagePaths = parseImagePathsArg(args)
+        val queuedBefore = agentRuns.tasks.value.excludingTemporary()
+            .firstOrNull { it.id == id }
+            ?.queuedFollowUps
+            ?.size
+            ?: 0
         agentRuns.queueFollowUp(
             id,
             followUp,
             imagePaths = imagePaths,
             contextBundleIds = strList(args, "contextBundleIds"),
         )
-        textResult("""{"ok":true,"id":"$id"}""")
+        val queuedAfter = agentRuns.tasks.value.excludingTemporary()
+            .firstOrNull { it.id == id }
+            ?.queuedFollowUps
+            ?.size
+            ?: 0
+        // Immediate delivery injects into the live session without growing the queue.
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("id", id)
+                put("queued", queuedAfter > queuedBefore)
+            }.toString(),
+        )
     }
 
     register(
@@ -967,22 +984,60 @@ fun Server.registerAgentProjectTools(
         description = "Get live session status for a chat",
         properties = mapOf(
             "taskId" to buildJsonObject { put("type", "string") },
+            "includeTmuxAlive" to buildJsonObject {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "When false, skip the tmux liveness probe (safe for high-frequency ACP polls). Default true.",
+                )
+            },
         ),
         required = listOf("taskId"),
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
+        val includeTmuxAlive = args["includeTmuxAlive"]?.jsonPrimitive?.booleanOrNull ?: true
         val task = agentRuns.tasks.value.excludingTemporary().firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
                 put("id", id)
+                put("title", task?.title.orEmpty())
                 put("status", task?.status?.name.orEmpty())
                 put("lane", task?.lane?.name.orEmpty())
                 put("autonomy", task?.autonomy?.name.orEmpty())
                 put("statusConfident", task?.statusConfident ?: false)
-                put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
+                put(
+                    "tmuxAlive",
+                    // Prefer the cached list-sessions snapshot; optional skip for ACP pollers.
+                    includeTmuxAlive && TmuxAndy.isAvailable() && TmuxAndy.sessionExists(id),
+                )
                 put("tmuxSession", TmuxAndy.sessionName(id))
                 put("cwd", task?.cwd.orEmpty())
                 put("originDir", task?.originDir.orEmpty())
+                put(
+                    "messageDeliveryMode",
+                    (agentRuns as? DesktopAgentRunService)
+                        ?.agentMessageDeliveryMode()
+                        ?.name
+                        ?: "Immediate",
+                )
+                // CLI attach viewer polls this for the queue panel; keep shape aligned with chat.list.
+                task?.queuedFollowUps?.takeIf { it.isNotEmpty() }?.let { queuedFollowUps ->
+                    put(
+                        "queuedFollowUps",
+                        buildJsonArray {
+                            queuedFollowUps.forEach { queued ->
+                                add(
+                                    buildJsonObject {
+                                        put("text", queued.text)
+                                        put("contextBundleIds", buildJsonArray {
+                                            queued.contextBundleIds.forEach { bid -> add(JsonPrimitive(bid)) }
+                                        })
+                                    },
+                                )
+                            }
+                        },
+                    )
+                }
             }.toString(),
         )
     }

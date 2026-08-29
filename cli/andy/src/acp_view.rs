@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde_json::{json, Value};
 use std::io::{stdout, Stdout};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -35,17 +35,33 @@ use crate::slash::{
 use crate::viewer_chrome::{self, Lane};
 
 const DETAIL_TRUNCATE_LINES: usize = 40;
+const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_QUEUE_PANEL_ROWS: u16 = 6;
 
 #[derive(Debug, Clone)]
 struct ChatMeta {
     id: String,
     title: String,
     status: String,
+    queued_follow_ups: Vec<QueuedFollowUp>,
     agent: Option<String>,
     #[allow(dead_code)]
     lane: String,
     cwd: String,
     origin_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueuedFollowUp {
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct LiveSnapshot {
+    status: String,
+    queued_follow_ups: Vec<QueuedFollowUp>,
+    /// True when workspace delivery mode is Queue (vs Immediate inject).
+    prefer_queue: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +73,9 @@ enum ConnectionIssue {
 struct ViewState {
     events: Vec<AgentEvent>,
     status: String,
+    queued_follow_ups: Vec<QueuedFollowUp>,
+    /// Workspace AgentMessageDeliveryMode == Queue.
+    prefer_queue: bool,
     input: String,
     image_paths: Vec<String>,
     scroll: u16,
@@ -79,6 +98,8 @@ struct ViewState {
     /// Disk skills cached outside the render/poll loop (keyed by provider + workspace).
     cached_skills: Vec<AgentSkill>,
     cached_skills_key: Option<(String, String)>,
+    /// Drives the Working… spinner in the transcript presence line.
+    presence_started: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +146,8 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
         let mut state = ViewState {
             events: Vec::new(),
             status: meta.status.clone(),
+            queued_follow_ups: meta.queued_follow_ups.clone(),
+            prefer_queue: false,
             input: String::new(),
             image_paths: Vec::new(),
             scroll: 0,
@@ -141,6 +164,7 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             slash_menu: SlashMenuState::default(),
             cached_skills: Vec::new(),
             cached_skills_key: None,
+            presence_started: Instant::now(),
         };
 
         loop {
@@ -235,9 +259,22 @@ async fn run_loop(
     syntax_set: &SyntaxSet,
     theme: &syntect::highlighting::Theme,
 ) -> Result<LoopAction> {
+    let mut last_status_poll = Instant::now()
+        .checked_sub(STATUS_POLL_INTERVAL)
+        .unwrap_or_else(Instant::now);
     loop {
         while let Ok(msg) = rx.try_recv() {
             apply_subscribe_message(state, msg);
+        }
+
+        if last_status_poll.elapsed() >= STATUS_POLL_INTERVAL {
+            refresh_live_state(client, &meta.id, state).await;
+            last_status_poll = Instant::now();
+            // Finished closes subscribe; another client (or auto-dispatched queue)
+            // may start a new turn — reopen so we receive its transcript events.
+            if is_active_status(&state.status) && !state.subscribe_open {
+                return Ok(LoopAction::Retry);
+            }
         }
 
         let slash_commands = available_slash_commands(meta, state);
@@ -531,8 +568,10 @@ fn toggle_last_tool_expand(state: &mut ViewState) {
     }
 }
 
-fn follow_up_tool_for_status(status: &str) -> &'static str {
-    if matches!(status, "Working" | "Blocked" | "Stopping") {
+fn follow_up_tool_for_status(status: &str, has_queued: bool) -> &'static str {
+    // Preserve FIFO when a stopped/idle chat still has queued items — resume
+    // would jump the newly typed message ahead of the existing queue.
+    if has_queued || matches!(status, "Working" | "Blocked" | "Stopping") {
         "chat.queue_follow_up"
     } else {
         "chat.resume"
@@ -553,15 +592,121 @@ fn apply_stop_success(state: &mut ViewState, daemon_status: Option<String>) {
 }
 
 async fn fetch_task_status(client: &mut McpClient, task_id: &str) -> Option<String> {
+    fetch_live_snapshot(client, task_id)
+        .await
+        .map(|snap| snap.status)
+        .filter(|s| !s.is_empty())
+}
+
+async fn fetch_live_snapshot(client: &mut McpClient, task_id: &str) -> Option<LiveSnapshot> {
     let raw = client
-        .call_tool("chat.status", json!({ "taskId": task_id }))
+        .call_tool(
+            "chat.status",
+            // Skip tmux probe — this path runs every 2s and only needs status/queue/mode.
+            json!({ "taskId": task_id, "includeTmuxAlive": false }),
+        )
         .await
         .ok()?;
     let v: Value = serde_json::from_str(&raw).ok()?;
-    v.get("status")
-        .and_then(|s| s.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+    Some(parse_live_snapshot(&v))
+}
+
+fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
+    LiveSnapshot {
+        status: v
+            .get("status")
+            .or_else(|| v.get("taskStatus"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        queued_follow_ups: parse_queued_follow_ups(v.get("queuedFollowUps")),
+        prefer_queue: v
+            .get("messageDeliveryMode")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("Queue")),
+    }
+}
+
+fn parse_queued_follow_ups(value: Option<&Value>) -> Vec<QueuedFollowUp> {
+    let Some(Value::Array(items)) = value else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .map(|item| QueuedFollowUp {
+            text: item
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string(),
+        })
+        .collect()
+}
+
+async fn refresh_live_state(client: &mut McpClient, task_id: &str, state: &mut ViewState) {
+    // Don't clobber local Error/Stopping/connection UI with a stale poll.
+    if state.connection_issue.is_some() {
+        return;
+    }
+    let Some(snap) = fetch_live_snapshot(client, task_id).await else {
+        return;
+    };
+    state.prefer_queue = snap.prefer_queue;
+    if !snap.status.is_empty()
+        && !matches!(state.status.as_str(), "Stopping")
+        && state.status != snap.status
+    {
+        let was_active = is_active_status(&state.status);
+        state.status = snap.status;
+        if is_active_status(&state.status) && !was_active {
+            state.presence_started = Instant::now();
+        }
+        state.composer_enabled = !matches!(state.status.as_str(), "Error" | "Failed" | "Stopped");
+    }
+    state.queued_follow_ups = snap.queued_follow_ups;
+}
+
+fn is_active_status(status: &str) -> bool {
+    matches!(status, "Working" | "Blocked" | "Stopping")
+}
+
+/// Transcript presence line mirroring the desktop Working orb.
+fn presence_label(status: &str) -> Option<&'static str> {
+    match status {
+        "Working" => Some("Working"),
+        "Blocked" => Some("Blocked — waiting"),
+        "Stopping" => Some("Stopping"),
+        _ => None,
+    }
+}
+
+fn presence_spinner(started: Instant) -> char {
+    const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let idx = (started.elapsed().as_millis() / 120) as usize % FRAMES.len();
+    FRAMES[idx]
+}
+
+/// Fixed footer line for Working/Blocked/Stopping — rendered outside the
+/// scrollable transcript so long backlogs do not hide the presence signal.
+fn presence_line(status: &str, started: Instant) -> Option<Line<'static>> {
+    let label = presence_label(status)?;
+    Some(Line::from(Span::styled(
+        format!("  {} {label}…", presence_spinner(started)),
+        Style::default().fg(Color::DarkGray),
+    )))
+}
+
+fn queue_panel_height(queued: &[QueuedFollowUp]) -> u16 {
+    if queued.is_empty() {
+        return 0;
+    }
+    // Match render_queue_panel: up to (MAX-1) item rows, plus “… more” only when truncated.
+    let max_items = MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize;
+    let visible = queued.len().min(max_items);
+    let more_row = if queued.len() > visible { 1u16 } else { 0 };
+    (visible as u16)
+        .saturating_add(more_row)
+        .saturating_add(2) // borders
 }
 
 /// Pure key → action mapping for the ACP composer/viewer (unit-tested).
@@ -700,10 +845,14 @@ async fn submit_follow_up(
     // Subscribe carries transcript events, not status transitions. Another client
     // (GUI) may have started a turn while this viewer still shows Done — refresh
     // authoritative status before choosing resume vs queue.
-    if let Some(daemon_status) = fetch_task_status(client, &meta.id).await {
-        state.status = daemon_status;
+    if let Some(snap) = fetch_live_snapshot(client, &meta.id).await {
+        if !snap.status.is_empty() {
+            state.status = snap.status;
+        }
+        state.queued_follow_ups = snap.queued_follow_ups;
+        state.prefer_queue = snap.prefer_queue;
     }
-    let tool = follow_up_tool_for_status(&state.status);
+    let tool = follow_up_tool_for_status(&state.status, !state.queued_follow_ups.is_empty());
     refresh_cached_skills(meta, state);
     let selected = skills_referenced_in_prompt(&text, &state.cached_skills);
     let follow_up = if text.is_empty() {
@@ -718,14 +867,36 @@ async fn submit_follow_up(
     if !state.image_paths.is_empty() {
         args["imagePaths"] = json!(state.image_paths);
     }
-    client
+    let raw = client
         .call_tool(tool, args)
         .await
         .with_context(|| tool.to_string())?;
     state.input.clear();
     state.image_paths.clear();
-    state.status = "Working".into();
-    state.status_flash = Some(format!("sent via {tool}"));
+    if tool == "chat.queue_follow_up" {
+        let queued = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("queued").and_then(|q| q.as_bool()))
+            .unwrap_or(state.prefer_queue);
+        if queued {
+            // Optimistic local append; the 2s status poll reconciles with the daemon.
+            state.queued_follow_ups.push(QueuedFollowUp {
+                text: follow_up.clone(),
+            });
+            state.status_flash = Some(format!("queued via {tool}"));
+        } else {
+            // Immediate delivery injects into the live ACP session.
+            state.status = "Working".into();
+            state.presence_started = Instant::now();
+            state.status_flash = Some(format!("sent via {tool}"));
+            refresh_live_state(client, &meta.id, state).await;
+        }
+    } else {
+        state.status = "Working".into();
+        state.presence_started = Instant::now();
+        state.status_flash = Some(format!("sent via {tool}"));
+        refresh_live_state(client, &meta.id, state).await;
+    }
     // Daemon closes subscribe on terminal status; continuing the chat needs a new stream
     // or the viewer stays stale until the user exits and reattaches.
     Ok(!state.subscribe_open)
@@ -793,11 +964,13 @@ fn draw(
     theme: &syntect::highlighting::Theme,
 ) {
     let area = frame.area();
+    let queue_h = queue_panel_height(&state.queued_follow_ups);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(5),
+            Constraint::Length(queue_h),
             Constraint::Length(menu_height(&state.slash_menu)),
             Constraint::Length(3),
             Constraint::Length(
@@ -822,19 +995,51 @@ fn draw(
         chunks[0],
     );
 
-    let body = render_transcript(state, skin, syntax_set, theme, chunks[1].width);
     let transcript_title = if state.show_details {
         " Transcript · details "
     } else {
         " Transcript "
     };
+    let transcript_block = Block::default()
+        .borders(Borders::ALL)
+        .title(transcript_title);
+    let transcript_inner = transcript_block.inner(chunks[1]);
+    frame.render_widget(transcript_block, chunks[1]);
+
+    let presence = presence_line(&state.status, state.presence_started);
+    let presence_h = if presence.is_some() { 1u16 } else { 0 };
+    let transcript_parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(presence_h)])
+        .split(transcript_inner);
+
+    let body = render_transcript(state, skin, syntax_set, theme, transcript_parts[0].width);
     frame.render_widget(
         Paragraph::new(body)
             .wrap(Wrap { trim: false })
-            .scroll((state.scroll, 0))
-            .block(Block::default().borders(Borders::ALL).title(transcript_title)),
-        chunks[1],
+            .scroll((state.scroll, 0)),
+        transcript_parts[0],
     );
+    if let Some(line) = presence {
+        frame.render_widget(Paragraph::new(line), transcript_parts[1]);
+    }
+
+    if queue_h > 0 {
+        let queue_block = Block::default().borders(Borders::ALL).title(format!(
+            " Queue · {} ",
+            state.queued_follow_ups.len()
+        ));
+        let queue_inner = queue_block.inner(chunks[2]);
+        frame.render_widget(queue_block, chunks[2]);
+        // Truncate to the inner width and skip wrap so height stays 1 row/item.
+        frame.render_widget(
+            Paragraph::new(render_queue_panel(
+                &state.queued_follow_ups,
+                queue_inner.width,
+            )),
+            queue_inner,
+        );
+    }
 
     let chips = if state.image_paths.is_empty() {
         String::new()
@@ -852,6 +1057,13 @@ fn draw(
             .collect::<Vec<_>>()
             .join(" ")
     };
+    let will_queue = !state.queued_follow_ups.is_empty()
+        || (state.prefer_queue && is_active_status(&state.status));
+    let composer_title = if will_queue {
+        " Follow-up · will queue "
+    } else {
+        " Follow-up "
+    };
     let composer = if let Some(err) = &state.connection_error {
         format!(" {err} ")
     } else if !state.composer_enabled {
@@ -860,10 +1072,14 @@ fn draw(
         format!(" {chips}{} ", state.input)
     };
     frame.render_widget(
-        Paragraph::new(composer).block(Block::default().borders(Borders::ALL).title(" Follow-up ")),
-        chunks[3],
+        Paragraph::new(composer).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(composer_title),
+        ),
+        chunks[4],
     );
-    render_menu(frame, chunks[2], &state.slash_menu);
+    render_menu(frame, chunks[3], &state.slash_menu);
 
     let footer = if state.connection_issue == Some(ConnectionIssue::Lost) {
         " Lost connection to andyd — press r to retry, q/Esc to quit ".to_string()
@@ -877,7 +1093,7 @@ fn draw(
     } else {
         viewer_chrome::format_status_line(Lane::Acp, state.status_flash.as_deref())
     };
-    frame.render_widget(Paragraph::new(footer), chunks[4]);
+    frame.render_widget(Paragraph::new(footer), chunks[5]);
 }
 
 /// Conversation-only visibility (default). Mirrors the GUI hiding AvailableCommands /
@@ -1094,6 +1310,40 @@ fn render_transcript(
     Text::from(lines)
 }
 
+fn render_queue_panel(queued: &[QueuedFollowUp], content_width: u16) -> Text<'static> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let visible = queued.len().min(MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize);
+    // Leave room for "  N. " prefix (up to two digits) so previews never wrap.
+    let max_preview = content_width.saturating_sub(6).max(8) as usize;
+    for (idx, item) in queued.iter().take(visible).enumerate() {
+        let preview = if item.text.trim().is_empty() {
+            "images attached".to_string()
+        } else {
+            truncate_chars(&item.text, max_preview)
+        };
+        lines.push(Line::from(format!("  {}. {preview}", idx + 1)));
+    }
+    if queued.len() > visible {
+        lines.push(Line::from(Span::styled(
+            format!("  … {} more", queued.len() - visible),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    Text::from(lines)
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn markdown_lines(skin: &MadSkin, text: &str, width: u16) -> Vec<Line<'static>> {
     // termimad renders markdown by writing crossterm ANSI escape codes
     // directly into the string it returns. Ratatui doesn't interpret those
@@ -1194,6 +1444,7 @@ async fn load_meta(client: &mut McpClient, task_id: &str) -> Result<ChatMeta> {
         .await
         .context("chat.status")?;
     let status_v: Value = serde_json::from_str(&status_raw).unwrap_or(Value::Null);
+    let snap = parse_live_snapshot(&status_v);
     let list_raw = client
         .call_tool("chat.list", Value::Object(Default::default()))
         .await
@@ -1203,18 +1454,29 @@ async fn load_meta(client: &mut McpClient, task_id: &str) -> Result<ChatMeta> {
         arr.iter()
             .find(|e| e.get("id").and_then(|id| id.as_str()) == Some(task_id))
     });
+    let queued = if snap.queued_follow_ups.is_empty() {
+        parse_queued_follow_ups(row.and_then(|r| r.get("queuedFollowUps")))
+    } else {
+        snap.queued_follow_ups
+    };
     Ok(ChatMeta {
         id: task_id.to_string(),
-        title: row
-            .and_then(|r| r.get("title"))
+        title: status_v
+            .get("title")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| row.and_then(|r| r.get("title")).and_then(|v| v.as_str()))
             .unwrap_or(task_id)
             .to_string(),
-        status: status_v
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        status: if snap.status.is_empty() {
+            row.and_then(|r| r.get("status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            snap.status
+        },
+        queued_follow_ups: queued,
         agent: row
             .and_then(|r| r.get("agent"))
             .and_then(|v| v.as_str())
@@ -1292,6 +1554,8 @@ mod tests {
         ViewState {
             events: Vec::new(),
             status: "Idle".into(),
+            queued_follow_ups: Vec::new(),
+            prefer_queue: false,
             input: String::new(),
             image_paths: Vec::new(),
             scroll: 0,
@@ -1307,6 +1571,7 @@ mod tests {
             slash_menu: SlashMenuState::default(),
             cached_skills: Vec::new(),
             cached_skills_key: None,
+            presence_started: Instant::now(),
         }
     }
 
@@ -1459,12 +1724,22 @@ mod tests {
 
     #[test]
     fn follow_up_routes_active_status_to_queue() {
-        assert_eq!(follow_up_tool_for_status("Done"), "chat.resume");
-        assert_eq!(follow_up_tool_for_status("Idle"), "chat.resume");
-        assert_eq!(follow_up_tool_for_status("Working"), "chat.queue_follow_up");
-        assert_eq!(follow_up_tool_for_status("Blocked"), "chat.queue_follow_up");
+        assert_eq!(follow_up_tool_for_status("Done", false), "chat.resume");
+        assert_eq!(follow_up_tool_for_status("Idle", false), "chat.resume");
         assert_eq!(
-            follow_up_tool_for_status("Stopping"),
+            follow_up_tool_for_status("Done", true),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Working", false),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Blocked", false),
+            "chat.queue_follow_up"
+        );
+        assert_eq!(
+            follow_up_tool_for_status("Stopping", false),
             "chat.queue_follow_up"
         );
     }
@@ -1733,6 +2008,122 @@ mod tests {
     /// rendered the whole reply as one literal, unstyled block; it should now
     /// surface the interior elements (heading text without its `#`, the
     /// nested kotlin snippet, and the table) as distinct lines.
+    #[test]
+    fn presence_label_for_active_statuses() {
+        assert_eq!(presence_label("Working"), Some("Working"));
+        assert_eq!(presence_label("Blocked"), Some("Blocked — waiting"));
+        assert_eq!(presence_label("Stopping"), Some("Stopping"));
+        assert_eq!(presence_label("Done"), None);
+        assert_eq!(presence_label("Idle"), None);
+    }
+
+    #[test]
+    fn parse_live_snapshot_reads_queue() {
+        let v = json!({
+            "status": "Working",
+            "messageDeliveryMode": "Queue",
+            "queuedFollowUps": [
+                { "text": "first" },
+                { "text": "" },
+                { "text": "third" }
+            ]
+        });
+        let snap = parse_live_snapshot(&v);
+        assert_eq!(snap.status, "Working");
+        assert!(snap.prefer_queue);
+        assert_eq!(
+            snap.queued_follow_ups,
+            vec![
+                QueuedFollowUp {
+                    text: "first".into()
+                },
+                QueuedFollowUp { text: "".into() },
+                QueuedFollowUp {
+                    text: "third".into()
+                },
+            ]
+        );
+        let immediate = parse_live_snapshot(&json!({
+            "status": "Working",
+            "messageDeliveryMode": "Immediate"
+        }));
+        assert!(!immediate.prefer_queue);
+    }
+
+    #[test]
+    fn render_queue_panel_shows_blank_as_images() {
+        let text = render_queue_panel(
+            &[
+                QueuedFollowUp {
+                    text: "do the thing".into(),
+                },
+                QueuedFollowUp { text: "  ".into() },
+            ],
+            80,
+        );
+        let plain: String = text
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(plain.contains("1. do the thing"));
+        assert!(plain.contains("2. images attached"));
+    }
+
+    #[test]
+    fn render_queue_panel_truncates_to_width() {
+        let long = "x".repeat(200);
+        let text = render_queue_panel(
+            &[QueuedFollowUp {
+                text: long.clone(),
+            }],
+            20,
+        );
+        let plain: String = text
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(plain.contains('…'), "got:\n{plain}");
+        assert!(plain.chars().count() < long.len());
+    }
+
+    #[test]
+    fn presence_line_renders_outside_transcript() {
+        let line = presence_line("Working", Instant::now()).expect("presence");
+        let plain: String = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(plain.contains("Working…"), "got:{plain}");
+
+        let mut state = empty_state();
+        state.status = "Working".into();
+        state.events.push(AgentEvent::Assistant {
+            at_millis: 1,
+            text: "hello".into(),
+            stream: false,
+        });
+        let skin = MadSkin::default();
+        let syntax_set = SyntaxSet::load_defaults_newlines();
+        let theme_set = ThemeSet::load_defaults();
+        let theme = theme_set.themes.values().next().unwrap();
+        let body = render_transcript(&state, &skin, &syntax_set, theme, 80);
+        let plain: String = body
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !plain.contains("Working…"),
+            "presence must stay outside scrollable transcript, got:\n{plain}"
+        );
+    }
+
     #[test]
     fn markdown_lines_unwraps_and_renders_real_agent_reply() {
         let text = "```markdown\n# Sample Markdown\n\nThis is a paragraph with **bold text**, *italic text*, and a [link](https://example.com).\n\n## Features\n\n- Bullet list item\n- Another item\n  - Nested item\n\n1. First step\n2. Second step\n\n> This is a blockquote.\n\n```kotlin\nfun main() {\n    println(\"Hello, Markdown!\")\n}\n```\n\n| Name | Value |\n|------|-------|\n| Example | 42 |\n```";

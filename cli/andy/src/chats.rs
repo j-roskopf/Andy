@@ -8,6 +8,7 @@ pub struct ChatRow {
     pub status: String,
     pub project_id: String,
     pub tmux_alive: bool,
+    pub queued_count: usize,
     pub created_at_millis: i64,
 }
 
@@ -69,6 +70,11 @@ pub fn parse_chats(raw: &str) -> Vec<ChatRow> {
                     .get("tmuxAlive")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                queued_count: el
+                    .get("queuedFollowUps")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
                 created_at_millis: el
                     .get("createdAtMillis")
                     .and_then(|v| v.as_i64())
@@ -148,10 +154,11 @@ pub fn format_grouped(entries: &[ListEntry]) -> String {
                 lines.push(format!("── {marker} {label} ({count}) ──"));
             }
             ListEntry::Chat(chat) => {
-                let live = if chat.tmux_alive { " live" } else { "" };
                 lines.push(format!(
-                    "  {}  [{}{}]  {}",
-                    chat.id, chat.status, live, chat.title
+                    "  {}  {}  {}",
+                    chat.id,
+                    format_status_badge(chat),
+                    chat.title
                 ));
             }
         }
@@ -171,10 +178,50 @@ fn project_label(project_id: &str) -> String {
     }
 }
 
+/// `[Working live · 2 queued]` style badge for list rows.
+pub fn format_status_badge(chat: &ChatRow) -> String {
+    let live = if chat.tmux_alive { " live" } else { "" };
+    let queue = if chat.queued_count > 0 {
+        format!(" · {} queued", chat.queued_count)
+    } else {
+        String::new()
+    };
+    format!("[{}{}{}]", chat.status, live, queue)
+}
+
 fn project_sort_key(project_id: &str) -> (u8, String) {
     if project_id.is_empty() {
         (0, String::new())
     } else {
         (1, project_id.to_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_chats_counts_queued_follow_ups() {
+        let raw = r#"[{
+            "id":"t1","title":"Demo","status":"Working","tmuxAlive":true,
+            "queuedFollowUps":[{"text":"a"},{"text":"b"}]
+        }]"#;
+        let chats = parse_chats(raw);
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].queued_count, 2);
+        assert_eq!(
+            format_status_badge(&chats[0]),
+            "[Working live · 2 queued]"
+        );
+    }
+
+    #[test]
+    fn format_grouped_includes_queue_badge() {
+        let entries = grouped_entries(parse_chats(
+            r#"[{"id":"t1","title":"Demo","status":"Done","queuedFollowUps":[{"text":"next"}]}]"#,
+        ));
+        let out = format_grouped(&entries);
+        assert!(out.contains("[Done · 1 queued]"), "got:\n{out}");
     }
 }
