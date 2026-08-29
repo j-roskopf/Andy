@@ -65,8 +65,6 @@ pub fn apply_tmux_session_chrome(task_id: &str, title: &str, status: &str) -> Re
     // tmux status-left interprets `#` — escape by doubling.
     let safe = header.replace('#', "##");
     tmux::run_tmux(&[
-        "-L",
-        "andy",
         "set-option",
         "-t",
         &name,
@@ -122,7 +120,7 @@ pub fn apply_tmux_session_chrome(task_id: &str, title: &str, status: &str) -> Re
 pub fn clear_tmux_session_chrome(task_id: &str) -> Result<()> {
     let name = tmux::session_name(task_id);
     // Best-effort: session may already be gone after detach/kill.
-    let _ = tmux::run_tmux(&["-L", "andy", "set-option", "-t", &name, "status", "off"]);
+    let _ = tmux::run_tmux(&["set-option", "-t", &name, "status", "off"]);
     Ok(())
 }
 
