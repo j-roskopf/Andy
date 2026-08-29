@@ -584,7 +584,6 @@ fun AgentTranscript(
                                     {
                                         ChatMessageMetadata(
                                             timestamp = originalTimestamp,
-                                            reverse = true,
                                             footer = originalCopyText?.let { prompt ->
                                                 { ChatMessageCopyAction(prompt) }
                                             },
@@ -1013,7 +1012,6 @@ private fun TranscriptEvent(
                     {
                         ChatMessageMetadata(
                             timestamp = timestamp,
-                            reverse = true,
                             footer = copyText?.let { text -> { ChatMessageCopyAction(text) } },
                         )
                     }

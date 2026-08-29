@@ -185,7 +185,6 @@ fun ComponentGallery(modifier: Modifier = Modifier) {
                     group = ChatBubbleGroup.First,
                     metadata = {
                         ChatMessageMetadata(
-                            reverse = true,
                             footer = { ChatMessageCopyAction("Grouped user bubble") },
                         )
                     },

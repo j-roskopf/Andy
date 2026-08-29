@@ -215,6 +215,8 @@ fun LiveScreen(
     selectedPackage: String?,
     onSelectedPackageChange: (String?) -> Unit,
     transfer: DeviceTransferCoordinator,
+    /** Rolling bug capture opt-in from Settings → Live. */
+    autoBugCaptureEnabled: Boolean = false,
     foldableHingeAngle: Float = 180f,
     onFoldableHingeAngleChange: (Float) -> Unit = {},
 ) {
@@ -681,6 +683,7 @@ fun LiveScreen(
                                 }
                             },
                             onBugReport = { bugDialogVisible = true },
+                            bugCaptureEnabled = autoBugCaptureEnabled,
                             onRecord = {
                                 when (recordingState) {
                                     LiveRecordingState.Idle -> {
@@ -815,6 +818,7 @@ fun LiveScreen(
             liveActionStatus = liveActionStatus,
             liveActionStatusColor = transferStatusColor(liveActionStatus),
             onSaveBug = { bugDialogVisible = true },
+            bugCaptureEnabled = autoBugCaptureEnabled,
             onStopEmulator = { device?.let(onStopEmulator) },
             stoppingEmulator = stoppingEmulatorSerial == serial,
             stopStatus = stopStatus,

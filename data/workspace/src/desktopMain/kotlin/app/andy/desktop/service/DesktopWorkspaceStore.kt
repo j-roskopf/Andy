@@ -117,6 +117,7 @@ class DesktopWorkspaceStore(
             pairedWifiDevices = loadPairedWifi(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 720f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 320f,
+            autoBugCaptureEnabled = props.getProperty("autoBugCaptureEnabled")?.toBooleanStrictOrNull() ?: false,
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
             appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
@@ -259,6 +260,7 @@ class DesktopWorkspaceStore(
             }
             setProperty("liveDevicePaneWidth", state.liveDevicePaneWidth.toString())
             setProperty("liveControlsPaneHeight", state.liveControlsPaneHeight.toString())
+            setProperty("autoBugCaptureEnabled", state.autoBugCaptureEnabled.toString())
             setProperty("appsListPaneWidth", state.appsListPaneWidth.toString())
             setProperty("appsDetailsPaneHeight", state.appsDetailsPaneHeight.toString())
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())

@@ -544,6 +544,7 @@ internal fun AndyShell(
                             selectedPackage = state.workspaceState.selectedPackage,
                             onSelectedPackageChange = { pkg -> state.updateWorkspace { it.copy(selectedPackage = pkg) } },
                             transfer = state.transfer,
+                            autoBugCaptureEnabled = state.workspaceState.autoBugCaptureEnabled,
                             foldableHingeAngle = state.foldableHingeAngle,
                             onFoldableHingeAngleChange = state::updateFoldableHingeAngle,
                         )

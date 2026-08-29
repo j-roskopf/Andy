@@ -64,6 +64,7 @@ import app.andy.service.MirrorInput
 import app.andy.service.MirrorSession
 import app.andy.ui.components.noiseGridOverlay
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.Tooltip
 import app.andy.ui.controls.FoldableDisplayProfile
 import app.andy.ui.controls.FoldablePosture
 import app.andy.ui.controls.foldablePostureForAngle
@@ -365,6 +366,8 @@ fun LiveDevicePane(
     onRotate: () -> Unit = {},
     onCaptureScreenshot: () -> Unit = {},
     onBugReport: () -> Unit = {},
+    /** When false, Bug stays visible but disabled with an “Enable in Settings” tooltip. */
+    bugCaptureEnabled: Boolean = true,
     onRecord: () -> Unit = {},
     recordLabel: String = "Record",
     recordEnabled: Boolean = true,
@@ -413,6 +416,7 @@ fun LiveDevicePane(
                 onRotate = onRotate,
                 onCaptureScreenshot = onCaptureScreenshot,
                 onBugReport = onBugReport,
+                bugCaptureEnabled = bugCaptureEnabled,
                 onRecord = onRecord,
                 recordLabel = recordLabel,
                 recordEnabled = recordEnabled,
@@ -427,6 +431,7 @@ fun LiveDevicePane(
                 enabled = serial != null,
                 onCaptureScreenshot = onCaptureScreenshot,
                 onBugReport = onBugReport,
+                bugCaptureEnabled = bugCaptureEnabled,
                 onRecord = onRecord,
                 recordLabel = recordLabel,
                 recordEnabled = recordEnabled,
@@ -845,6 +850,7 @@ internal fun LiveCaptureToolbar(
     enabled: Boolean,
     onCaptureScreenshot: () -> Unit,
     onBugReport: () -> Unit,
+    bugCaptureEnabled: Boolean = true,
     onRecord: () -> Unit,
     recordLabel: String,
     recordEnabled: Boolean,
@@ -868,7 +874,13 @@ internal fun LiveCaptureToolbar(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
-            ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
+            ToolbarButton(
+                icon = HardwareIcon.Bug,
+                label = "Bug",
+                enabled = enabled && bugCaptureEnabled,
+                onClick = onBugReport,
+                disabledTooltip = BugCaptureDisabledTooltip.takeUnless { bugCaptureEnabled },
+            )
             if (showRecord) {
                 ToolbarButton(HardwareIcon.Record, recordLabel, enabled && recordEnabled, onRecord)
                 recordingDuration?.let { duration ->
@@ -925,6 +937,7 @@ internal fun LiveHardwareToolbar(
     onRotate: () -> Unit,
     onCaptureScreenshot: () -> Unit,
     onBugReport: () -> Unit,
+    bugCaptureEnabled: Boolean = true,
     onRecord: () -> Unit,
     recordLabel: String,
     recordEnabled: Boolean,
@@ -952,7 +965,13 @@ internal fun LiveHardwareToolbar(
             ToolbarButton(HardwareIcon.VolumeDown, "Vol -", enabled, onVolumeDown)
             ToolbarButton(HardwareIcon.Rotate, "Rotate", enabled, onRotate)
             ToolbarButton(HardwareIcon.Capture, "Capture", enabled, onCaptureScreenshot)
-            ToolbarButton(HardwareIcon.Bug, "Bug", enabled, onBugReport)
+            ToolbarButton(
+                icon = HardwareIcon.Bug,
+                label = "Bug",
+                enabled = enabled && bugCaptureEnabled,
+                onClick = onBugReport,
+                disabledTooltip = BugCaptureDisabledTooltip.takeUnless { bugCaptureEnabled },
+            )
             ToolbarButton(HardwareIcon.Clip, "Clip", enabled, onClipText)
             if (showRecord) {
                 ToolbarButton(HardwareIcon.Record, recordLabel, enabled && recordEnabled, onRecord)
@@ -967,35 +986,50 @@ internal fun LiveHardwareToolbar(
     }
 }
 
+internal const val BugCaptureDisabledTooltip = "Enable in Settings"
+
 @Composable
-internal fun ToolbarButton(icon: HardwareIcon, label: String, enabled: Boolean, onClick: () -> Unit) {
+internal fun ToolbarButton(
+    icon: HardwareIcon,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    disabledTooltip: String? = null,
+) {
     val contentColor = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.38f)
     val interactionSource = remember { MutableInteractionSource() }
-    Column(
-        modifier = Modifier
-            .width(54.dp)
-            .height(44.dp)
-            .andyPressScale(interactionSource, enabled)
-            .clip(AndyShape.Interactive)
-            .clickable(
-                enabled = enabled,
-                onClick = onClick,
-                interactionSource = interactionSource,
-                indication = null,
+    val button = @Composable {
+        Column(
+            modifier = Modifier
+                .width(54.dp)
+                .height(44.dp)
+                .andyPressScale(interactionSource, enabled)
+                .clip(AndyShape.Interactive)
+                .clickable(
+                    enabled = enabled,
+                    onClick = onClick,
+                    interactionSource = interactionSource,
+                    indication = null,
+                )
+                .padding(vertical = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            HardwareControlIcon(icon, contentColor, Modifier.size(24.dp))
+            Text(
+                label,
+                color = contentColor,
+                fontSize = 10.sp,
+                lineHeight = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            .padding(vertical = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        HardwareControlIcon(icon, contentColor, Modifier.size(24.dp))
-        Text(
-            label,
-            color = contentColor,
-            fontSize = 10.sp,
-            lineHeight = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        }
+    }
+    if (disabledTooltip != null && !enabled) {
+        Tooltip(text = disabledTooltip, content = button)
+    } else {
+        button()
     }
 }
 

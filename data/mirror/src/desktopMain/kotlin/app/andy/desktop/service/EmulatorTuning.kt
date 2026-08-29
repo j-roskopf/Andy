@@ -1,6 +1,12 @@
 package app.andy.desktop.service
 
-/** Default guest vsync; matches Andy's Live maxFps ceiling. Override with ANDY_EMULATOR_VSYNC_RATE. */
+/**
+ * Emulator launch / AVD mode ceiling (`-vsync-rate`, `hw.lcd.vsync`).
+ * Kept at 120 so Live can raise guest peak/min to 120 without restarting the emulator.
+ * Guest render rate still follows Live maxFps (default 60) via [emulatorGuestRefreshShellCommands] —
+ * `-vsync-rate` alone does not force Android to run at 120.
+ * Override with [EMULATOR_VSYNC_RATE_ENV].
+ */
 const val DEFAULT_EMULATOR_VSYNC_RATE = 120
 
 const val EMULATOR_VSYNC_RATE_ENV = "ANDY_EMULATOR_VSYNC_RATE"
@@ -11,7 +17,7 @@ fun emulatorVsyncRate(env: (String) -> String? = System::getenv): Int {
     return override?.takeIf { it > 0 } ?: DEFAULT_EMULATOR_VSYNC_RATE
 }
 
-/** Shell commands to raise guest peak/min refresh before scrcpy starts. */
+/** Shell commands to set guest peak/min refresh before scrcpy starts. */
 fun emulatorGuestRefreshShellCommands(
     rateHz: Int,
     displayWidth: Int = 0,

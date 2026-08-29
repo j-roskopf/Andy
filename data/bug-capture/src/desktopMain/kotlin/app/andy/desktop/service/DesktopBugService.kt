@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
@@ -121,13 +122,27 @@ class DesktopBugService(
         // Follow a *visible* mirror rather than LiveScreen composition, so Design → Live still has
         // the window. A warm-but-hidden session deliberately gets no capture: it would keep an adb
         // logcat stream, foreground/crash polling and ARGB sampling running for a rolling window
-        // nobody is in a position to save.
+        // nobody is in a position to save. Auto-follow is opt-in via WorkspaceState.autoBugCaptureEnabled.
         scope.launch {
-            combine(mirror.session.map { it?.serial }, mirror.presenting) { serial, presenting ->
-                serial.takeIf { presenting }
+            combine(
+                mirror.session.map { it?.serial },
+                mirror.presenting,
+                autoBugCaptureEnabledFlow(),
+            ) { serial, presenting, enabled ->
+                serial.takeIf { presenting && enabled }
             }
                 .distinctUntilChanged()
                 .collect { serial -> syncCaptureToMirrorSession(serial) }
+        }
+    }
+
+    private fun autoBugCaptureEnabledFlow(): Flow<Boolean> {
+        val store = workspaceStore ?: return flowOf(false)
+        store.state?.let { state ->
+            return state.map { it.autoBugCaptureEnabled }.distinctUntilChanged()
+        }
+        return flow {
+            emit(runCatching { store.load().autoBugCaptureEnabled }.getOrDefault(false))
         }
     }
 

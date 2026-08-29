@@ -4,7 +4,6 @@ import app.andy.desktop.service.CommandRunner
 import app.andy.service.DeviceService
 import app.andy.desktop.parser.AndroidParsers
 import app.andy.desktop.service.emulatorGuestRefreshShellCommands
-import app.andy.desktop.service.emulatorVsyncRate
 import app.andy.desktop.service.emulator.EMULATOR_IMAGE_BYTES_PER_PIXEL
 import app.andy.desktop.service.emulator.EmulatorGrpcClient
 import app.andy.desktop.service.emulator.EmulatorMappedFramebuffer
@@ -920,11 +919,12 @@ class DesktopMirrorEngine(
     }
 
     /**
-     * Emulator guest vsync can be 120 while Android still renders at 60 (`defaultRefreshRate`).
-     * Align system peak/min refresh (and preferred mode) with Live maxFps before scrcpy captures.
+     * Align system peak/min refresh (and preferred mode) with Live [maxFps] before scrcpy captures.
+     * Launch `-vsync-rate` stays at [emulatorVsyncRate] (default 120) as a mode ceiling only —
+     * Android still renders at Live maxFps (default 60) until these settings match.
      */
     private suspend fun applyEmulatorGuestRefreshRate(adb: String, serial: String, maxFps: Int) {
-        val rate = maxOf(maxFps, emulatorVsyncRate()).coerceIn(1, 240)
+        val rate = maxFps.coerceIn(1, 240)
         // A display mode is a hardware-panel mode, so it must stay in the panel's natural
         // orientation. Passing the rotated logical size (for example 2424x1080) makes Android
         // reject/reset the mode and snap a force-rotated emulator back to portrait during the
