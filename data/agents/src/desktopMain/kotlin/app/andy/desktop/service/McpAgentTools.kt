@@ -984,10 +984,18 @@ fun Server.registerAgentProjectTools(
         description = "Get live session status for a chat",
         properties = mapOf(
             "taskId" to buildJsonObject { put("type", "string") },
+            "includeTmuxAlive" to buildJsonObject {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "When false, skip the tmux liveness probe (safe for high-frequency ACP polls). Default true.",
+                )
+            },
         ),
         required = listOf("taskId"),
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
+        val includeTmuxAlive = args["includeTmuxAlive"]?.jsonPrimitive?.booleanOrNull ?: true
         val task = agentRuns.tasks.value.excludingTemporary().firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
@@ -997,7 +1005,11 @@ fun Server.registerAgentProjectTools(
                 put("lane", task?.lane?.name.orEmpty())
                 put("autonomy", task?.autonomy?.name.orEmpty())
                 put("statusConfident", task?.statusConfident ?: false)
-                put("tmuxAlive", TmuxAndy.isAvailable() && TmuxAndy.hasSession(id))
+                put(
+                    "tmuxAlive",
+                    // Prefer the cached list-sessions snapshot; optional skip for ACP pollers.
+                    includeTmuxAlive && TmuxAndy.isAvailable() && TmuxAndy.sessionExists(id),
+                )
                 put("tmuxSession", TmuxAndy.sessionName(id))
                 put("cwd", task?.cwd.orEmpty())
                 put("originDir", task?.originDir.orEmpty())

@@ -600,7 +600,11 @@ async fn fetch_task_status(client: &mut McpClient, task_id: &str) -> Option<Stri
 
 async fn fetch_live_snapshot(client: &mut McpClient, task_id: &str) -> Option<LiveSnapshot> {
     let raw = client
-        .call_tool("chat.status", json!({ "taskId": task_id }))
+        .call_tool(
+            "chat.status",
+            // Skip tmux probe — this path runs every 2s and only needs status/queue/mode.
+            json!({ "taskId": task_id, "includeTmuxAlive": false }),
+        )
         .await
         .ok()?;
     let v: Value = serde_json::from_str(&raw).ok()?;
