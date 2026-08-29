@@ -665,11 +665,21 @@ fn presence_spinner(started: Instant) -> char {
     FRAMES[idx]
 }
 
+/// Fixed footer line for Working/Blocked/Stopping — rendered outside the
+/// scrollable transcript so long backlogs do not hide the presence signal.
+fn presence_line(status: &str, started: Instant) -> Option<Line<'static>> {
+    let label = presence_label(status)?;
+    Some(Line::from(Span::styled(
+        format!("  {} {label}…", presence_spinner(started)),
+        Style::default().fg(Color::DarkGray),
+    )))
+}
+
 fn queue_panel_height(queued: &[QueuedFollowUp]) -> u16 {
     if queued.is_empty() {
         return 0;
     }
-    // title + one line per item, capped; +2 for borders via Length constraint on widget.
+    // One content row per visible item (+ optional “… more”), capped; +2 for borders.
     let rows = 1u16.saturating_add(queued.len() as u16).min(MAX_QUEUE_PANEL_ROWS);
     rows.saturating_add(2)
 }
@@ -949,33 +959,49 @@ fn draw(
         chunks[0],
     );
 
-    let body = render_transcript(state, skin, syntax_set, theme, chunks[1].width);
     let transcript_title = if state.show_details {
         " Transcript · details "
     } else {
         " Transcript "
     };
+    let transcript_block = Block::default()
+        .borders(Borders::ALL)
+        .title(transcript_title);
+    let transcript_inner = transcript_block.inner(chunks[1]);
+    frame.render_widget(transcript_block, chunks[1]);
+
+    let presence = presence_line(&state.status, state.presence_started);
+    let presence_h = if presence.is_some() { 1u16 } else { 0 };
+    let transcript_parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(presence_h)])
+        .split(transcript_inner);
+
+    let body = render_transcript(state, skin, syntax_set, theme, transcript_parts[0].width);
     frame.render_widget(
         Paragraph::new(body)
             .wrap(Wrap { trim: false })
-            .scroll((state.scroll, 0))
-            .block(Block::default().borders(Borders::ALL).title(transcript_title)),
-        chunks[1],
+            .scroll((state.scroll, 0)),
+        transcript_parts[0],
     );
+    if let Some(line) = presence {
+        frame.render_widget(Paragraph::new(line), transcript_parts[1]);
+    }
 
     if queue_h > 0 {
+        let queue_block = Block::default().borders(Borders::ALL).title(format!(
+            " Queue · {} ",
+            state.queued_follow_ups.len()
+        ));
+        let queue_inner = queue_block.inner(chunks[2]);
+        frame.render_widget(queue_block, chunks[2]);
+        // Truncate to the inner width and skip wrap so height stays 1 row/item.
         frame.render_widget(
-            Paragraph::new(render_queue_panel(&state.queued_follow_ups))
-                .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!(
-                            " Queue · {} ",
-                            state.queued_follow_ups.len()
-                        )),
-                ),
-            chunks[2],
+            Paragraph::new(render_queue_panel(
+                &state.queued_follow_ups,
+                queue_inner.width,
+            )),
+            queue_inner,
         );
     }
 
@@ -1244,24 +1270,19 @@ fn render_transcript(
             AgentEvent::Unknown { .. } => {}
         }
     }
-    if let Some(label) = presence_label(&state.status) {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("  {} {label}…", presence_spinner(state.presence_started)),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
     Text::from(lines)
 }
 
-fn render_queue_panel(queued: &[QueuedFollowUp]) -> Text<'static> {
+fn render_queue_panel(queued: &[QueuedFollowUp], content_width: u16) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let visible = queued.len().min(MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize);
+    // Leave room for "  N. " prefix (up to two digits) so previews never wrap.
+    let max_preview = content_width.saturating_sub(6).max(8) as usize;
     for (idx, item) in queued.iter().take(visible).enumerate() {
         let preview = if item.text.trim().is_empty() {
             "images attached".to_string()
         } else {
-            truncate_chars(&item.text, 96)
+            truncate_chars(&item.text, max_preview)
         };
         lines.push(Line::from(format!("  {}. {preview}", idx + 1)));
     }
@@ -1976,12 +1997,15 @@ mod tests {
 
     #[test]
     fn render_queue_panel_shows_blank_as_images() {
-        let text = render_queue_panel(&[
-            QueuedFollowUp {
-                text: "do the thing".into(),
-            },
-            QueuedFollowUp { text: "  ".into() },
-        ]);
+        let text = render_queue_panel(
+            &[
+                QueuedFollowUp {
+                    text: "do the thing".into(),
+                },
+                QueuedFollowUp { text: "  ".into() },
+            ],
+            80,
+        );
         let plain: String = text
             .lines
             .iter()
@@ -1993,7 +2017,34 @@ mod tests {
     }
 
     #[test]
-    fn render_transcript_appends_working_presence() {
+    fn render_queue_panel_truncates_to_width() {
+        let long = "x".repeat(200);
+        let text = render_queue_panel(
+            &[QueuedFollowUp {
+                text: long.clone(),
+            }],
+            20,
+        );
+        let plain: String = text
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(plain.contains('…'), "got:\n{plain}");
+        assert!(plain.chars().count() < long.len());
+    }
+
+    #[test]
+    fn presence_line_renders_outside_transcript() {
+        let line = presence_line("Working", Instant::now()).expect("presence");
+        let plain: String = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(plain.contains("Working…"), "got:{plain}");
+
         let mut state = empty_state();
         state.status = "Working".into();
         state.events.push(AgentEvent::Assistant {
@@ -2012,7 +2063,10 @@ mod tests {
             .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(plain.contains("Working…"), "got:\n{plain}");
+        assert!(
+            !plain.contains("Working…"),
+            "presence must stay outside scrollable transcript, got:\n{plain}"
+        );
     }
 
     #[test]
