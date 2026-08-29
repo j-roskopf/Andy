@@ -46,6 +46,31 @@ class RustTerminalCanvasSupportTest {
     }
 
     @Test
+    fun altGrPrintableSurvivesWhenAwtReportsCtrl() {
+        // German AltGr+Q → '@'; AWT often exposes AltGr as Ctrl+Alt with a printable code point.
+        assertEquals(
+            listOf('@'.code),
+            encodeTerminalKey(keyEvent(Key.Q, ctrl = true, codePoint = '@'.code))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlEnterKeepsCarriageReturnWhenAwtDeliversLf() {
+        assertEquals(
+            listOf('\r'.code),
+            encodeTerminalKey(keyEvent(Key.Enter, ctrl = true, codePoint = 0x0A))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
+    fun ctrlBackspaceKeepsDeleteWhenAwtDeliversBs() {
+        assertEquals(
+            listOf(0x7F),
+            encodeTerminalKey(keyEvent(Key.Backspace, ctrl = true, codePoint = 0x08))?.map { it.toInt() and 0xFF },
+        )
+    }
+
+    @Test
     fun modifierOnlyKeysAreNotEncoded() {
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftLeft)))
         assertNull(encodeTerminalKey(keyEvent(Key.ShiftRight)))
