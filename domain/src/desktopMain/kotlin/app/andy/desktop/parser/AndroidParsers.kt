@@ -209,9 +209,8 @@ object AndroidParsers {
 
     fun parseSystemImages(output: String): List<SystemImage> {
         return output.lineSequence()
-            .filter { it.contains("system-images;android-") }
             .mapNotNull { line ->
-                val packageId = line.substringBefore("|").trim().takeIf { it.startsWith("system-images;") } ?: return@mapNotNull null
+                val packageId = extractSystemImagePackageId(line) ?: return@mapNotNull null
                 val parts = packageId.split(";")
                 val api = parts.getOrNull(1)?.removePrefix("android-") ?: "-"
                 val variant = parts.getOrNull(2) ?: "-"
@@ -229,6 +228,27 @@ object AndroidParsers {
             .sortedWith(compareByDescending<SystemImage> { it.api.toDoubleOrNull() ?: 0.0 }.thenBy { it.variant })
             .toList()
     }
+
+    /**
+     * Canonical SDK package IDs use `;` (what `avdmanager -k` expects). Newer cmdline-tools
+     * (Android CLI / sdkmanager 23+) print and accept `/` paths in `sdkmanager --list`.
+     */
+    fun normalizeSdkPackageId(packageId: String): String =
+        packageId.trim().trimEnd('/').replace('/', ';')
+
+    private fun extractSystemImagePackageId(line: String): String? {
+        val trimmed = line.trim()
+        if (trimmed.startsWith("system-images;")) {
+            return normalizeSdkPackageId(trimmed.substringBefore("|").trim())
+                .takeIf { it.startsWith("system-images;android-") }
+        }
+        // Column table: `system-images/android-37.0/google_apis/x86_64   6.0.0   Description`
+        val slashPath = SYSTEM_IMAGE_SLASH_PATH.find(trimmed)?.value ?: return null
+        return normalizeSdkPackageId(slashPath)
+    }
+
+    private val SYSTEM_IMAGE_SLASH_PATH =
+        Regex("""^system-images/android-[^\s]+""")
 
     fun parseAvdList(output: String): List<VirtualDevice> {
         val blocks = output

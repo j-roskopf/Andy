@@ -3,6 +3,7 @@ package app.andy.desktop.service.agents
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.terminal.buildTerminalLaunchEnvironment
+import app.andy.terminal.replaceProcessEnvironment
 import app.andy.terminal.resolveTerminalWorkingDirectory
 import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlin.test.Test
@@ -34,6 +35,8 @@ class AgentLaunchEnvironmentTest {
             "VSCODE_INSPECTOR_OPTIONS" to "ipc",
             "ELECTRON_RUN_AS_NODE" to "1",
             "CURSOR_AGENT" to "1",
+            "CURSOR_API_KEY" to "user-key",
+            "CURSOR_AUTH_TOKEN" to "user-token",
             "TERM" to "dumb",
             "FORCE_COLOR" to "0",
             "HOME" to "/Users/test",
@@ -50,6 +53,8 @@ class AgentLaunchEnvironmentTest {
         assertNull(env["VSCODE_INSPECTOR_OPTIONS"])
         assertNull(env["ELECTRON_RUN_AS_NODE"])
         assertNull(env["CURSOR_AGENT"])
+        assertEquals("user-key", env["CURSOR_API_KEY"])
+        assertEquals("user-token", env["CURSOR_AUTH_TOKEN"])
         assertNull(env["FORCE_COLOR"])
         assertEquals("xterm-256color", env["TERM"])
     }
@@ -77,6 +82,29 @@ class AgentLaunchEnvironmentTest {
         assertNull(fixed["NODE_OPTIONS"])
         assertNull(fixed["VSCODE_INSPECTOR_OPTIONS"])
         assertEquals("/usr/bin", fixed["PATH"])
+    }
+
+    @Test
+    fun replaceProcessEnvironmentDropsParentKeysOmittedFromDesired() {
+        val current = mutableMapOf(
+            "PATH" to "/from/parent",
+            "CURSOR_AGENT" to "1",
+            "NODE_OPTIONS" to "--require /tmp/bootloader.js",
+            "HOME" to "/Users/test",
+        )
+        replaceProcessEnvironment(
+            current,
+            mapOf(
+                "PATH" to "/usr/bin",
+                "HOME" to "/Users/test",
+                "CURSOR_API_KEY" to "user-key",
+            ),
+        )
+        assertEquals("/usr/bin", current["PATH"])
+        assertEquals("/Users/test", current["HOME"])
+        assertEquals("user-key", current["CURSOR_API_KEY"])
+        assertNull(current["CURSOR_AGENT"])
+        assertNull(current["NODE_OPTIONS"])
     }
 
     @Test

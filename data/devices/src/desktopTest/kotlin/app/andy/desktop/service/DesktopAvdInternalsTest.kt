@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopAvdInternalsTest {
@@ -62,7 +63,7 @@ class DesktopAvdInternalsTest {
         assertTrue(command.windowed(2).any { it == listOf("-ports", "5560,5561") })
         assertTrue(command.windowed(2).any { it == listOf("-grpc", "8560") })
         assertTrue(command.windowed(2).any { it == listOf("-idle-grpc-timeout", "300") })
-        assertTrue(command.windowed(2).any { it == listOf("-gpu", "auto") })
+        assertTrue(command.windowed(2).any { it == listOf("-gpu", "host") })
         assertTrue(command.windowed(2).any { it == listOf("-vsync-rate", "120") })
         assertTrue("-writable-system" in command)
         assertTrue("-no-snapshot-load" in command)
@@ -80,5 +81,32 @@ class DesktopAvdInternalsTest {
             vsyncRate = 90,
         )
         assertTrue(command.windowed(2).any { it == listOf("-vsync-rate", "90") })
+    }
+
+    @Test
+    fun emulatorLaunchEnvironmentForcesXcbOnLinuxAndDropsSoftwareGlOverrides() {
+        val env = mutableMapOf(
+            "DISPLAY" to ":0",
+            "WAYLAND_DISPLAY" to "wayland-0",
+            "QT_QPA_PLATFORM" to "wayland",
+            "LIBGL_ALWAYS_SOFTWARE" to "1",
+            "GALLIUM_DRIVER" to "llvmpipe",
+            "VK_ICD_FILENAMES" to "/usr/share/vulkan/icd.d/lvp_icd.json",
+            "HOME" to "/home/test",
+        )
+        applyEmulatorLaunchEnvironment(env, osName = "Linux")
+        assertEquals("xcb", env["QT_QPA_PLATFORM"])
+        assertEquals(":0", env["DISPLAY"])
+        assertEquals("/home/test", env["HOME"])
+        assertNull(env["LIBGL_ALWAYS_SOFTWARE"])
+        assertNull(env["GALLIUM_DRIVER"])
+        assertNull(env["VK_ICD_FILENAMES"])
+    }
+
+    @Test
+    fun emulatorLaunchEnvironmentLeavesQtPlatformAloneOffLinux() {
+        val env = mutableMapOf("QT_QPA_PLATFORM" to "cocoa")
+        applyEmulatorLaunchEnvironment(env, osName = "Mac OS X")
+        assertEquals("cocoa", env["QT_QPA_PLATFORM"])
     }
 }

@@ -19,3 +19,16 @@ VideoToolbox-decoded frames through a borderless AppKit surface letterboxed over
 the Live Canvas. Compose Desktop cannot reliably composite an in-process
 `CAMetalLayer`, so this overlay is the supported inline GPU path. Auto falls
 back to FFmpeg/Swing CPU presentation when native init fails.
+
+## In-process Vulkan (Linux x86_64)
+
+`buildAndyMirrorJniLinuxX64` builds `libandy-mirror-jni.so` with the same
+`GpuMirrorJni` hub as macOS. H.264 is decoded with NVDEC (`h264_nvdec` /
+`h264_cuvid`) when CUDA is available, otherwise software libavcodec, then
+uploaded as NV12 into Vulkan textures. Presentation is an input-transparent
+override-redirect X11 window (XWayland on typical Wayland desktops) stacked
+over the Live Canvas.
+
+Requires system `libvulkan`, `libX11`, `libXfixes`, `libavcodec`, and
+`libavutil`. Overlay shaders are compiled at build time with `glslangValidator`
+or `glslc`. Native Wayland (no X11) is out of scope.

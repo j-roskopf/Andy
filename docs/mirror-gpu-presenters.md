@@ -2,10 +2,11 @@
 
 ## Problem
 
-Andy’s macOS GPU mirror path uses a **single global** VideoToolbox decoder and **one**
-borderless Metal overlay window. Live, pop-outs, Android, and iOS all compete for that
-singleton. Promoting/demoting presentation in Kotlin is fragile and cannot reliably show
-Android + iPhone pop-outs at the same time.
+Andy’s macOS GPU mirror path used to be a **single global** VideoToolbox decoder and **one**
+borderless Metal overlay window. Live, pop-outs, Android, and iOS all competed for that
+singleton. The hub (`GpuMirrorPipeline` / `GpuMirrorPresenter`) gives each Live pane its own
+presenter. Linux implements the same JNI surface with NVDEC (or software libavcodec) and a
+Vulkan overlay on X11 / XWayland.
 
 ## Goals
 
@@ -16,41 +17,44 @@ Android + iPhone pop-outs at the same time.
 
 ## Non-goals (v1)
 
-- Windows/Linux GPU (macOS arm64/x64 only).
+- Native Wayland subsurface (Linux GPU uses X11 / XWayland).
+- Windows D3D12 / Vulkan.
 - More than one scrcpy session to the **same** Android device (OS limitation); fan-out uses one decode.
-- Per-presenter VideoToolbox decoders for the same H.264 stream (one decoder, N presenters).
+- Per-presenter VideoToolbox / NVDEC decoders for the same H.264 stream (one decoder, N presenters).
+- CUDA–Vulkan zero-copy (`VK_KHR_external_memory`) and Vulkan Video (`VK_KHR_video_decode_h264`).
 
 ## Architecture
 
 ```
-┌─────────────────┐     H.264      ┌──────────────────┐   CVPixelBuffer   ┌─────────────────┐
-│ DesktopMirror   │ ─────────────► │ GpuMirrorDecoder │ ────────────────► │ GpuMirrorPresenter │──► NSWindow + Metal
+┌─────────────────┐     H.264      ┌──────────────────┐   NV12 / BGRA     ┌─────────────────┐
+│ DesktopMirror   │ ─────────────► │ GpuMirrorDecoder │ ────────────────► │ GpuMirrorPresenter │──► overlay
 │ Engine (scrcpy) │                │  (per session)   │    fan-out        │  (per Canvas)        │
 └─────────────────┘                └──────────────────┘                   └─────────────────┘
-                                              ▲
-┌─────────────────┐     BGRA                   │
-│ DesktopIosMirror│ ───────────────────────────┘
+                                              ▲                                    │
+┌─────────────────┐     BGRA                   │                    macOS: NSWindow + Metal
+│ DesktopIosMirror│ ───────────────────────────┘                    Linux: X11 + Vulkan
 │ Engine (sim)    │
 └─────────────────┘
 ```
 
 ### GpuMirrorDecoder
 
-- Owns VideoToolbox H.264 decode **or** accepts iOS BGRA frames directly.
+- Owns VideoToolbox H.264 decode (macOS) or NVDEC / libavcodec H.264 (Linux), **or** accepts iOS BGRA frames directly.
 - Retains `latest_pixels` for overlay repaint and bug capture.
 - Holds latency/stats state for that stream.
 - Not tied to any UI surface.
 
 ### GpuMirrorPresenter
 
-- Owns one borderless AppKit child window + `CAMetalLayer` / `MTKView`.
+- Owns one borderless overlay over the Swing `Canvas` host: AppKit + Metal on macOS, override-redirect X11 + Vulkan on Linux.
 - Letterboxes decoded frames into the Swing `Canvas` host (or fills host for pop-outs).
 - Owns overlay uniforms (grid, ruler, picker) for that surface.
 - Subscribes to exactly one decoder; many presenters may share one decoder.
 
 ### Shared process resources
 
-- One `MTLDevice`, command queue, render pipeline, and `CVMetalTextureCache` for the process.
+- macOS: one `MTLDevice`, command queue, render pipeline, and `CVMetalTextureCache`.
+- Linux: one Vulkan device, overlay pipeline, and X11 display connection.
 - Decoders and presenters are cheap relative to decode sessions.
 
 ## Kotlin API
@@ -116,7 +120,9 @@ New methods on `NativeMirrorJni` (legacy methods delegate to default pipeline un
 | `nativePresentPixelBufferForDecoder(id, …)` | iOS BGRA path |
 | `nativeRepaintGpuPresenter(id)` | Overlay-only refresh |
 
-Implementation lives in `native/andy-mirror/jni/andy_mirror_hub.m`.
+Implementation lives in `native/andy-mirror/jni/andy_mirror_hub.m` (macOS) and
+`native/andy-mirror/jni/linux/` (Linux NVDEC + Vulkan). Both export
+`Java_app_andy_desktop_service_mirror_GpuMirrorJni_*`.
 
 ## Migration phases
 
@@ -129,5 +135,6 @@ Implementation lives in `native/andy-mirror/jni/andy_mirror_hub.m`.
 ## Testing
 
 - Unit: presenter registry, pipeline create/destroy, decoder fan-out to two presenters (macOS arm64).
+- Linux: `GpuMirrorJni` resource path, overlay open, and `presentSolidBgra` smoke on a realized Canvas.
 - Smoke: Android pop-out + iOS pop-out simultaneously.
 - Regression: existing `NativeMirrorPresentationLifecycleTest` adapted to presenter ids.

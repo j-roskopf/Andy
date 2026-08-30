@@ -527,6 +527,9 @@ internal fun CreateSimulatorDialog(
 
 private fun VirtualDevice.referencesImage(image: SystemImage): Boolean {
     val haystack = (listOfNotNull(target, abi, path) + config.values).joinToString(" ").lowercase()
-    return image.packageId.lowercase() in haystack ||
+    val packageId = image.packageId.lowercase()
+    val slashPackageId = packageId.replace(';', '/')
+    return packageId in haystack ||
+        slashPackageId in haystack ||
         ("android-${image.api}" in haystack && image.variant.lowercase() in haystack && image.abi.lowercase() in haystack)
 }

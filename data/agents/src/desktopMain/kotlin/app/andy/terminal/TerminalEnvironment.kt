@@ -28,6 +28,12 @@ private val DROP_ENV_PREFIXES = listOf(
     "__CURSOR_",
 )
 
+/** Login credentials that the `CURSOR_` prefix would otherwise strip. */
+private val KEEP_ENV_KEYS = setOf(
+    "CURSOR_API_KEY",
+    "CURSOR_AUTH_TOKEN",
+)
+
 /**
  * IDE/proxy env that breaks vendor CLIs (especially Node-based ones like Claude Code)
  * when Andy is launched from Cursor/VS Code.
@@ -38,7 +44,10 @@ private val DROP_ENV_PREFIXES = listOf(
 fun scrubInheritedTerminalEnvironment(env: MutableMap<String, String>) {
     DROP_ENV_KEYS.forEach { env.remove(it) }
     env.keys
-        .filter { key -> DROP_ENV_PREFIXES.any { prefix -> key.startsWith(prefix) } }
+        .filter { key ->
+            key !in KEEP_ENV_KEYS &&
+                DROP_ENV_PREFIXES.any { prefix -> key.startsWith(prefix) }
+        }
         .toList()
         .forEach { env.remove(it) }
 
@@ -74,4 +83,21 @@ fun buildTerminalLaunchEnvironment(
     env.putAll(overrides)
     scrubInheritedTerminalEnvironment(env)
     return env
+}
+
+/**
+ * [ProcessBuilder.environment] starts as a copy of the JVM env. [MutableMap.putAll]
+ * cannot drop keys the caller already scrubbed (`NODE_OPTIONS`, `CURSOR_AGENT`, …),
+ * so ACP/CLI children would still see Cursor's agent-host markers and report
+ * "not logged in". Replace in place so the child sees exactly [desired].
+ */
+internal fun replaceProcessEnvironment(
+    current: MutableMap<String, String>,
+    desired: Map<String, String>,
+) {
+    current.keys
+        .filter { key -> desired.keys.none { it.equals(key, ignoreCase = true) } }
+        .toList()
+        .forEach { current.remove(it) }
+    current.putAll(desired)
 }

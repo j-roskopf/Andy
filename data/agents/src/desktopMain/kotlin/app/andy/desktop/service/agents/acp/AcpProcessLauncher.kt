@@ -1,5 +1,7 @@
 package app.andy.desktop.service.agents.acp
 
+import app.andy.terminal.replaceProcessEnvironment
+import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -132,14 +134,17 @@ internal fun ProcessBuilder.discardAcpPreflightStdin(): ProcessBuilder {
     return this
 }
 
-private fun ProcessBuilder.applyLaunchEnv(
+internal fun ProcessBuilder.applyLaunchEnv(
     env: Map<String, String>,
     command: List<String>,
     nodeBinary: String? = null,
 ): ProcessBuilder {
     if (env.isNotEmpty()) {
-        environment().putAll(env)
+        replaceProcessEnvironment(environment(), env)
     }
+    // Defense in depth: a caller that forgot to scrub still must not leak
+    // CURSOR_AGENT / NODE_OPTIONS from the parent JVM into the ACP child.
+    scrubInheritedTerminalEnvironment(environment())
     ensureNodeDirOnPath(environment(), command, nodeBinary)
     return this
 }

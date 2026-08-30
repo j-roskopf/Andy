@@ -214,16 +214,19 @@ private fun linuxFilePicker(initialDir: String?, allowMultiple: Boolean): MultiP
  */
 private fun runPickerCommand(command: List<String>): PickerResult? {
     val process = runCatching {
-        ProcessBuilder(command).redirectErrorStream(true).start()
+        ProcessBuilder(command)
+            // zenity/GTK print Adwaita warnings on stderr; never treat those as the path
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
     }.getOrNull() ?: return null  // command not found / couldn't launch → tool unavailable
 
     if (!process.waitFor(24, TimeUnit.HOURS)) {
         process.destroyForcibly()
         return PickerResult.Cancelled
     }
-    val output = process.inputStream.bufferedReader().readText().trim()
-    return if (process.exitValue() == 0 && output.isNotBlank()) {
-        PickerResult.Selected(output)
+    val path = extractPickerPath(process.inputStream.bufferedReader().readText())
+    return if (process.exitValue() == 0 && path != null) {
+        PickerResult.Selected(path)
     } else {
         // Non-zero exit = user pressed Cancel in the native dialog
         PickerResult.Cancelled
@@ -232,21 +235,46 @@ private fun runPickerCommand(command: List<String>): PickerResult? {
 
 private fun runMultiPickerCommand(command: List<String>, splitOn: String? = null): MultiPickerResult? {
     val process = runCatching {
-        ProcessBuilder(command).redirectErrorStream(true).start()
+        ProcessBuilder(command)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
     }.getOrNull() ?: return null
 
     if (!process.waitFor(24, TimeUnit.HOURS)) {
         process.destroyForcibly()
         return MultiPickerResult.Cancelled
     }
-    val output = process.inputStream.bufferedReader().readText().trim()
-    if (process.exitValue() != 0 || output.isBlank()) return MultiPickerResult.Cancelled
-    val paths = if (splitOn != null && !output.contains('\n')) {
-        output.split(splitOn).map { it.trim() }.filter { it.isNotBlank() }
-    } else {
-        output.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+    val paths = extractPickerPaths(process.inputStream.bufferedReader().readText(), splitOn)
+    if (process.exitValue() != 0 || paths.isEmpty()) return MultiPickerResult.Cancelled
+    return MultiPickerResult.Selected(paths)
+}
+
+/** Last filesystem path in native picker stdout, ignoring GTK/tool chatter. */
+internal fun extractPickerPath(output: String): String? =
+    extractPickerPaths(output, splitOn = null).lastOrNull()
+
+internal fun extractPickerPaths(output: String, splitOn: String? = null): List<String> {
+    val lines = output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    if (lines.isEmpty()) return emptyList()
+    val pathLines = lines.filter { line ->
+        val first = if (splitOn != null) line.substringBefore(splitOn) else line
+        looksLikePickerPath(first)
     }
-    return if (paths.isEmpty()) MultiPickerResult.Cancelled else MultiPickerResult.Selected(paths)
+    val usable = pathLines.ifEmpty { lines }
+    return if (splitOn != null && usable.size == 1) {
+        usable.single().split(splitOn).map { it.trim() }.filter { it.isNotBlank() }
+    } else {
+        usable
+    }
+}
+
+private fun looksLikePickerPath(line: String): Boolean {
+    if (line.startsWith('/') || line.startsWith('~')) return true
+    if (line.startsWith("\\\\")) return true
+    return line.length >= 3 &&
+        line[0].isLetter() &&
+        line[1] == ':' &&
+        (line[2] == '\\' || line[2] == '/')
 }
 
 private fun swingDirectoryPicker(initialDir: String?): String? {

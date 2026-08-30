@@ -71,6 +71,7 @@ fun main() {
     runCatching { app.andy.desktop.service.agents.AndyPiExtensionInstaller.ensureInstalled() }
     runCatching { app.andy.desktop.service.agents.OrchestrationSkillInstaller.ensureInstalled() }
     installRuntimeAppIcon()
+    installDefaultInWindowMenuBarTheme()
     application {
         val runtime = remember { openAndyDesktopGraph(resolveRuntimeMode()).runtime }
         val services = runtime.services

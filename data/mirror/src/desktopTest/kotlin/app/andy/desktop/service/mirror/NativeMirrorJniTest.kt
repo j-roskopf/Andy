@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 class NativeMirrorJniTest {
     @Test
-    fun mapsBothSupportedMacArchitecturesToTheirPackagedBridge() {
+    fun mapsSupportedDesktopArchitecturesToTheirPackagedBridge() {
         assertEquals(
             "andy-mirror/macos-arm64/andy-mirror-jni.dylib",
             NativeMirrorJni.resourcePath("Mac OS X", "aarch64"),
@@ -19,6 +19,10 @@ class NativeMirrorJniTest {
         assertEquals(
             "andy-mirror/macos-x86_64/andy-mirror-jni.dylib",
             NativeMirrorJni.resourcePath("Darwin", "x86_64"),
+        )
+        assertEquals(
+            "andy-mirror/linux-x86_64/libandy-mirror-jni.so",
+            NativeMirrorJni.resourcePath("Linux", "amd64"),
         )
         assertNull(NativeMirrorJni.resourcePath("Windows 11", "amd64"))
     }

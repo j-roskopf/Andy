@@ -184,6 +184,40 @@ class AndroidParsersTest {
     }
 
     @Test
+    fun parsesSystemImagesFromAndroidCliSlashTable() {
+        val output = """
+            WARNING: The SDK Manager CLI tool (sdkmanager) is deprecated.
+            Installed packages:
+              system-images/android-37.0/google_apis_playstore/x86_64         6.0.0       Google Play Intel x86_64 Atom System Image
+            Available packages:
+              system-images/android-36/google_apis/arm64-v8a                 9.0.0       Google APIs ARM 64 v8a System Image
+              build-tools/36.0.0                                             36.0.0      Android SDK Build-Tools 36
+        """.trimIndent()
+
+        val images = AndroidParsers.parseSystemImages(output)
+
+        assertEquals(2, images.size)
+        assertEquals("system-images;android-37.0;google_apis_playstore;x86_64", images[0].packageId)
+        assertEquals("37.0", images[0].api)
+        assertEquals(37, images[0].apiLevel)
+        assertEquals("google_apis_playstore", images[0].variant)
+        assertEquals("x86_64", images[0].abi)
+        assertEquals("system-images;android-36;google_apis;arm64-v8a", images[1].packageId)
+    }
+
+    @Test
+    fun normalizeSdkPackageIdConvertsSlashPaths() {
+        assertEquals(
+            "system-images;android-37.0;google_apis_playstore;x86_64",
+            AndroidParsers.normalizeSdkPackageId("system-images/android-37.0/google_apis_playstore/x86_64"),
+        )
+        assertEquals(
+            "system-images;android-36;google_apis;arm64-v8a",
+            AndroidParsers.normalizeSdkPackageId("system-images;android-36;google_apis;arm64-v8a"),
+        )
+    }
+
+    @Test
     fun parsesAvdProfilesDevicesAndSnapshots() {
         val profilesOutput = """
             id: 34 or "pixel_8"

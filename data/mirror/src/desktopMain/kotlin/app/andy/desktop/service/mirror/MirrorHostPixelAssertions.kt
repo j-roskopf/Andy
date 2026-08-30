@@ -53,3 +53,8 @@ internal fun isMacArm64(): Boolean {
     if (!System.getProperty("os.name").lowercase().contains("mac")) return false
     return System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
 }
+
+internal fun isLinuxAmd64(): Boolean {
+    if (!System.getProperty("os.name").lowercase().contains("linux")) return false
+    return System.getProperty("os.arch").lowercase() in setOf("amd64", "x86_64")
+}

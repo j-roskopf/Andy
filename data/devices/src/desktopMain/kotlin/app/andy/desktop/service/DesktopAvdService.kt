@@ -162,6 +162,7 @@ class DesktopAvdService(
                 ?: return@withContext CommandResult.failure("No free emulator port pair found")
             val logFile = emulatorLaunchLogFile(name)
             ProcessBuilder(emulatorStudioStyleLaunchCommand(emulator, name, extraArgs, ports))
+                .apply { applyEmulatorLaunchEnvironment(environment()) }
                 .redirectErrorStream(true)
                 // A log describes one launch only. Appending would let a stale renderer from a
                 // previous launch be reported as the renderer selected for this process.
@@ -598,8 +599,8 @@ private val emulatorGraphicsRendererPattern =
     Regex("""(?:GPU Renderer=\[|Graphics Adapter\s+)(.+?)(?:])?$""", RegexOption.IGNORE_CASE)
 
 /**
- * `-gpu auto` is a request, not proof of host acceleration. gfxstream may resolve to
- * SwiftShader, swangle, lavapipe, or llvmpipe, all of which must be reported as software.
+ * `-gpu host` still needs a log parse: gfxstream may resolve to SwiftShader, swangle,
+ * lavapipe, or llvmpipe, all of which must be reported as software.
  */
 internal fun emulatorGraphicsAreSoftware(backend: String, renderer: String?): Boolean {
     val description = listOfNotNull(backend, renderer).joinToString(" ").lowercase()
@@ -607,7 +608,7 @@ internal fun emulatorGraphicsAreSoftware(backend: String, renderer: String?): Bo
 }
 
 /**
- * The emulator writes these after resolving `-gpu auto`. Keep the last occurrence because
+ * The emulator writes these after resolving `-gpu`. Keep the last occurrence because
  * a single launch may recreate its renderer while booting.
  */
 internal fun emulatorGraphicsInfo(logFile: File): EmulatorGraphicsInfo? {
@@ -657,8 +658,37 @@ internal fun emulatorStudioStyleLaunchCommand(
         "-idle-grpc-timeout", "300",
     ) + extraArgs + listOf(
         "-no-boot-anim",
-        "-gpu", "auto",
+        // `-gpu auto` blacklists many Linux GPUs ("drivers may have a bug") and
+        // falls back to SwiftShader/lavapipe at ~10 fps. Android Studio's
+        // standalone launch uses host acceleration; match that. Hidden-window
+        // GPU init still needs [applyEmulatorLaunchEnvironment] (xcb on Linux).
+        "-gpu", "host",
         "-writable-system",
         "-vsync-rate", vsyncRate.toString(),
     )
+}
+
+private val emulatorSoftwareGlEnvKeys = listOf(
+    "LIBGL_ALWAYS_SOFTWARE",
+    "GALLIUM_DRIVER",
+    "MESA_LOADER_DRIVER_OVERRIDE",
+    "VK_ICD_FILENAMES",
+    "VK_DRIVER_FILES",
+    "MESA_VK_DEVICE_SELECT",
+    "ANDROID_EMU_VK_ICD",
+)
+
+/**
+ * The emulator's bundled Qt has no Wayland plugin. On Linux that makes GPU probe
+ * fail and host init fall back to SwiftShader. Force X11/XWayland and drop
+ * inherited software-GL overrides from the parent JVM.
+ */
+internal fun applyEmulatorLaunchEnvironment(
+    env: MutableMap<String, String>,
+    osName: String = System.getProperty("os.name").orEmpty(),
+) {
+    emulatorSoftwareGlEnvKeys.forEach { env.remove(it) }
+    if (osName.contains("linux", ignoreCase = true)) {
+        env["QT_QPA_PLATFORM"] = "xcb"
+    }
 }

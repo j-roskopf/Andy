@@ -110,6 +110,30 @@ val buildAndyMirrorJniMacArm64 by tasks.registering(Exec::class) {
     )
 }
 
+val buildAndyMirrorJniLinuxX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the Linux x86_64 NVDEC/Vulkan overlay used by the native GPU mirror hub."
+    val output = layout.buildDirectory.file("native/andy-mirror/linux-x86_64/libandy-mirror-jni.so")
+    val script = rootProject.layout.projectDirectory.file("native/andy-mirror/jni/linux/build.sh")
+    inputs.files(script)
+    inputs.dir(rootProject.layout.projectDirectory.dir("native/andy-mirror/jni/linux"))
+    inputs.dir(rootProject.layout.projectDirectory.dir("native/andy-mirror/third_party"))
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("linux") &&
+            System.getProperty("os.arch").lowercase() in setOf("amd64", "x86_64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "bash",
+        script.asFile.absolutePath,
+        output.get().asFile.absolutePath,
+        System.getProperty("java.home"),
+    )
+}
+
 val buildAndyMirrorJniMacX64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS x64 JAWT CAMetalLayer bridge used by the native mirror."
@@ -153,10 +177,12 @@ tasks.named<org.gradle.api.tasks.Copy>("desktopProcessResources") {
     dependsOn(
         buildAndyMirrorJniMacArm64,
         buildAndyMirrorJniMacX64,
+        buildAndyMirrorJniLinuxX64,
         verifyScrcpyServer,
     )
     from(layout.buildDirectory.dir("native/andy-mirror")) {
         include("**/andy-mirror-jni.dylib")
+        include("**/libandy-mirror-jni.so")
         into("andy-mirror")
     }
 }

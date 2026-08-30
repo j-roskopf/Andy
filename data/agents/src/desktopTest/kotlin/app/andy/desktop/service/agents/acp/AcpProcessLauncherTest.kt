@@ -4,6 +4,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AcpProcessLauncherTest {
@@ -150,6 +151,27 @@ class AcpProcessLauncherTest {
         if (os.startsWith("Windows", ignoreCase = true)) return
         val builder = ProcessBuilder("true").discardAcpPreflightStdin()
         assertEquals(File("/dev/null"), builder.redirectInput().file())
+    }
+
+    @Test
+    fun applyLaunchEnvDropsCursorAgentHostMarkerFromParentJvm() {
+        val builder = ProcessBuilder("true")
+        builder.environment()["CURSOR_AGENT"] = "1"
+        builder.environment()["CURSOR_CONVERSATION_ID"] = "nested"
+        builder.environment()["NODE_OPTIONS"] = "--require /tmp/bootloader.js"
+        builder.applyLaunchEnv(
+            env = mapOf(
+                "PATH" to "/usr/bin",
+                "HOME" to "/tmp",
+                "CURSOR_API_KEY" to "user-key",
+            ),
+            command = listOf("cursor-agent", "acp"),
+        )
+        assertNull(builder.environment()["CURSOR_AGENT"])
+        assertNull(builder.environment()["CURSOR_CONVERSATION_ID"])
+        assertNull(builder.environment()["NODE_OPTIONS"])
+        assertEquals("user-key", builder.environment()["CURSOR_API_KEY"])
+        assertEquals("/usr/bin", builder.environment()["PATH"])
     }
 
     private fun pathValue(env: Map<String, String>): String? =

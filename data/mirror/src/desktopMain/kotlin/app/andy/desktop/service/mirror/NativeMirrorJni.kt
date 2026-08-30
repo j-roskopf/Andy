@@ -12,11 +12,11 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * Loads the in-process VideoToolbox/Metal bridge for macOS Live mirroring.
+ * Loads the in-process GPU mirror bridge (VideoToolbox/Metal on macOS, NVDEC/Vulkan on Linux).
  *
- * Compose Desktop cannot reliably composite a JAWT-attached CAMetalLayer, so the product GPU
- * path presents into a borderless mouse-transparent AppKit surface that letterboxes over the
- * Live Canvas. Legacy CPU presentation stays available as fallback.
+ * Compose Desktop cannot reliably composite a JAWT-attached CAMetalLayer or Vulkan swapchain, so
+ * the product GPU path presents into a borderless mouse-transparent overlay that letterboxes over
+ * the Live Canvas. Legacy CPU presentation stays available as fallback.
  */
 object NativeMirrorJni {
     private val loadResult: Result<Unit> by lazy(::loadLibrary)
@@ -34,8 +34,17 @@ object NativeMirrorJni {
     /** True when this process can open the inline Metal presenter over the Live Canvas. */
     fun isEmbeddedPresentationSupported(): Boolean = loadResult.isSuccess
 
-    fun embeddedPresentationFailureReason(): String =
-        "No packaged VideoToolbox/Metal native mirror bridge is available for this desktop platform"
+    fun embeddedPresentationFailureReason(): String {
+        val os = System.getProperty("os.name").orEmpty().lowercase()
+        return when {
+            os.contains("linux") ->
+                "No packaged NVDEC/Vulkan native mirror bridge is available for this desktop platform"
+            os.contains("mac") || os.contains("darwin") ->
+                "No packaged VideoToolbox/Metal native mirror bridge is available for this desktop platform"
+            else ->
+                "No packaged native GPU mirror bridge is available for this desktop platform"
+        }
+    }
 
     /**
      * Opens Metal in a borderless surface that tracks the aspect-fitted video rect inside
@@ -314,7 +323,7 @@ object NativeMirrorJni {
             ?.takeIf { it >= 0f }
 
     private fun loadLibrary() = runCatching {
-        val resourcePath = resourcePath() ?: error("No native mirror bridge is packaged for this platform")
+        val resourcePath = resourcePath() ?: error("No native GPU mirror bridge is packaged for this platform")
         val target = File(System.getProperty("user.home"), ".andy/mirror/$resourcePath")
         target.parentFile.mkdirs()
         javaClass.classLoader.getResourceAsStream(resourcePath)?.use {
@@ -328,10 +337,17 @@ object NativeMirrorJni {
         osArch: String = System.getProperty("os.arch"),
     ): String? {
         val os = osName.lowercase()
-        if (!os.contains("mac") && !os.contains("darwin")) return null
-        return when (osArch.lowercase()) {
-            "aarch64", "arm64" -> "andy-mirror/macos-arm64/andy-mirror-jni.dylib"
-            "x86_64", "amd64" -> "andy-mirror/macos-x86_64/andy-mirror-jni.dylib"
+        val arch = osArch.lowercase()
+        return when {
+            os.contains("mac") || os.contains("darwin") -> when (arch) {
+                "aarch64", "arm64" -> "andy-mirror/macos-arm64/andy-mirror-jni.dylib"
+                "x86_64", "amd64" -> "andy-mirror/macos-x86_64/andy-mirror-jni.dylib"
+                else -> null
+            }
+            os.contains("linux") -> when (arch) {
+                "amd64", "x86_64" -> "andy-mirror/linux-x86_64/libandy-mirror-jni.so"
+                else -> null
+            }
             else -> null
         }
     }

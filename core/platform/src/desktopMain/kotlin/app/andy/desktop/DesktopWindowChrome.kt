@@ -31,5 +31,6 @@ fun configureMacTitleBar(window: AwtWindow, background: Color) {
 fun WindowScope.ApplyMacWindowChrome(background: Color) {
     LaunchedEffect(window, background) {
         configureMacTitleBar(window, background)
+        applyInWindowMenuBarTheme(window, background)
     }
 }

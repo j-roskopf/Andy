@@ -216,7 +216,7 @@ object GpuMirrorJni {
 
     private fun loadLibrary() = runCatching {
         val resourcePath = NativeMirrorJni.resourcePath()
-            ?: error("No packaged VideoToolbox/Metal native mirror bridge is available for this desktop platform")
+            ?: error("No packaged native GPU mirror bridge is available for this desktop platform")
         val target = File(System.getProperty("user.home"), ".andy/mirror/$resourcePath")
         target.parentFile.mkdirs()
         GpuMirrorJni::class.java.classLoader.getResourceAsStream(resourcePath)?.use {

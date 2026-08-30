@@ -785,14 +785,29 @@ class DesktopMirrorEngine(
         )
     }
 
+    private fun isLinuxDesktop(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase().contains("linux")
+
+    private fun nativeGpuBridgeLabel(): String =
+        if (isLinuxDesktop()) "NVDEC/Vulkan" else "VideoToolbox/Metal"
+
+    private fun nativeGpuDecoderLabel(hardwareReady: Boolean): String = when {
+        isLinuxDesktop() && hardwareReady -> "NVDEC H.264"
+        isLinuxDesktop() -> "FFmpeg software decode"
+        else -> "VideoToolbox H.264"
+    }
+
+    private fun nativeGpuRendererLabel(): String =
+        if (isLinuxDesktop()) "Vulkan" else "Metal"
+
     private fun publishNativeSession(serial: String, config: MirrorVideoConfig) {
         session.value = MirrorSession(
             serial = serial,
             requestedMode = config.rendererMode,
             backend = MirrorBackend(
                 kind = MirrorBackendKind.NativeHardware,
-                decoder = "VideoToolbox H.264",
-                renderer = "Metal",
+                decoder = nativeGpuDecoderLabel(activeGpuPipeline()?.isHardwareReady() == true),
+                renderer = nativeGpuRendererLabel(),
             ),
         )
     }
@@ -891,7 +906,7 @@ class DesktopMirrorEngine(
         !GpuMirrorJni.isAvailable() && !NativeMirrorJni.isEmbeddedPresentationSupported() ->
             NativeMirrorJni.embeddedPresentationFailureReason()
         !GpuMirrorJni.isAvailable() && !NativeMirrorJni.isAvailable() ->
-            "This desktop platform has no packaged VideoToolbox/Metal native mirror bridge"
+            NativeMirrorJni.embeddedPresentationFailureReason()
         NativeMirrorHostRegistry.current() == null -> "No realized native mirror host is available"
         else -> "The native mirror backend could not initialize"
     }
@@ -1196,7 +1211,7 @@ class DesktopMirrorEngine(
                 frames.value = MirrorFrame(captureSize.width, captureSize.height, IntArray(0), frameNumber = 1)
                 gpuPipeline?.setContentSize(captureSize.width, captureSize.height)
                     ?: NativeMirrorJni.setPresentationContentSize(captureSize.width, captureSize.height)
-                status.value = "Native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
+                status.value = "Native ${nativeGpuBridgeLabel()} mirror connected (${captureSize.width}x${captureSize.height})"
             }
 
             val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 1 shl 20))
@@ -1267,7 +1282,7 @@ class DesktopMirrorEngine(
                     if (pipeline != null) {
                         pipeline.recordTransportIngress()
                         if (!pipeline.consumeH264(payload)) {
-                            val reason = "VideoToolbox rejected the H.264 access unit"
+                            val reason = "Native decoder rejected the H.264 access unit"
                             if (config.rendererMode == MirrorRendererMode.Accelerated) error(reason)
                             usingNativeRenderer = false
                             releaseGpuPipeline()
@@ -1278,10 +1293,11 @@ class DesktopMirrorEngine(
                             )
                             status.value = "Native mirror failed; falling back to legacy CPU presentation"
                         } else {
-                            if (!nativeHardwareVerified && pipeline.isHardwareReady()) {
+                            val linuxSoftwareReady = isLinuxDesktop() && pipeline.hasDecodedFrame()
+                            if (!nativeHardwareVerified && (pipeline.isHardwareReady() || linuxSoftwareReady)) {
                                 nativeHardwareVerified = true
                                 publishNativeSession(serial, config)
-                                status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
+                                status.value = "Verified native ${nativeGpuBridgeLabel()} mirror connected (${captureSize.width}x${captureSize.height})"
                             }
                             val now = System.nanoTime()
                             val framesPresented = pipeline.framesPresented()
@@ -1330,7 +1346,7 @@ class DesktopMirrorEngine(
                             if (!nativeHardwareVerified && NativeMirrorJni.isHardwareReady()) {
                                 nativeHardwareVerified = true
                                 publishNativeSession(serial, config)
-                                status.value = "Verified native VideoToolbox/Metal mirror connected (${captureSize.width}x${captureSize.height})"
+                                status.value = "Verified native ${nativeGpuBridgeLabel()} mirror connected (${captureSize.width}x${captureSize.height})"
                             }
                             val now = System.nanoTime()
                             val framesPresented = NativeMirrorJni.framesPresented()
