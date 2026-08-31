@@ -20,15 +20,15 @@ compile_shader() {
   elif command -v glslc >/dev/null 2>&1; then
     glslc -fshader-stage="${src##*.}" "$src" -o "$spv"
   else
-    echo "Need glslangValidator or glslc to compile overlay shaders" >&2
-    exit 1
+    return 1
   fi
 }
 
-compile_shader "$ROOT/shaders/overlay.vert" "$GEN/overlay.vert.spv"
-compile_shader "$ROOT/shaders/overlay.frag" "$GEN/overlay.frag.spv"
-
-python3 - "$GEN/overlay.vert.spv" "$GEN/overlay.frag.spv" "$GEN/overlay_shaders.h" <<'PY'
+generate_shader_header() {
+  local vert_spv="$1"
+  local frag_spv="$2"
+  local dest="$3"
+  python3 - "$vert_spv" "$frag_spv" "$dest" <<'PY'
 import pathlib, struct, sys
 vert, frag, dest = map(pathlib.Path, sys.argv[1:])
 
@@ -46,12 +46,25 @@ dest.write_text(
     "#pragma once\n"
     "#include <stddef.h>\n"
     "#include <stdint.h>\n"
+    "// Generated from overlay.vert / overlay.frag — regenerate with glslangValidator/glslc when editing GLSL.\n"
     f"static const uint32_t overlay_vert_spv[] = {{\n    {vert_body}\n}};\n"
     f"static const size_t overlay_vert_spv_len = {vert_len};\n"
     f"static const uint32_t overlay_frag_spv[] = {{\n    {frag_body}\n}};\n"
     f"static const size_t overlay_frag_spv_len = {frag_len};\n"
 )
 PY
+}
+
+VENDORED_HEADER="$ROOT/shaders/overlay_shaders.h"
+if compile_shader "$ROOT/shaders/overlay.vert" "$GEN/overlay.vert.spv" \
+  && compile_shader "$ROOT/shaders/overlay.frag" "$GEN/overlay.frag.spv"; then
+  generate_shader_header "$GEN/overlay.vert.spv" "$GEN/overlay.frag.spv" "$GEN/overlay_shaders.h"
+elif [[ -f "$VENDORED_HEADER" ]]; then
+  cp "$VENDORED_HEADER" "$GEN/overlay_shaders.h"
+else
+  echo "Need glslangValidator or glslc to compile overlay shaders (or commit shaders/overlay_shaders.h)" >&2
+  exit 1
+fi
 
 PKGS="vulkan x11 xfixes xext libavcodec libavutil"
 CFLAGS="$(pkg-config --cflags $PKGS)"

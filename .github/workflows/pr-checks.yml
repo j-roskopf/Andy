@@ -74,7 +74,11 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo apt-get install -y \
+            xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2 \
+            build-essential pkg-config \
+            libvulkan-dev libx11-dev libxfixes-dev libxext-dev \
+            libavcodec-dev libavutil-dev
 
       - name: Run Linux desktop tests
         if: matrix.os == 'linux'
@@ -179,7 +183,11 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo apt-get install -y \
+            xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2 \
+            build-essential pkg-config \
+            libvulkan-dev libx11-dev libxfixes-dev libxext-dev \
+            libavcodec-dev libavutil-dev
 
       - name: Assemble Linux desktop app
         if: matrix.os == 'linux'

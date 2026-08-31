@@ -30,5 +30,8 @@ override-redirect X11 window (XWayland on typical Wayland desktops) stacked
 over the Live Canvas.
 
 Requires system `libvulkan`, `libX11`, `libXfixes`, `libavcodec`, and
-`libavutil`. Overlay shaders are compiled at build time with `glslangValidator`
-or `glslc`. Native Wayland (no X11) is out of scope.
+`libavutil` (plus matching `-dev` packages to build). Overlay GLSL is compiled
+to SPIR-V when `glslangValidator` or `glslc` is available; otherwise the
+committed `jni/linux/shaders/overlay_shaders.h` is used so CI/local builds do
+not need a shader toolchain. Regenerate that header after editing the GLSL.
+Native Wayland (no X11) is out of scope.
