@@ -143,6 +143,10 @@ jobs:
           name: desktop-screenshots-macos-artifacts
           if-no-files-found: ignore
           path: |
+            composeApp/build/reports/roborazzi/**
+            composeApp/build/outputs/roborazzi/**
+            composeApp/build/intermediates/roborazzi/**
+            composeApp/build/test-results/roborazzi/**
             build/reports/roborazzi/**
             build/outputs/roborazzi/**
             build/intermediates/roborazzi/**
