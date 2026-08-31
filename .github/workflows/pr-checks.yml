@@ -74,7 +74,11 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo apt-get install -y \
+            xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2 \
+            build-essential pkg-config \
+            libvulkan-dev libx11-dev libxfixes-dev libxext-dev \
+            libavcodec-dev libavutil-dev
 
       - name: Run Linux desktop tests
         if: matrix.os == 'linux'
@@ -139,6 +143,10 @@ jobs:
           name: desktop-screenshots-macos-artifacts
           if-no-files-found: ignore
           path: |
+            composeApp/build/reports/roborazzi/**
+            composeApp/build/outputs/roborazzi/**
+            composeApp/build/intermediates/roborazzi/**
+            composeApp/build/test-results/roborazzi/**
             build/reports/roborazzi/**
             build/outputs/roborazzi/**
             build/intermediates/roborazzi/**
@@ -179,7 +187,11 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2
+          sudo apt-get install -y \
+            xvfb libgtk-3-0 libxtst6 libxrender1 libxi6 libxrandr2 \
+            build-essential pkg-config \
+            libvulkan-dev libx11-dev libxfixes-dev libxext-dev \
+            libavcodec-dev libavutil-dev
 
       - name: Assemble Linux desktop app
         if: matrix.os == 'linux'

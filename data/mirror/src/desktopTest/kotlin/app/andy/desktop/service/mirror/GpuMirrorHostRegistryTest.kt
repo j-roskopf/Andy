@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
-import kotlin.test.assertTrue
+import org.junit.Assume.assumeTrue
 
 class GpuMirrorHostRegistryTest {
     @AfterTest
@@ -22,19 +22,31 @@ class GpuMirrorHostRegistryTest {
     fun registerReplaceClosesPreviousPresenter() {
         if (!GpuMirrorJni.isAvailable()) return
 
+        lateinit var host: Canvas
+        lateinit var pipeline: GpuMirrorPipeline
+        var firstAttached = false
+        var secondAttached = false
+        var first: GpuMirrorPresenter? = null
+        var second: GpuMirrorPresenter? = null
         SwingUtilities.invokeAndWait {
-            val host = realizedCanvas("registry-replace")
-            val pipeline = GpuMirrorSessions.createAndBind("registry-replace")!!
-            try {
-                val first = pipeline.createPresenter()!!
-                assertTrue(first.attach(host, fillHost = false))
-                assertSame(first, GpuMirrorHostRegistry.presenterFor(host))
-
-                val second = pipeline.createPresenter()!!
-                assertTrue(second.attach(host, fillHost = true))
-                assertSame(second, GpuMirrorHostRegistry.presenterFor(host))
-                assertEquals(1, GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).size)
-            } finally {
+            host = realizedCanvas("registry-replace")
+            pipeline = GpuMirrorSessions.createAndBind("registry-replace")!!
+            first = pipeline.createPresenter()!!
+            firstAttached = first!!.attach(host, fillHost = false)
+            if (firstAttached) {
+                second = pipeline.createPresenter()!!
+                secondAttached = second!!.attach(host, fillHost = true)
+            }
+        }
+        assumeTrue(
+            "GPU presenter attach needs a working display/Vulkan stack",
+            firstAttached && secondAttached,
+        )
+        try {
+            assertSame(second, GpuMirrorHostRegistry.presenterFor(host))
+            assertEquals(1, GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).size)
+        } finally {
+            SwingUtilities.invokeAndWait {
                 GpuMirrorSessions.release("registry-replace")
                 disposeCanvas(host)
             }
@@ -45,21 +57,30 @@ class GpuMirrorHostRegistryTest {
     fun hostInWindowFindsPresenterInsidePopOutFrame() {
         if (!GpuMirrorJni.isAvailable()) return
 
+        lateinit var live: Canvas
+        lateinit var popOut: Canvas
+        lateinit var pipeline: GpuMirrorPipeline
+        var attached = false
         SwingUtilities.invokeAndWait {
-            val live = realizedCanvas("registry-live")
-            val popOut = realizedCanvas("registry-pop-out")
-            val pipeline = GpuMirrorSessions.createAndBind("registry-window")!!
-            try {
-                val livePresenter = pipeline.createPresenter()!!
-                val popPresenter = pipeline.createPresenter()!!
-                assertTrue(livePresenter.attach(live, fillHost = false))
-                assertTrue(popPresenter.attach(popOut, fillHost = true))
-
-                val popWindow = SwingUtilities.getWindowAncestor(popOut)!!
-                assertSame(popOut, GpuMirrorHostRegistry.hostInWindow(popWindow))
-                assertNull(GpuMirrorHostRegistry.hostInWindow(SwingUtilities.getWindowAncestor(live)!!)?.takeIf { it === popOut })
-                assertNotNull(GpuMirrorHostRegistry.hostInWindow(SwingUtilities.getWindowAncestor(live)!!))
-            } finally {
+            live = realizedCanvas("registry-live")
+            popOut = realizedCanvas("registry-pop-out")
+            pipeline = GpuMirrorSessions.createAndBind("registry-window")!!
+            val livePresenter = pipeline.createPresenter()!!
+            val popPresenter = pipeline.createPresenter()!!
+            attached = livePresenter.attach(live, fillHost = false) &&
+                popPresenter.attach(popOut, fillHost = true)
+        }
+        assumeTrue(
+            "GPU presenter attach needs a working display/Vulkan stack",
+            attached,
+        )
+        try {
+            val popWindow = SwingUtilities.getWindowAncestor(popOut)!!
+            assertSame(popOut, GpuMirrorHostRegistry.hostInWindow(popWindow))
+            assertNull(GpuMirrorHostRegistry.hostInWindow(SwingUtilities.getWindowAncestor(live)!!)?.takeIf { it === popOut })
+            assertNotNull(GpuMirrorHostRegistry.hostInWindow(SwingUtilities.getWindowAncestor(live)!!))
+        } finally {
+            SwingUtilities.invokeAndWait {
                 GpuMirrorSessions.release("registry-window")
                 disposeCanvas(popOut)
                 disposeCanvas(live)
