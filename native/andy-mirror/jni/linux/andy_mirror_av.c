@@ -105,7 +105,7 @@ bool andy_av_ensure(void) {
             "andy-mirror: failed to dlopen %s / %s (%s)\n",
             codec_soname,
             util_soname,
-            dlerror(),
+            dlerror()
         );
         if (libavcodec_handle) dlclose(libavcodec_handle);
         if (libavutil_handle) dlclose(libavutil_handle);
