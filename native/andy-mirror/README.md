@@ -29,11 +29,12 @@ uploaded as NV12 into Vulkan textures. Presentation is an input-transparent
 override-redirect X11 window (XWayland on typical Wayland desktops) stacked
 over the Live Canvas.
 
-Requires system `libvulkan`, `libX11`, `libXfixes`, plus a recent `libavcodec` /
-`libavutil` at runtime (any common SONAME — Ubuntu's `.so.60`, Fedora/CachyOS
-`.so.61`/`.so.63`, etc.). The JNI library `dlopen`s FFmpeg so a GitHub release
-built on Ubuntu does not `DT_NEEDED` that distro's SONAME. Build still needs
-matching `-dev` headers (`pkg-config --cflags`). Overlay GLSL is compiled to
+Requires system `libvulkan`, `libX11`, `libXfixes`, plus runtime `libavcodec` /
+`libavutil` whose SONAME majors match the `-dev` headers used at build time
+(e.g. Ubuntu build headers → `.so.60`). The JNI library `dlopen`s only those
+majors so a GitHub release built on Ubuntu does not `DT_NEEDED` that distro's
+SONAME, and does not load a mismatched ABI that would corrupt `AVFrame` field
+offsets. Overlay GLSL is compiled to
 SPIR-V when `glslangValidator` or `glslc` is available; otherwise the committed
 `jni/linux/shaders/overlay_shaders.h` is used so CI/local builds do not need a
 shader toolchain. Regenerate that header after editing the GLSL. Native Wayland

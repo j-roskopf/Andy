@@ -2,8 +2,11 @@ package app.andy.desktop.service.mirror
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 /** KWin on Wayland exposes a single X11 root desktop; track Plasma desktops over D-Bus instead. */
 internal object LinuxKdeDesktop {
@@ -26,9 +29,22 @@ internal object LinuxKdeDesktop {
                 "org.kde.KWin",
                 "currentDesktop",
             ).redirectErrorStream(true).start()
-            val out = proc.inputStream.bufferedReader().readText()
-            check(proc.waitFor() == 0) { out }
-            out.substringAfter("i ").trim().toInt()
+            val out = StringBuilder()
+            val reader = Thread({
+                runCatching {
+                    proc.inputStream.bufferedReader().use { stream -> out.append(stream.readText()) }
+                }
+            }, "andy-kde-desktop-reader").apply { isDaemon = true }
+            reader.start()
+            if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+                proc.destroyForcibly()
+                proc.waitFor(1, TimeUnit.SECONDS)
+                reader.join(1_000)
+                return@runCatching null
+            }
+            reader.join(1_000)
+            check(proc.exitValue() == 0) { out }
+            out.toString().substringAfter("i ").trim().toInt()
         }.getOrNull()
     }
 }
@@ -45,11 +61,11 @@ internal object LinuxKdeDesktop {
 internal fun LinuxMirrorDesktopVisibilityEffect(enabled: Boolean) {
     if (!enabled || !LinuxKdeDesktop.isActive() || !GpuMirrorJni.isAvailable()) return
     LaunchedEffect(Unit) {
-        var lastDesktop: Int? = LinuxKdeDesktop.currentIndex()
+        var lastDesktop: Int? = withContext(Dispatchers.IO) { LinuxKdeDesktop.currentIndex() }
         var liveDesktop: Int? = lastDesktop
         var suppressed = false
         while (isActive) {
-            val desktop = LinuxKdeDesktop.currentIndex()
+            val desktop = withContext(Dispatchers.IO) { LinuxKdeDesktop.currentIndex() }
             val hostShowing = GpuMirrorHostRegistry.anyHostShowing()
             val desktopChanged = desktop != null && lastDesktop != null && desktop != lastDesktop
             if (desktopChanged) {

@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <libavcodec/avcodec.h>
+#include <libavcodec/version.h>
 #include <libavutil/dict.h>
 #include <libavutil/buffer.h>
 #include <libavutil/frame.h>
@@ -14,6 +15,7 @@
 #include <libavutil/opt.h>
 #include <libavutil/pixfmt.h>
 #include <libavutil/rational.h>
+#include <libavutil/version.h>
 
 /** Loads libavutil/libavcodec via dlopen so the JNI .so has no FFmpeg DT_NEEDED. */
 bool andy_av_ensure(void);

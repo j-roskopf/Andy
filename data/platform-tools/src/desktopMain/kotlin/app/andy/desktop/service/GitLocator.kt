@@ -31,26 +31,47 @@ object GitLocator {
         runShell: (List<String>) -> String? = ::runShellLookup,
         osName: String = System.getProperty("os.name").orEmpty(),
     ): String? {
-        fromPath(processPath)?.let { return it }
-        fromPath(loginShellEnv["PATH"])?.let { return it }
+        val windows = osName.contains("win", ignoreCase = true)
+        fromPath(processPath, windows)?.let { return it }
+        fromPath(loginShellEnv["PATH"], windows)?.let { return it }
         firstExecutable(knownPaths)?.let { return it }
-        if (osName.contains("win", ignoreCase = true)) return null
+        if (windows) return null
         return lookupViaLoginShell(runShell)
     }
 
-    internal fun fromPath(pathEnv: String?): String? {
+    internal fun fromPath(pathEnv: String?, windows: Boolean = false): String? {
         if (pathEnv.isNullOrBlank()) return null
+        val names = if (windows) {
+            // PATHEXT normally resolves bare "git", but File(...).isFile does not.
+            listOf("git.exe", "git.cmd", "git.bat", "git")
+        } else {
+            listOf("git")
+        }
         return pathEnv.split(File.pathSeparatorChar)
             .asSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-            .map { File(it, "git") }
+            .flatMap { dir -> names.asSequence().map { name -> File(dir, name) } }
             .firstOrNull { it.isFile && it.canExecute() }
             ?.path
     }
 
-    internal fun defaultKnownPaths(): List<String> {
+    internal fun defaultKnownPaths(
+        osName: String = System.getProperty("os.name").orEmpty(),
+    ): List<String> {
         val home = System.getProperty("user.home").orEmpty()
+        if (osName.contains("win", ignoreCase = true)) {
+            val programFiles = System.getenv("ProgramFiles") ?: "C:\\Program Files"
+            val programFilesX86 = System.getenv("ProgramFiles(x86)") ?: "C:\\Program Files (x86)"
+            val localAppData = System.getenv("LOCALAPPDATA").orEmpty()
+            return listOf(
+                "$programFiles\\Git\\cmd\\git.exe",
+                "$programFiles\\Git\\bin\\git.exe",
+                "$programFilesX86\\Git\\cmd\\git.exe",
+                "$programFilesX86\\Git\\bin\\git.exe",
+                "$localAppData\\Programs\\Git\\cmd\\git.exe",
+            ).filter { it.isNotBlank() && !it.startsWith("\\") }
+        }
         return listOf(
             "/usr/bin/git",
             "/usr/local/bin/git",

@@ -1,8 +1,12 @@
 package app.andy.desktop.service
 
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.pathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import java.io.File
 
 class GitLocatorTest {
     @Test
@@ -13,6 +17,24 @@ class GitLocatorTest {
         )
         assertNull(GitLocator.fromPath("/opt/bin:/home/me/.local/bin"))
         assertNull(GitLocator.fromPath(null))
+    }
+
+    @Test
+    fun fromPathResolvesWindowsGitExeSuffix() {
+        val dir = createTempDirectory(prefix = "andy-git-locator-").toFile()
+        try {
+            val exe = File(dir, "git.exe").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            assertEquals(
+                exe.path,
+                GitLocator.fromPath(dir.path, windows = true),
+            )
+            assertNull(GitLocator.fromPath(dir.path, windows = false))
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
@@ -59,5 +81,11 @@ class GitLocatorTest {
             osName = "Windows 11",
         )
         assertNull(resolved)
+    }
+
+    @Test
+    fun defaultKnownPathsIncludesWindowsGitInstalls() {
+        val paths = GitLocator.defaultKnownPaths(osName = "Windows 11")
+        assertTrue(paths.any { it.endsWith("Git\\cmd\\git.exe") || it.endsWith("Git/cmd/git.exe") })
     }
 }

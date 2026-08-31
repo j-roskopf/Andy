@@ -3302,21 +3302,11 @@ class DesktopAgentRunService(
     }
 
     private fun stopNow(taskId: String) {
-        val recovering = currentTask(taskId)?.takeIf { it.connectionRecovery != null }
-        if (recovering != null) {
+        if (currentTask(taskId)?.connectionRecovery != null) {
+            // Cancel the delayed resume, then fall through so a live ACP child is torn down
+            // the same way as a normal Stop (instead of leaving the provider session running).
             connectionRecoveryJobs.remove(taskId)?.cancel()
-            updateTask(taskId) {
-                it.copy(
-                    status = AgentStatus.Done,
-                    stoppedByUser = true,
-                    resumable = false,
-                    connectionRecovery = null,
-                    finishedAtMillis = System.currentTimeMillis(),
-                    unread = false,
-                )
-            }
-            scope.launch { persist() }
-            return
+            updateTask(taskId) { it.copy(connectionRecovery = null) }
         }
         val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
         if (acpTask != null) {
@@ -5719,10 +5709,11 @@ class DesktopAgentRunService(
             if (shouldFlushEditBatchBefore(event)) needsFlush = true
             if (event is AgentEvent.ToolCall && cwd != null) trackEditToolCall(taskId, event, cwd)
         }
-        appendEventsDirect(taskId, events)
-        if (task?.connectionRecovery != null && events.any(::isConnectionRecoveryProgress)) {
+        val accepted = appendEventsDirect(taskId, events)
+        if (task?.connectionRecovery != null && accepted.any(::isConnectionRecoveryProgress)) {
             // A provider produced durable new work after the last retry. Future transport drops
             // receive a fresh bounded budget instead of being counted as one endless outage.
+            // Only accepted events count — replay filtered during session reopen is not progress.
             clearAcpRecoveryState(taskId)
         }
         if (needsFlush) {
@@ -5740,8 +5731,8 @@ class DesktopAgentRunService(
         else -> false
     }
 
-    private fun appendEventsDirect(taskId: String, events: List<AgentEvent>) {
-        if (events.isEmpty()) return
+    private fun appendEventsDirect(taskId: String, events: List<AgentEvent>): List<AgentEvent> {
+        if (events.isEmpty()) return emptyList()
         val task = currentTask(taskId)
         val isAcp = task?.lane == AgentLaneKind.Acp
         val flow = eventFlows.computeIfAbsent(taskId) {
@@ -5771,7 +5762,7 @@ class DesktopAgentRunService(
                 }
             }.first
         }
-        if (accepted.isEmpty()) return
+        if (accepted.isEmpty()) return emptyList()
         accepted.filterIsInstance<AgentEvent.AvailableCommands>().forEach { event ->
             task?.let { recordSlashCommands(it.agent, it.worktreePath ?: it.cwd, event.commands) }
         }
@@ -5789,6 +5780,7 @@ class DesktopAgentRunService(
             }
             if (isAcp) next else next.takeLast(MAX_TERMINAL_EVENTS_IN_MEMORY)
         }
+        return accepted
     }
 
     private fun mergeAcpTranscriptEvent(

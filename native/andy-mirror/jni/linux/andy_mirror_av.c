@@ -64,14 +64,15 @@ bool andy_av_ensure(void) {
         return ok;
     }
     loaded = true;
-    static const char *util_names[] = {
-        "libavutil.so.62", "libavutil.so.61", "libavutil.so.60", "libavutil.so.59", "libavutil.so.58",
-        "libavutil.so.57", "libavutil.so.56", "libavutil.so", NULL,
-    };
-    static const char *codec_names[] = {
-        "libavcodec.so.63", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so.60", "libavcodec.so.59",
-        "libavcodec.so.58", "libavcodec.so", NULL,
-    };
+    /* Struct layouts (AVCodecContext/AVFrame/AVPacket) are ABI-tied to the header
+     * majors used at compile time. Loading a different SONAME can resolve symbols
+     * while misreading fields — only accept the build-matched majors. */
+    char util_soname[32];
+    char codec_soname[32];
+    snprintf(util_soname, sizeof(util_soname), "libavutil.so.%d", LIBAVUTIL_VERSION_MAJOR);
+    snprintf(codec_soname, sizeof(codec_soname), "libavcodec.so.%d", LIBAVCODEC_VERSION_MAJOR);
+    const char *util_names[] = { util_soname, NULL };
+    const char *codec_names[] = { codec_soname, NULL };
     libavutil_handle = open_sonames(util_names);
     libavcodec_handle = open_sonames(codec_names);
     load_ok = libavutil_handle && libavcodec_handle &&
@@ -99,7 +100,13 @@ bool andy_av_ensure(void) {
         lookup_either("avcodec_parameters_free", (void **) &p_avcodec_parameters_free) &&
         lookup_either("avcodec_parameters_to_context", (void **) &p_avcodec_parameters_to_context);
     if (!load_ok) {
-        fprintf(stderr, "andy-mirror: failed to dlopen libavcodec/libavutil (%s)\n", dlerror());
+        fprintf(
+            stderr,
+            "andy-mirror: failed to dlopen %s / %s (%s)\n",
+            codec_soname,
+            util_soname,
+            dlerror(),
+        );
         if (libavcodec_handle) dlclose(libavcodec_handle);
         if (libavutil_handle) dlclose(libavutil_handle);
         libavcodec_handle = NULL;
