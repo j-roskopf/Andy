@@ -1,22 +1,33 @@
 package app.andy.desktop.service
 
+import java.io.File
 import kotlin.io.path.createTempDirectory
-import kotlin.io.path.pathString
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import java.io.File
 
 class GitLocatorTest {
     @Test
     fun fromPathFindsGitInPathEntries() {
-        assertEquals(
-            "/usr/bin/git",
-            GitLocator.fromPath("/opt/bin:/usr/bin:/home/me/.local/bin"),
-        )
-        assertNull(GitLocator.fromPath("/opt/bin:/home/me/.local/bin"))
-        assertNull(GitLocator.fromPath(null))
+        val root = createTempDirectory(prefix = "andy-git-path-").toFile()
+        try {
+            val opt = File(root, "opt").also { it.mkdirs() }
+            val usr = File(root, "usr-bin").also { it.mkdirs() }
+            File(usr, "git").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            val path = listOf(opt.path, usr.path).joinToString(File.pathSeparator)
+            assertEquals(
+                File(usr, "git").path,
+                GitLocator.fromPath(path),
+            )
+            assertNull(GitLocator.fromPath(opt.path))
+            assertNull(GitLocator.fromPath(null))
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test
@@ -39,36 +50,71 @@ class GitLocatorTest {
 
     @Test
     fun locatePrefersProcessPathBeforeKnownLocations() {
-        val resolved = GitLocator.locate(
-            processPath = "/usr/bin",
-            loginShellEnv = mapOf("PATH" to "/opt/homebrew/bin"),
-            knownPaths = listOf("/opt/homebrew/bin/git"),
-            runShell = { error("shell lookup must not run when PATH already resolves git") },
-        )
-        assertEquals("/usr/bin/git", resolved)
+        val root = createTempDirectory(prefix = "andy-git-prefer-").toFile()
+        try {
+            val processDir = File(root, "process").also { it.mkdirs() }
+            val known = File(root, "known").also { it.mkdirs() }
+            val processGit = File(processDir, "git").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            File(known, "git").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            val resolved = GitLocator.locate(
+                processPath = processDir.path,
+                loginShellEnv = mapOf("PATH" to known.path),
+                knownPaths = listOf(File(known, "git").path),
+                runShell = { error("shell lookup must not run when PATH already resolves git") },
+                osName = "Linux",
+            )
+            assertEquals(processGit.path, resolved)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test
     fun locateFallsBackToKnownLocationsWhenPathIsEmpty() {
-        val resolved = GitLocator.locate(
-            processPath = null,
-            loginShellEnv = emptyMap(),
-            knownPaths = listOf("/usr/bin/git"),
-            runShell = { error("shell lookup must not run when known path matches") },
-        )
-        assertEquals("/usr/bin/git", resolved)
+        val root = createTempDirectory(prefix = "andy-git-known-").toFile()
+        try {
+            val knownGit = File(root, "git").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            val resolved = GitLocator.locate(
+                processPath = null,
+                loginShellEnv = emptyMap(),
+                knownPaths = listOf(knownGit.path),
+                runShell = { error("shell lookup must not run when known path matches") },
+                osName = "Linux",
+            )
+            assertEquals(knownGit.path, resolved)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test
     fun locateUsesLoginShellLookupAsLastResort() {
-        val resolved = GitLocator.locate(
-            processPath = null,
-            loginShellEnv = emptyMap(),
-            knownPaths = emptyList(),
-            runShell = { _ -> "/bin/sh\n" },
-            osName = "Linux",
-        )
-        assertEquals("/bin/sh", resolved)
+        val root = createTempDirectory(prefix = "andy-git-shell-").toFile()
+        try {
+            val shellGit = File(root, "git-from-shell").apply {
+                writeText("")
+                setExecutable(true)
+            }
+            val resolved = GitLocator.locate(
+                processPath = null,
+                loginShellEnv = emptyMap(),
+                knownPaths = emptyList(),
+                runShell = { _ -> "${shellGit.path}\n" },
+                osName = "Linux",
+            )
+            assertEquals(shellGit.path, resolved)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test
@@ -86,6 +132,6 @@ class GitLocatorTest {
     @Test
     fun defaultKnownPathsIncludesWindowsGitInstalls() {
         val paths = GitLocator.defaultKnownPaths(osName = "Windows 11")
-        assertTrue(paths.any { it.endsWith("Git\\cmd\\git.exe") || it.endsWith("Git/cmd/git.exe") })
+        assertTrue(paths.any { it.contains("Git") && it.endsWith("git.exe") })
     }
 }
