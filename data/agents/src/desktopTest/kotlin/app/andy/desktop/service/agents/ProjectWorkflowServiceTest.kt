@@ -52,9 +52,9 @@ class ProjectWorkflowServiceTest {
     fun manualCompleteBuildAttemptAdvancesWorkflow() = runBlocking {
         withHarness(
             WorkflowAdapter(
-                // Long enough for the test to observe the active build and call
-                // completeWorkflowRun; keep short so desktopTest doesn't look hung.
-                buildKeepAliveSeconds = 20,
+                // Hold until completeWorkflowRun force-kills the shell. A short sleep races
+                // under loaded macOS CI where start/observe can take longer than 20s.
+                buildKeepAliveSeconds = (harnessTimeoutMillis(60_000, 180_000, 300_000) / 1_000L).toInt(),
                 reviewOutcomes = ArrayDeque(listOf("approved")),
             ),
         ) { harness ->
@@ -1130,8 +1130,8 @@ class ProjectWorkflowServiceTest {
     fun pauseAfterBuildCompletesDoesNotLeaveVerificationWaiting() = runBlocking {
         withHarness(
             WorkflowAdapter(
-                // Keep the build alive long enough to arm pause-after-current.
-                buildKeepAliveSeconds = 20,
+                // Hold until completeWorkflowRun force-kills; same CI race as manualComplete.
+                buildKeepAliveSeconds = (harnessTimeoutMillis(60_000, 180_000, 300_000) / 1_000L).toInt(),
                 reviewOutcomes = ArrayDeque(listOf("approved")),
             ),
         ) { harness ->
