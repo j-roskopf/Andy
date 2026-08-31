@@ -3,8 +3,17 @@ package app.andy.model
 /** Follow-up Andy sends after a provider stream stalls mid-turn. */
 const val CONNECTION_STALL_RETRY_PROMPT = "Continue where you left off."
 
-/** Automatic "continue" prompts Andy will send before surfacing the stall banner. */
-const val MAX_CONNECTION_STALL_AUTO_RETRIES = 2
+/**
+ * Maximum automatic continuations without any durable agent progress between them.
+ *
+ * This deliberately bounds a broken provider connection. A later meaningful tool/message
+ * update resets the count, so a real long-running task can recover more than once without
+ * turning a persistent outage into a hot loop.
+ */
+const val MAX_CONNECTION_STALL_AUTO_RETRIES = 5
+
+/** Capacity errors are not transport drops; retry fewer times and back off more slowly. */
+const val MAX_RESOURCE_EXHAUSTED_AUTO_RETRIES = 2
 
 /** Backoff before each automatic stall retry (multiplied by attempt number). */
 const val CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS = 1_000L
@@ -12,8 +21,28 @@ const val CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS = 1_000L
 /** Longer backoff when Cursor reports provider capacity exhaustion. */
 const val RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS = 3_000L
 
+/** Never leave a healthy provider idle in a rapid reconnect loop. */
+const val MAX_CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS = 30_000L
+
 /** Follow-up Andy sends when the user accepts a plan-mode turn and asks to implement. */
 const val IMPLEMENT_PLAN_PROMPT = "Implement the plan."
+
+enum class AgentConnectionRecoveryReason {
+    Transport,
+    ResourceExhausted,
+}
+
+/**
+ * Durable automatic-recovery checkpoint. It is stored on [AgentTask], allowing `andyd` to
+ * continue a pending recovery after the desktop client reconnects or the daemon restarts.
+ */
+data class AgentConnectionRecovery(
+    val attemptsWithoutProgress: Int,
+    val reason: AgentConnectionRecoveryReason,
+    val nextRetryAtMillis: Long? = null,
+    /** True only after the bounded automatic budget is spent. */
+    val paused: Boolean = false,
+)
 
 /**
  * Cursor (and some other ACP adapters) surface a transport drop as a standalone
@@ -68,6 +97,24 @@ fun List<AgentEvent>.hasRetriableResourceExhausted(): Boolean =
 /** Automatic continue prompts are kept in the log for turn boundaries, not shown in the transcript. */
 fun CharSequence.isSilentConnectionRecoveryPrompt(): Boolean =
     trim() == CONNECTION_STALL_RETRY_PROMPT
+
+/** Exponential, capped backoff for the next continuation attempt. */
+fun connectionStallRetryBackoffMillis(
+    attempt: Int,
+    reason: AgentConnectionRecoveryReason,
+): Long {
+    val base = when (reason) {
+        AgentConnectionRecoveryReason.Transport -> CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS
+        AgentConnectionRecoveryReason.ResourceExhausted -> RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS
+    }
+    val multiplier = 1L shl (attempt - 1).coerceIn(0, 5)
+    return (base * multiplier).coerceAtMost(MAX_CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS)
+}
+
+fun AgentConnectionRecoveryReason.maxAutomaticAttempts(): Int = when (this) {
+    AgentConnectionRecoveryReason.Transport -> MAX_CONNECTION_STALL_AUTO_RETRIES
+    AgentConnectionRecoveryReason.ResourceExhausted -> MAX_RESOURCE_EXHAUSTED_AUTO_RETRIES
+}
 
 private fun List<AgentEvent>.latestTurnStallTexts(): Sequence<CharSequence> = sequence {
     for (event in coalesceAcpTranscriptEvents(latestTurnEvents())) {

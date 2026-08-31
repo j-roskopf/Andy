@@ -68,14 +68,16 @@ import app.andy.model.ProjectVerificationVerdict
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.toProjectProfile
-import app.andy.model.CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
-import app.andy.model.MAX_CONNECTION_STALL_AUTO_RETRIES
-import app.andy.model.RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS
+import app.andy.model.AgentConnectionRecovery
+import app.andy.model.AgentConnectionRecoveryReason
 import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
+import app.andy.model.connectionStallRetryBackoffMillis
 import app.andy.model.hasRetriableConnectionStall
 import app.andy.model.hasRetriableResourceExhausted
+import app.andy.model.isRetriableConnectionStallMessage
+import app.andy.model.maxAutomaticAttempts
 import app.andy.model.planTextFromAcpTranscript
 import app.andy.model.followUpCliPayload
 import app.andy.model.followUpPromptForLiveTerminal
@@ -230,8 +232,10 @@ class DesktopAgentRunService(
     /** While reconnecting an ACP session, drop provider history replay into the transcript. */
     private val acpSuppressProviderReplay = ConcurrentHashMap.newKeySet<String>()
     private val acpProviderReplayScratch = ConcurrentHashMap<String, StringBuilder>()
-    /** Automatic resume attempts per task turn after a provider connection stall. */
-    private val connectionStallAutoRetries = ConcurrentHashMap<String, Int>()
+    /** One scheduled bounded continuation per stalled ACP task. State itself lives on [AgentTask]. */
+    private val connectionRecoveryJobs = ConcurrentHashMap<String, Job>()
+    /** Lets [resume] distinguish the scheduler's silent prompt from a user-initiated retry. */
+    private val scheduledConnectionRecoveryResumes = ConcurrentHashMap.newKeySet<String>()
     /** Outstanding ACP session-mode syncs; [resume] awaits these so Implement doesn't race plan→agent. */
     private val acpPlanModeSyncJobs = ConcurrentHashMap<String, Job>()
 
@@ -325,6 +329,7 @@ class DesktopAgentRunService(
             repairCompletedSpecWorkflowStates()
             reconcileStuckWorkflowArtifacts()
             ready.complete(Unit)
+            restoreConnectionRecoveryJobs()
             // A crash skips the shutdown hook, so a previous session's disposable directory can
             // survive. Only stale roots are swept, so a second running instance is untouched.
             withContext(Dispatchers.IO) { runCatching { TemporaryChatArtifacts.sweepOrphans() } }
@@ -1499,8 +1504,16 @@ class DesktopAgentRunService(
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
     ) {
-        val existing = currentTask(taskId) ?: return
+        var existing = currentTask(taskId) ?: return
         if (existing.userInputRequest != null) return
+        val scheduledRecovery = taskId in scheduledConnectionRecoveryResumes
+        if (!scheduledRecovery && existing.connectionRecovery != null) {
+            // Any explicit user continuation takes precedence over a delayed automatic one.
+            connectionRecoveryJobs.remove(taskId)?.cancel()
+            updateTask(taskId) { current -> current.copy(connectionRecovery = null) }
+            existing = currentTask(taskId) ?: return
+            scope.launch { persist() }
+        }
         // Keep the chat's original provenance; a contextual follow-up only fills an empty one.
         val task = if (provenance != null && existing.provenance == null) {
             existing.copy(provenance = provenance)
@@ -2045,9 +2058,10 @@ class DesktopAgentRunService(
             contextTokens = null,
             contextWindowTokens = null,
             unread = false,
+            connectionRecovery = null,
         )
         store.deleteTaskArtifacts(taskId)
-        connectionStallAutoRetries.remove(taskId)
+        connectionRecoveryJobs.remove(taskId)?.cancel()
         eventFlows[taskId]?.value = emptyList()
         upsertTask(retried)
         persist()
@@ -2776,39 +2790,12 @@ class DesktopAgentRunService(
         if (deferAcpFinishIfAwaitingInput(taskId)) return promptSuccess
 
         val stalled = transcriptHasConnectionStall(taskId)
-        val attempt = connectionStallAutoRetries.getOrDefault(taskId, 0)
-        if (
-            stalled &&
-            attempt < MAX_CONNECTION_STALL_AUTO_RETRIES &&
-            acpManager.isAlive(taskId)
-        ) {
-            val nextAttempt = attempt + 1
-            val resourceExhausted = transcriptHasResourceExhausted(taskId)
-            connectionStallAutoRetries[taskId] = nextAttempt
-            appendLaunchDiagnostics(taskId, "connectionStallAutoRetry=$nextAttempt\n")
-            updateTask(taskId) {
-                it.copy(
-                    status = AgentStatus.Working,
-                    errorMessage = null,
-                    finishedAtMillis = null,
-                    exitCode = null,
-                )
-            }
-            appendEvents(
-                taskId,
-                listOf(AgentEvent.UserMessage(System.currentTimeMillis(), CONNECTION_STALL_RETRY_PROMPT)),
-            )
-            val backoffMs = if (resourceExhausted) {
-                RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS * nextAttempt
-            } else {
-                CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS * nextAttempt
-            }
-            delay(backoffMs)
-            val retrySuccess = acpManager.prompt(taskId, CONNECTION_STALL_RETRY_PROMPT, emptyList())
-            return completeAcpPromptTurn(taskId, retrySuccess)
+        if (!stalled) {
+            clearAcpRecoveryState(taskId)
+        } else if (scheduleStalledAcpRecovery(taskId)) {
+            return true
         }
 
-        connectionStallAutoRetries.remove(taskId)
         val outcome = acpManager.awaitRunOutcome(taskId)
         val stillStalled = transcriptHasConnectionStall(taskId)
         val recovered = promptSuccess && !stillStalled
@@ -2836,6 +2823,96 @@ class DesktopAgentRunService(
             stopReason = outcome.stopReason,
         )
         return recovered || resumableAfterStall
+    }
+
+    /** Records a bounded, durable continuation rather than recursively blocking this run job. */
+    private fun scheduleStalledAcpRecovery(taskId: String): Boolean {
+        val task = currentTask(taskId) ?: return false
+        if (!acpManager.isAlive(taskId)) return false
+        val reason = if (transcriptHasResourceExhausted(taskId)) {
+            AgentConnectionRecoveryReason.ResourceExhausted
+        } else {
+            AgentConnectionRecoveryReason.Transport
+        }
+        val prior = task.connectionRecovery?.takeIf { it.reason == reason && !it.paused }
+        val nextAttempt = (prior?.attemptsWithoutProgress ?: 0) + 1
+        val now = System.currentTimeMillis()
+        val recovery = if (nextAttempt > reason.maxAutomaticAttempts()) {
+            AgentConnectionRecovery(
+                attemptsWithoutProgress = prior?.attemptsWithoutProgress ?: reason.maxAutomaticAttempts(),
+                reason = reason,
+                paused = true,
+            )
+        } else {
+            AgentConnectionRecovery(
+                attemptsWithoutProgress = nextAttempt,
+                reason = reason,
+                nextRetryAtMillis = now + connectionStallRetryBackoffMillis(nextAttempt, reason),
+            )
+        }
+        updateTask(taskId) { current ->
+            current.copy(
+                status = AgentStatus.Done,
+                exitCode = null,
+                errorMessage = null,
+                finishedAtMillis = now,
+                resumable = true,
+                interrupted = false,
+                statusConfident = false,
+                connectionRecovery = recovery,
+            )
+        }
+        appendLaunchDiagnostics(
+            taskId,
+            "connectionStallRecovery=${recovery.reason}:${recovery.attemptsWithoutProgress}:" +
+                "${if (recovery.paused) "paused" else "scheduled"}\n",
+        )
+        scope.launch {
+            persist()
+            if (!recovery.paused) scheduleConnectionRecovery(taskId)
+        }
+        return true
+    }
+
+    /** Rebuilds persisted scheduled continuations after `andyd` or the desktop client starts. */
+    private fun restoreConnectionRecoveryJobs() {
+        _tasks.value.forEach { task ->
+            task.connectionRecovery?.takeIf { !it.paused && it.nextRetryAtMillis != null }?.let {
+                scheduleConnectionRecovery(task.id)
+            }
+        }
+    }
+
+    private fun scheduleConnectionRecovery(taskId: String) {
+        if (connectionRecoveryJobs[taskId]?.isActive == true) return
+        val job = scope.launch(Dispatchers.IO) {
+            val task = currentTask(taskId) ?: return@launch
+            val recovery = task.connectionRecovery ?: return@launch
+            if (recovery.paused || task.stoppedByUser) return@launch
+            val delayMillis = ((recovery.nextRetryAtMillis ?: System.currentTimeMillis()) - System.currentTimeMillis())
+                .coerceAtLeast(0L)
+            delay(delayMillis)
+            val readyTask = currentTask(taskId) ?: return@launch
+            val readyRecovery = readyTask.connectionRecovery ?: return@launch
+            if (readyRecovery.paused || readyTask.stoppedByUser) return@launch
+            scheduledConnectionRecoveryResumes.add(taskId)
+            try {
+                resume(taskId, CONNECTION_STALL_RETRY_PROMPT)
+            } finally {
+                scheduledConnectionRecoveryResumes.remove(taskId)
+            }
+        }
+        val prior = connectionRecoveryJobs.putIfAbsent(taskId, job)
+        if (prior != null) job.cancel()
+        job.invokeOnCompletion { connectionRecoveryJobs.remove(taskId, job) }
+    }
+
+    private fun clearAcpRecoveryState(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        if (task.connectionRecovery == null) return
+        connectionRecoveryJobs.remove(taskId)?.cancel()
+        updateTask(taskId) { current -> current.copy(connectionRecovery = null) }
+        scope.launch { persist() }
     }
 
     private fun transcriptHasConnectionStall(taskId: String): Boolean =
@@ -3225,6 +3302,22 @@ class DesktopAgentRunService(
     }
 
     private fun stopNow(taskId: String) {
+        val recovering = currentTask(taskId)?.takeIf { it.connectionRecovery != null }
+        if (recovering != null) {
+            connectionRecoveryJobs.remove(taskId)?.cancel()
+            updateTask(taskId) {
+                it.copy(
+                    status = AgentStatus.Done,
+                    stoppedByUser = true,
+                    resumable = false,
+                    connectionRecovery = null,
+                    finishedAtMillis = System.currentTimeMillis(),
+                    unread = false,
+                )
+            }
+            scope.launch { persist() }
+            return
+        }
         val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
         if (acpTask != null) {
             handles[taskId]?.stopRequested = true
@@ -3304,7 +3397,8 @@ class DesktopAgentRunService(
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
-        connectionStallAutoRetries.remove(taskId)
+        connectionRecoveryJobs.remove(taskId)?.cancel()
+        scheduledConnectionRecoveryResumes.remove(taskId)
         _tasks.update { list ->
             list.mapNotNull { existing ->
                 when {
@@ -4179,6 +4273,9 @@ class DesktopAgentRunService(
 
     /** Persist state and tear down owned tmux sessions on JVM exit or explicit close. */
     fun shutdownForProcessExit() {
+        connectionRecoveryJobs.values.forEach { it.cancel() }
+        connectionRecoveryJobs.clear()
+        scheduledConnectionRecoveryResumes.clear()
         runCatching { snapshotActiveTasksBeforeShutdown() }
         runCatching { discardTemporaryChatsForProcessExit() }
         _tasks.value.filter { it.lane == AgentLaneKind.Acp && acpManager.isAlive(it.id) }.forEach { task ->
@@ -5623,12 +5720,24 @@ class DesktopAgentRunService(
             if (event is AgentEvent.ToolCall && cwd != null) trackEditToolCall(taskId, event, cwd)
         }
         appendEventsDirect(taskId, events)
+        if (task?.connectionRecovery != null && events.any(::isConnectionRecoveryProgress)) {
+            // A provider produced durable new work after the last retry. Future transport drops
+            // receive a fresh bounded budget instead of being counted as one endless outage.
+            clearAcpRecoveryState(taskId)
+        }
         if (needsFlush) {
             val atMillis = events.lastOrNull()?.atMillis ?: System.currentTimeMillis()
             scheduleFileChangesEnrichment(taskId, flushBatch = true, atMillis = atMillis)
         } else if (task?.lane == AgentLaneKind.Acp) {
             scheduleFileChangesEnrichment(taskId)
         }
+    }
+
+    private fun isConnectionRecoveryProgress(event: AgentEvent): Boolean = when (event) {
+        is AgentEvent.AssistantText -> event.text.isNotBlank() && !event.text.isRetriableConnectionStallMessage()
+        is AgentEvent.ToolCall -> event.state != AgentToolState.Failed
+        is AgentEvent.ToolResult -> !event.isError
+        else -> false
     }
 
     private fun appendEventsDirect(taskId: String, events: List<AgentEvent>) {

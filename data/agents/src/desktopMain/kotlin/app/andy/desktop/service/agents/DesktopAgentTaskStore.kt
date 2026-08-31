@@ -2,6 +2,8 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentContextualProvenance
+import app.andy.model.AgentConnectionRecovery
+import app.andy.model.AgentConnectionRecoveryReason
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentQuotaAccess
@@ -296,6 +298,10 @@ internal data class AgentTaskDto(
     val vendorSessionId: String = "",
     val acpSessionId: String = "",
     val stopReason: String = "",
+    val connectionRecoveryAttempts: Int = 0,
+    val connectionRecoveryReason: String = "",
+    val connectionRecoveryNextRetryAtMillis: Long = 0,
+    val connectionRecoveryPaused: Boolean = false,
     val lane: String = AgentLaneKind.Terminal.name,
     /** Newer stores make the persisted lane authoritative; old stores still use artifact migration. */
     val laneExplicit: Boolean = false,
@@ -685,6 +691,19 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         vendorSessionId = vendorSessionId.takeIf { it.isNotBlank() },
         acpSessionId = acpSessionId.takeIf { it.isNotBlank() },
         stopReason = stopReason.takeIf { it.isNotBlank() },
+        connectionRecovery = connectionRecoveryReason
+            .takeIf { connectionRecoveryAttempts > 0 }
+            ?.let { rawReason ->
+                AgentConnectionRecoveryReason.entries.firstOrNull { it.name == rawReason }
+                    ?.let { reason ->
+                        AgentConnectionRecovery(
+                            attemptsWithoutProgress = connectionRecoveryAttempts,
+                            reason = reason,
+                            nextRetryAtMillis = connectionRecoveryNextRetryAtMillis.takeIf { it > 0 },
+                            paused = connectionRecoveryPaused,
+                        )
+                    }
+            },
         lane = AgentLaneKind.entries.firstOrNull { it.name == lane }
             ?.takeIf { laneExplicit }
             ?: inferAgentLaneFromArtifacts(
@@ -802,6 +821,10 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             vendorSessionId = task.vendorSessionId.orEmpty(),
             acpSessionId = task.acpSessionId.orEmpty(),
             stopReason = task.stopReason.orEmpty(),
+            connectionRecoveryAttempts = task.connectionRecovery?.attemptsWithoutProgress ?: 0,
+            connectionRecoveryReason = task.connectionRecovery?.reason?.name.orEmpty(),
+            connectionRecoveryNextRetryAtMillis = task.connectionRecovery?.nextRetryAtMillis ?: 0,
+            connectionRecoveryPaused = task.connectionRecovery?.paused ?: false,
             lane = task.lane.name,
             laneExplicit = true,
             createdAtMillis = task.createdAtMillis,

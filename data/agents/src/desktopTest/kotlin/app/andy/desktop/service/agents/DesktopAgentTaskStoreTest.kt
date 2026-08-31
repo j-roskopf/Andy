@@ -1,6 +1,8 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentConnectionRecovery
+import app.andy.model.AgentConnectionRecoveryReason
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
@@ -181,6 +183,30 @@ class DesktopAgentTaskStoreTest {
         store.save(AgentStoreState(tasks = listOf(task)))
         val loaded = store.load()
         assertEquals(listOf(task), loaded.tasks)
+    }
+
+    @Test
+    fun roundTripsDurableConnectionRecovery() = withStore { store ->
+        val task = AgentTask(
+            id = "task-recovery",
+            title = "wait for CI",
+            prompt = "ship it",
+            agent = AgentKind.Cursor,
+            cwd = "/tmp",
+            originDir = "/tmp",
+            lane = AgentLaneKind.Acp,
+            status = AgentStatus.Done,
+            resumable = true,
+            connectionRecovery = AgentConnectionRecovery(
+                attemptsWithoutProgress = 2,
+                reason = AgentConnectionRecoveryReason.Transport,
+                nextRetryAtMillis = 3_000,
+            ),
+            createdAtMillis = 1,
+            finishedAtMillis = 2,
+        )
+        store.save(AgentStoreState(tasks = listOf(task)))
+        assertEquals(listOf(task), store.load().tasks)
     }
 
     @Test
