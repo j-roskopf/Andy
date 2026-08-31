@@ -174,6 +174,38 @@ class AcpProcessLauncherTest {
         assertEquals("/usr/bin", builder.environment()["PATH"])
     }
 
+    @Test
+    fun applyLaunchEnvDropsParentXdgSandboxUnlessCallerSetsIt() {
+        val builder = ProcessBuilder("true")
+        builder.environment()["XDG_STATE_HOME"] = "/tmp/cursor-sandbox/state"
+        builder.environment()["XDG_CONFIG_HOME"] = "/tmp/cursor-sandbox/config"
+        builder.applyLaunchEnv(
+            env = mapOf(
+                "PATH" to "/usr/bin",
+                "HOME" to "/tmp",
+            ),
+            command = listOf("cursor-agent", "acp"),
+        )
+        assertNull(builder.environment()["XDG_STATE_HOME"])
+        assertNull(builder.environment()["XDG_CONFIG_HOME"])
+        assertEquals("/usr/bin", builder.environment()["PATH"])
+    }
+
+    @Test
+    fun applyLaunchEnvKeepsCallerXdgAfterScrub() {
+        val builder = ProcessBuilder("true")
+        builder.environment()["XDG_STATE_HOME"] = "/tmp/cursor-sandbox/state"
+        builder.applyLaunchEnv(
+            env = mapOf(
+                "PATH" to "/usr/bin",
+                "HOME" to "/tmp",
+                "XDG_STATE_HOME" to "/home/test/.local/state",
+            ),
+            command = listOf("cursor-agent", "acp"),
+        )
+        assertEquals("/home/test/.local/state", builder.environment()["XDG_STATE_HOME"])
+    }
+
     private fun pathValue(env: Map<String, String>): String? =
         env.entries.firstOrNull { it.key.equals("PATH", ignoreCase = true) }?.value
 }

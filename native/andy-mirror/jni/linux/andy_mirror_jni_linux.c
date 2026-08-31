@@ -213,3 +213,33 @@ JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeLatestFrameSize)(JNIEnv *env, jc
     (*env)->SetIntArrayRegion(env, out_size, 0, 2, values);
     return JNI_TRUE;
 }
+
+JNIEXPORT jint JNICALL GPU_JNI_METHOD(nativeReadWindowDesktop)(JNIEnv *env, jclass clazz, jint window_number) {
+    (void) env;
+    (void) clazz;
+    return (jint) andy_hub_window_desktop(window_number);
+}
+
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeRefreshAllPresenters)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    andy_hub_refresh_all_presenters();
+}
+
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeSuppressForDesktopSwitch)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    andy_hub_suppress_presenters_for_desktop_switch();
+}
+
+JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeShouldResumePresentersAfterDesktopSwitch)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    return andy_hub_should_resume_presenters_after_desktop_switch() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeResumeAfterDesktopSwitch)(JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    andy_hub_resume_presenters_after_desktop_switch();
+}

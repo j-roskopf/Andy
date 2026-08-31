@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LoginShellEnvironmentTest {
@@ -78,5 +79,28 @@ class LoginShellEnvironmentTest {
         assertEquals(listOf("/bin/zsh", "-ilc"), invokedCommand?.take(2))
         assertEquals("/opt/homebrew/bin:/usr/bin", result["PATH"])
         assertEquals("/opt/jdk", result["JAVA_HOME"])
+    }
+
+    @Test
+    fun dropIdeSandboxEnvironmentRemovesCursorXdgAndAgentMarkers() {
+        val env = mutableMapOf(
+            "PATH" to "/usr/bin",
+            "HOME" to "/home/test",
+            "XDG_STATE_HOME" to "/tmp/cursor-sandbox/state",
+            "XDG_CONFIG_HOME" to "/tmp/cursor-sandbox/config",
+            "CURSOR_AGENT" to "1",
+            "CURSOR_API_KEY" to "user-key",
+            "VSCODE_IPC_HOOK" to "/tmp/vscode.sock",
+        )
+
+        LoginShellEnvironment.dropIdeSandboxEnvironment(env)
+
+        assertEquals("/usr/bin", env["PATH"])
+        assertEquals("/home/test", env["HOME"])
+        assertEquals("user-key", env["CURSOR_API_KEY"])
+        assertNull(env["XDG_STATE_HOME"])
+        assertNull(env["XDG_CONFIG_HOME"])
+        assertNull(env["CURSOR_AGENT"])
+        assertNull(env["VSCODE_IPC_HOOK"])
     }
 }

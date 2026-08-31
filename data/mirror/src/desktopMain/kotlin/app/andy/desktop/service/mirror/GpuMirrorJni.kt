@@ -214,6 +214,28 @@ object GpuMirrorJni {
         return "#%02X%02X%02X".format((color ushr 16) and 0xff, (color ushr 8) and 0xff, color and 0xff)
     }
 
+    fun readWindowDesktop(windowNumber: Int): Int =
+        if (!loadResult.isSuccess || windowNumber == 0) -1
+        else runCatching { nativeReadWindowDesktop(windowNumber) }.getOrDefault(-1)
+
+    fun refreshAllPresenters() {
+        if (!loadResult.isSuccess) return
+        runCatching { nativeRefreshAllPresenters() }
+    }
+
+    fun suppressForDesktopSwitch() {
+        if (!loadResult.isSuccess) return
+        runCatching { nativeSuppressForDesktopSwitch() }
+    }
+
+    fun resumeAfterDesktopSwitch() {
+        if (!loadResult.isSuccess) return
+        runCatching { nativeResumeAfterDesktopSwitch() }
+    }
+
+    fun shouldResumePresentersAfterDesktopSwitch(): Boolean =
+        loadResult.isSuccess && runCatching { nativeShouldResumePresentersAfterDesktopSwitch() }.getOrDefault(false)
+
     private fun loadLibrary() = runCatching {
         val resourcePath = NativeMirrorJni.resourcePath()
             ?: error("No packaged native GPU mirror bridge is available for this desktop platform")
@@ -298,4 +320,9 @@ object GpuMirrorJni {
         visible: Boolean,
     )
     private external fun nativeInspectPixel(decoderId: Long, normalizedX: Float, normalizedY: Float): Int
+    private external fun nativeReadWindowDesktop(windowNumber: Int): Int
+    private external fun nativeRefreshAllPresenters()
+    private external fun nativeSuppressForDesktopSwitch()
+    private external fun nativeShouldResumePresentersAfterDesktopSwitch(): Boolean
+    private external fun nativeResumeAfterDesktopSwitch()
 }

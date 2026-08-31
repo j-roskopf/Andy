@@ -19,11 +19,9 @@ object GpuMirrorHostRegistry {
         presentersByDecoder.add(presenter)
     }
 
+    /** Drops the host mapping only; keeps the presenter warm for tab-switch reattach. */
     fun unregisterPresenter(host: Canvas) {
-        val removed = presentersByHost.remove(host)
-        if (removed != null) {
-            presentersByDecoder.remove(removed)
-        }
+        presentersByHost.remove(host)
     }
 
     /** Drops a presenter from the decoder index without touching another host's registration. */
@@ -44,6 +42,12 @@ object GpuMirrorHostRegistry {
     fun presentersForDecoder(decoderId: Long): List<GpuMirrorPresenter> =
         presentersByDecoder.filter { it.decoderId == decoderId }
 
+    /** Presenter detached from its canvas but still decoding; safe to reattach after tab switches. */
+    fun unattachedPresenterForDecoder(decoderId: Long): GpuMirrorPresenter? =
+        presentersForDecoder(decoderId).firstOrNull { it !in presentersByHost.values }
+
+    fun anyHostShowing(): Boolean = presentersByHost.keys.any { it.isShowing }
+
     fun pruneOrphanedPresenters(decoderId: Long) {
         val registered = presentersByHost.values.toSet()
         presentersForDecoder(decoderId)
@@ -63,7 +67,9 @@ object GpuMirrorHostRegistry {
         }
     }
 
-    fun allPresenters(): List<GpuMirrorPresenter> = presentersByHost.values.distinct()
+    fun attachedPresenters(): List<GpuMirrorPresenter> = presentersByHost.values.distinct()
+
+    fun allPresenters(): List<GpuMirrorPresenter> = presentersByDecoder.toList()
 
     /** Test-only snapshot of registered hosts. */
     fun registeredHostsForTests(): List<Canvas> = presentersByHost.keys.toList()

@@ -59,6 +59,14 @@ typedef struct {
     int pending_h;
     double pending_scale;
     int pending_parent_window;
+    bool desktop_suppressed;
+    bool frame_applied;
+    int applied_x;
+    int applied_y;
+    int applied_w;
+    int applied_h;
+    int applied_parent;
+    bool applied_mapped;
 } GpuPresenter;
 
 static GpuDecoder decoders[ANDY_MAX_DECODERS];
@@ -183,10 +191,13 @@ static void remember_latest(GpuDecoder *decoder, const AndyFrameStore *frame) {
     pthread_mutex_unlock(&decoder->latest_lock);
 }
 
+static void apply_presenter_frame(GpuPresenter *presenter);
+
 static bool render_to_presenter(GpuPresenter *presenter, GpuDecoder *decoder, const AndyFrameStore *frame,
                                 bool input_changed_probe, uint64_t packet_ticks, uint64_t transport_ticks,
                                 bool record_presentation_metrics) {
     if (!presenter->overlay_open || !presenter->visible || !presenter->vk || !frame || !frame->plane0) return false;
+    if (!presenter->desktop_suppressed) apply_presenter_frame(presenter);
     pthread_mutex_lock(&render_lock);
     if (!presenter->overlay_open || !presenter->vk) {
         pthread_mutex_unlock(&render_lock);
@@ -222,9 +233,26 @@ static void apply_presenter_frame(GpuPresenter *presenter) {
     if (!presenter->overlay_open || !presenter->window) return;
     const int w = presenter->pending_w > 0 ? presenter->pending_w : 1;
     const int h = presenter->pending_h > 0 ? presenter->pending_h : 1;
-    andy_x11_configure(presenter->window, presenter->pending_x, presenter->pending_y, w, h,
-                       (unsigned long) (uint32_t) presenter->pending_parent_window, presenter->visible);
+    const bool want_map = presenter->visible && !presenter->desktop_suppressed;
+    const int parent = presenter->pending_parent_window;
+    if (presenter->frame_applied && presenter->applied_x == presenter->pending_x &&
+        presenter->applied_y == presenter->pending_y && presenter->applied_w == w && presenter->applied_h == h &&
+        presenter->applied_parent == parent && presenter->applied_mapped == want_map) {
+        return;
+    }
+    const bool restack = want_map;
+    // Record the real map result. If the parent is not viewable yet (boot / desktop
+    // return), configure unmaps — leaving frame_applied false so later frames retry.
+    const bool mapped = andy_x11_configure(presenter->window, presenter->pending_x, presenter->pending_y, w, h,
+                                           (unsigned long) (uint32_t) parent, want_map, restack);
     if (presenter->vk) andy_vk_note_resize(presenter->vk, w, h);
+    presenter->applied_x = presenter->pending_x;
+    presenter->applied_y = presenter->pending_y;
+    presenter->applied_w = w;
+    presenter->applied_h = h;
+    presenter->applied_parent = parent;
+    presenter->applied_mapped = mapped;
+    presenter->frame_applied = mapped == want_map;
 }
 
 static bool open_presenter_window(GpuPresenter *presenter) {
@@ -388,8 +416,17 @@ void andy_hub_set_presenter_visible(int64_t presenter_id, bool visible) {
     GpuPresenter *presenter = find_presenter(presenter_id);
     if (!presenter || !presenter->window) return;
     presenter->visible = visible;
-    andy_x11_set_visible(presenter->window, visible);
-    if (visible) apply_presenter_frame(presenter);
+    if (visible) {
+        // Do not clear desktop_suppressed here. Geometry refresh / applyVisible(true)
+        // fires during Plasma desktop switches and would remount the floating overlay.
+        // Attach/warmResume/desktop-guard call resume_presenters to clear suppress.
+        presenter->frame_applied = false;
+        apply_presenter_frame(presenter);
+    } else {
+        presenter->frame_applied = false;
+        presenter->applied_mapped = false;
+        andy_x11_set_visible(presenter->window, false);
+    }
 }
 
 void andy_hub_update_presenter_geometry(int64_t presenter_id, int x, int y, int width, int height, double scale,
@@ -435,6 +472,7 @@ void andy_hub_repaint_presenter(int64_t presenter_id) {
     if (!presenter) return;
     GpuDecoder *decoder = find_decoder(presenter->decoder_id);
     if (!decoder) return;
+    if (!presenter->desktop_suppressed) apply_presenter_frame(presenter);
     pthread_mutex_lock(&decoder->latest_lock);
     AndyFrameStore copy = {0};
     const bool ok = andy_frame_store_clone(&copy, &decoder->latest);
@@ -769,4 +807,73 @@ void andy_hub_clear_ios_decoder(int64_t decoder_id) {
 
 int64_t andy_hub_ios_decoder(void) {
     return ios_decoder_id;
+}
+
+int andy_hub_window_desktop(int parent_window_number) {
+    if (parent_window_number <= 0) return -1;
+    return andy_x11_window_desktop((unsigned long) (uint32_t) parent_window_number);
+}
+
+void andy_hub_refresh_all_presenters(void) {
+    pthread_mutex_lock(&hub_lock);
+    for (int i = 0; i < ANDY_MAX_PRESENTERS; ++i) {
+        GpuPresenter *presenter = &presenters[i];
+        if (presenter->active && presenter->overlay_open) {
+            apply_presenter_frame(presenter);
+        }
+    }
+    pthread_mutex_unlock(&hub_lock);
+}
+
+void andy_hub_suppress_presenters_for_desktop_switch(void) {
+    pthread_mutex_lock(&hub_lock);
+    for (int i = 0; i < ANDY_MAX_PRESENTERS; ++i) {
+        GpuPresenter *presenter = &presenters[i];
+        if (!presenter->active || !presenter->overlay_open || !presenter->window) continue;
+        presenter->desktop_suppressed = true;
+        presenter->frame_applied = false;
+        presenter->applied_mapped = false;
+        andy_x11_set_visible(presenter->window, false);
+    }
+    pthread_mutex_unlock(&hub_lock);
+}
+
+bool andy_hub_should_resume_presenters_after_desktop_switch(void) {
+    pthread_mutex_lock(&hub_lock);
+    bool resume = false;
+    for (int i = 0; i < ANDY_MAX_PRESENTERS; ++i) {
+        GpuPresenter *presenter = &presenters[i];
+        if (!presenter->active || !presenter->overlay_open || !presenter->visible) continue;
+        const Window parent =
+            presenter->pending_parent_window ? (Window) (unsigned long) (uint32_t) presenter->pending_parent_window
+                                             : None;
+        if (parent && andy_x11_window_viewable((unsigned long) parent)) {
+            resume = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&hub_lock);
+    return resume;
+}
+
+void andy_hub_resume_presenters_after_desktop_switch(void) {
+    pthread_mutex_lock(&hub_lock);
+    for (int i = 0; i < ANDY_MAX_PRESENTERS; ++i) {
+        GpuPresenter *presenter = &presenters[i];
+        if (!presenter->active || !presenter->overlay_open || !presenter->window) continue;
+        // Never force visible=true: warm-detached presenters (tab leave) stay hidden.
+        // Only clear desktop suppress for presenters the host still wants shown.
+        if (!presenter->visible) {
+            presenter->desktop_suppressed = false;
+            presenter->frame_applied = false;
+            presenter->applied_mapped = false;
+            continue;
+        }
+        presenter->desktop_suppressed = false;
+        presenter->frame_applied = false;
+        presenter->applied_mapped = false;
+        apply_presenter_frame(presenter);
+        andy_hub_repaint_presenter(presenter->id);
+    }
+    pthread_mutex_unlock(&hub_lock);
 }

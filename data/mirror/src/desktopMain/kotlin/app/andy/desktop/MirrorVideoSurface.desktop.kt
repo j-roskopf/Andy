@@ -24,6 +24,7 @@ import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
 import app.andy.desktop.service.mirror.GpuMirrorJni
 import app.andy.desktop.service.mirror.GpuMirrorPresenter
 import app.andy.desktop.service.mirror.GpuMirrorSessions
+import app.andy.desktop.service.mirror.LinuxMirrorDesktopVisibilityEffect
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
 import app.andy.desktop.service.mirror.NativeMirrorJni
 import java.awt.AlphaComposite
@@ -36,6 +37,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.HierarchyBoundsAdapter
 import java.awt.event.HierarchyEvent
+import java.awt.event.HierarchyListener
 import java.awt.event.FocusAdapter
 import java.awt.event.FocusEvent
 import java.awt.event.KeyAdapter
@@ -47,6 +49,9 @@ import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
+import java.awt.Window
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
 import java.awt.geom.Ellipse2D
@@ -91,6 +96,9 @@ actual fun MirrorVideoSurface(
                 gpuMirrorStreamKey = gpuMirrorStreamKey,
             )
         }
+        LinuxMirrorDesktopVisibilityEffect(
+            enabled = nativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable(),
+        )
         Box(modifier.background(Color.Black)) {
             if (!suppressHeavyweight) {
                 SwingPanel(
@@ -148,6 +156,9 @@ actual fun MirrorVideoSurface(
                 gpuMirrorStreamKey = gpuMirrorStreamKey,
             )
         }
+        LinuxMirrorDesktopVisibilityEffect(
+            enabled = nativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable(),
+        )
         Box(modifier.background(Color.Black)) {
             if (!suppressHeavyweight) {
                 SwingPanel(
@@ -243,6 +254,17 @@ private class MirrorPanel(
     private var pendingFrame: MirrorFrame? = null
     private var frameDispatchPending = false
     private var gpuPresenter: GpuMirrorPresenter? = null
+    private var resumeGpuPresentationAttempts = 0
+    private var ancestorWindow: Window? = null
+    private val ancestorWindowListener = object : WindowAdapter() {
+        override fun windowActivated(e: WindowEvent) {
+            if (!occluded && hostsNativePresentation) resumeGpuPresentationAfterShow()
+        }
+
+        override fun windowStateChanged(e: WindowEvent) {
+            if (!occluded && hostsNativePresentation) updatePresentationGeometry()
+        }
+    }
 
     private fun prefersGpuHub(): Boolean =
         hostsNativePresentation && gpuMirrorStreamKey != null && GpuMirrorJni.isAvailable()
@@ -268,8 +290,6 @@ private class MirrorPanel(
         ) {
             return cached
         }
-        cached?.close()
-        invalidateGpuPresenter()
         GpuMirrorHostRegistry.presenterFor(this)?.let { existing ->
             if (existing.decoderId == pipeline.decoderId) {
                 gpuPresenter = existing
@@ -277,17 +297,50 @@ private class MirrorPanel(
             }
             existing.close()
         }
+        GpuMirrorHostRegistry.unattachedPresenterForDecoder(pipeline.decoderId)?.let { orphan ->
+            gpuPresenter = orphan
+            return orphan
+        }
+        cached?.takeIf { it.decoderId == pipeline.decoderId }?.let { orphan ->
+            gpuPresenter = orphan
+            return orphan
+        }
+        cached?.close()
+        invalidateGpuPresenter()
         return pipeline.createPresenter(this)?.also { gpuPresenter = it }
     }
 
     private fun attachGpuPresentationIfReady() {
         if (MirrorPresentationGuard.suppressingGeometry || !prefersGpuHub()) return
+        // Boot attach before the Canvas has a real size leaves a stuck/invisible overlay;
+        // tab remount works because size is already valid by then.
+        if (!isShowing || width <= 0 || height <= 0) return
         val presenter = ensureGpuPresenter() ?: return
         if (presenter.isAttachedTo(this)) {
             presenter.updateGeometry(this)
+            presenter.repaint()
             return
         }
         presenter.attach(this, fillNativePresentationHost)
+    }
+
+    private fun resumeGpuPresentationAfterShow() {
+        if (!prefersGpuHub() || occluded || !hostsNativePresentation || !isDisplayable) return
+        val resume = Runnable {
+            // Retry until the hub session exists and the host has real bounds — on first
+            // Live open the session often arrives after addNotify.
+            if (!isDisplayable || !isShowing || width <= 0 || height <= 0 || !usesGpuHub()) {
+                if (resumeGpuPresentationAttempts++ < 40) {
+                    SwingUtilities.invokeLater(this::resumeGpuPresentationAfterShow)
+                }
+                return@Runnable
+            }
+            resumeGpuPresentationAttempts = 0
+            attachGpuPresentationIfReady()
+            ensureGpuPresenter()?.warmResume(this)
+            GpuMirrorJni.resumeAfterDesktopSwitch()
+        }
+        if (SwingUtilities.isEventDispatchThread()) resume.run() else SwingUtilities.invokeLater(resume)
     }
 
     private var presentationGeometryPending = false
@@ -483,13 +536,12 @@ private class MirrorPanel(
         addMouseWheelListener(listener)
         addFocusListener(object : FocusAdapter() {
             override fun focusGained(event: FocusEvent) {
-                // Focus can bury a non-child Metal overlay under the black Canvas. Refresh
-                // geometry so hub re-parents via addChildWindow without orderFront flashing.
                 if (occluded || !hostsNativePresentation) return
                 if (usesGpuHub()) {
-                    ensureGpuPresenter()?.invalidateGeometry()
+                    ensureGpuPresenter()?.repaint()
+                } else {
+                    updatePresentationGeometry()
                 }
-                updatePresentationGeometry()
             }
         })
         addComponentListener(object : ComponentAdapter() {
@@ -503,7 +555,9 @@ private class MirrorPanel(
             }
 
             override fun componentShown(event: ComponentEvent) {
-                if (!occluded && hostsNativePresentation) updatePresentationGeometry()
+                if (!occluded && hostsNativePresentation) {
+                    SwingUtilities.invokeLater { resumeGpuPresentationAfterShow() }
+                }
                 if (!nativeMetadataFrame) presentCpuFrame()
             }
         })
@@ -516,13 +570,25 @@ private class MirrorPanel(
                 if (!occluded && hostsNativePresentation) updatePresentationGeometry()
             }
         })
+        addHierarchyListener(HierarchyListener { e ->
+            if (e.changeFlags and HierarchyEvent.SHOWING_CHANGED.toLong() != 0L &&
+                isShowing && !occluded && hostsNativePresentation
+            ) {
+                resumeGpuPresentationAfterShow()
+            }
+        })
     }
 
     override fun addNotify() {
         super.addNotify()
+        SwingUtilities.getWindowAncestor(this)?.let { window ->
+            ancestorWindow?.takeIf { it !== window }?.removeWindowListener(ancestorWindowListener)
+            ancestorWindow = window
+            window.addWindowListener(ancestorWindowListener)
+        }
         if (hostsNativePresentation) {
             if (prefersGpuHub()) {
-                attachGpuPresentationIfReady()
+                SwingUtilities.invokeLater { resumeGpuPresentationAfterShow() }
             } else {
                 NativeMirrorHostRegistry.markHostsMetalPresentation(
                     this,
@@ -538,9 +604,11 @@ private class MirrorPanel(
         // Teardown runs before Canvas loses its heavyweight peer. Unregister first so a sibling
         // Live/pop-out host can reclaim the Metal presenter instead of destroying the session.
         presentationGeometryPending = false
+        ancestorWindow?.removeWindowListener(ancestorWindowListener)
+        ancestorWindow = null
         if (hostsNativePresentation) {
             if (prefersGpuHub()) {
-                gpuPresenter?.close()
+                gpuPresenter?.detach()
                 gpuPresenter = null
             } else {
                 NativeMirrorHostRegistry.unregister(this)
@@ -636,6 +704,9 @@ private class MirrorPanel(
                 gpuMirrorStreamKey?.let { key ->
                     GpuMirrorSessions.get(key)?.setContentSize(frame.width, frame.height)
                     ensureGpuPresenter()?.setContentSize(frame.width, frame.height)
+                }
+                if (gpuPresenter?.isAttachedTo(this) != true) {
+                    SwingUtilities.invokeLater { resumeGpuPresentationAfterShow() }
                 }
             } else {
                 NativeMirrorJni.setPresentationContentSize(frame.width, frame.height)

@@ -20,6 +20,12 @@ private val DROP_ENV_KEYS = setOf(
     "FORCE_COLOR",
     "NO_COLOR",
     "CI",
+    // Cursor/VS Code sandbox XDG so cursor-agent finds ~/.local/state/cursor auth, not an empty
+    // IDE store. Restored from the user's login shell / launch overrides after scrub.
+    "XDG_STATE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
 )
 
 private val DROP_ENV_PREFIXES = listOf(
@@ -32,6 +38,13 @@ private val DROP_ENV_PREFIXES = listOf(
 private val KEEP_ENV_KEYS = setOf(
     "CURSOR_API_KEY",
     "CURSOR_AUTH_TOKEN",
+)
+
+internal val IDE_XDG_KEYS = setOf(
+    "XDG_STATE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
 )
 
 /**
@@ -81,7 +94,12 @@ fun buildTerminalLaunchEnvironment(
     val env = HashMap(System.getenv())
     env.putAll(loginShellEnv)
     env.putAll(overrides)
+    val xdgFromShell = loginShellEnv.filterKeys { it in IDE_XDG_KEYS }
+    val xdgFromOverrides = overrides.filterKeys { it in IDE_XDG_KEYS }
     scrubInheritedTerminalEnvironment(env)
+    // Scrub drops IDE-sandbox XDG_*; put back only what the user's shell or caller set.
+    env.putAll(xdgFromShell)
+    env.putAll(xdgFromOverrides)
     return env
 }
 

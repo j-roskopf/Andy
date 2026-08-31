@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.desktop.service.GitLocator
 import app.andy.domain.parseUnifiedDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentChangeSummary
@@ -497,7 +498,8 @@ class WorktreeManager(
     private fun git(dir: String, vararg args: String): GitResult = git(dir, args.toList(), emptyMap())
 
     private fun git(dir: String, args: List<String>, env: Map<String, String>): GitResult = runCatching {
-        val process = ProcessBuilder(listOf("git", "-C", dir) + args).redirectErrorStream(true)
+        val binary = GitLocator.resolve() ?: return GitResult(-1, "git not found")
+        val process = ProcessBuilder(listOf(binary, "-C", dir) + args).redirectErrorStream(true)
             .apply { environment().putAll(env) }
             .start()
         val output = readOutputWithin(process, timeoutSeconds = 30)

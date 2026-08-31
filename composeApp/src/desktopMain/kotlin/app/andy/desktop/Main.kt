@@ -30,6 +30,7 @@ import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.PendingAgentTaskOpen
 import app.andy.di.openAndyDesktopGraph
 import app.andy.desktop.service.resolveRuntimeMode
+import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
 import app.andy.desktop.service.mirror.GpuMirrorJni
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
 import app.andy.model.IosTargetKind
@@ -317,6 +318,11 @@ fun main() {
                         appFocus.focused = true
                         services.agentRuns.setAppForeground(appFocus.isForeground())
                         consumePendingOpen()
+                        // Only restore overlays when a Live host is still showing. Blind
+                        // resume remounts warm-detached presenters over other tabs.
+                        if (GpuMirrorJni.isAvailable() && GpuMirrorHostRegistry.anyHostShowing()) {
+                            GpuMirrorJni.resumeAfterDesktopSwitch()
+                        }
                     }
 
                     override fun windowDeactivated(event: java.awt.event.WindowEvent) {
