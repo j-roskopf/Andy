@@ -101,6 +101,9 @@ import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSpawnPresentation
 import app.andy.model.AgentTask
+import app.andy.model.AgentConnectionRecovery
+import app.andy.model.AgentConnectionRecoveryReason
+import app.andy.model.maxAutomaticAttempts
 import app.andy.model.AgentToolImage
 import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
@@ -2602,6 +2605,50 @@ fun ConnectionStallBanner(
                 modifier = Modifier
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable(onClick = onRetry)
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Quiet status for the normal, bounded recovery path. The red retry card remains reserved for
+ * an unexpected stall that Andy could not safely schedule.
+ */
+@Composable
+fun ConnectionRecoveryStatus(
+    recovery: AgentConnectionRecovery,
+    onResumeNow: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val limit = recovery.reason.maxAutomaticAttempts()
+    val label = when {
+        recovery.paused -> "Connection needs attention"
+        recovery.reason == AgentConnectionRecoveryReason.ResourceExhausted -> "Waiting for provider capacity"
+        else -> "Reconnecting automatically"
+    }
+    val detail = when {
+        recovery.paused -> "Andy paused after $limit attempts without new progress."
+        else -> "Retry ${recovery.attemptsWithoutProgress} of $limit"
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("•", color = Cyan, fontSize = 13.sp)
+        Text(label, color = TextSecondary, fontSize = 12.sp)
+        Text(detail, color = TextSecondary.copy(alpha = 0.72f), fontSize = 12.sp)
+        if (onResumeNow != null) {
+            Text(
+                "Resume",
+                color = Cyan,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onResumeNow)
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             )
         }

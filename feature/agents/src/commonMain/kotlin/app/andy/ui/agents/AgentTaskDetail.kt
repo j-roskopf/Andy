@@ -368,8 +368,9 @@ fun AgentTaskDetail(
     val selectedSkills = remember(followUp, availableSkills) {
         availableSkills.filter { skill -> followUp.referencesSkill(skill) }
     }
-    val showConnectionStallBanner = remember(transcriptEvents, task.isActive) {
-        shouldShowConnectionStallBanner(transcriptEvents, task.isActive)
+    val recovery = task.connectionRecovery
+    val showConnectionStallBanner = remember(transcriptEvents, task.isActive, recovery) {
+        recovery == null && shouldShowConnectionStallBanner(transcriptEvents, task.isActive)
     }
     val slashHighlight = rememberComposerSlashHighlight(
         agent = runtimeKind,
@@ -817,7 +818,23 @@ fun AgentTaskDetail(
             }
         }
 
-        if (showConnectionStallBanner) {
+        if (recovery != null) {
+            ConnectionRecoveryStatus(
+                recovery = recovery,
+                onResumeNow = if (recovery.paused) {
+                    {
+                        scope.launch {
+                            services.agentRuns.resume(
+                                taskId = task.id,
+                                followUp = CONNECTION_STALL_RETRY_PROMPT,
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
+            )
+        } else if (showConnectionStallBanner) {
             ConnectionStallBanner(
                 onRetry = {
                     scope.launch {

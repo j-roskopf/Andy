@@ -532,6 +532,8 @@ data class AgentTask(
     val acpSessionId: String? = null,
     /** Last ACP prompt stop reason, retained for diagnostics and recovery. */
     val stopReason: String? = null,
+    /** Bounded, persisted recovery state for a lost ACP provider stream. */
+    val connectionRecovery: AgentConnectionRecovery? = null,
     /** Transport lane is fixed at creation (provider default / settings); not switched live. */
     val lane: AgentLaneKind = AgentLaneKind.Terminal,
     val createdAtMillis: Long,

@@ -88,6 +88,39 @@ class GpuMirrorHostRegistryTest {
         }
     }
 
+    @Test
+    fun detachKeepsPresenterWarmForDecoderReuse() {
+        if (!GpuMirrorJni.isAvailable()) return
+
+        lateinit var host: Canvas
+        lateinit var pipeline: GpuMirrorPipeline
+        var attached = false
+        var presenter: GpuMirrorPresenter? = null
+        SwingUtilities.invokeAndWait {
+            host = realizedCanvas("registry-warm-detach")
+            pipeline = GpuMirrorSessions.createAndBind("registry-warm-detach")!!
+            presenter = pipeline.createPresenter()!!
+            attached = presenter!!.attach(host, fillHost = false)
+        }
+        assumeTrue(
+            "GPU presenter attach needs a working display/Vulkan stack",
+            attached,
+        )
+        try {
+            SwingUtilities.invokeAndWait {
+                presenter!!.detach()
+            }
+            assertNull(GpuMirrorHostRegistry.presenterFor(host))
+            assertEquals(1, GpuMirrorHostRegistry.presentersForDecoder(pipeline.decoderId).size)
+            assertSame(presenter, GpuMirrorHostRegistry.unattachedPresenterForDecoder(pipeline.decoderId))
+        } finally {
+            SwingUtilities.invokeAndWait {
+                GpuMirrorSessions.release("registry-warm-detach")
+                disposeCanvas(host)
+            }
+        }
+    }
+
     private fun realizedCanvas(title: String): Canvas {
         val canvas = Canvas()
         val frame = JFrame(title)

@@ -22,7 +22,7 @@ class GpuMirrorPipeline private constructor(
                 existing.close()
             }
         }
-        GpuMirrorHostRegistry.pruneOrphanedPresenters(decoderId)
+        GpuMirrorHostRegistry.unattachedPresenterForDecoder(decoderId)?.let { return it }
         val presenterId = GpuMirrorJni.createPresenter(decoderId)
         if (presenterId == 0L) return null
         return GpuMirrorPresenter(this, presenterId)
@@ -129,18 +129,23 @@ class GpuMirrorPresenter internal constructor(
             updateGeometry(host)
             return true
         }
-        detach()
+        warmDetach()
         this.fillHost = fillHost
         if (!GpuMirrorJni.openPresenterOverlay(presenterId)) return false
         GpuMirrorJni.setPresenterFillHost(presenterId, fillHost)
-        // Fresh native window: push the hidden state even if that is what we last applied.
-        visibleApplied = null
-        applyVisible(false)
         attachedHost = host
         GpuMirrorHostRegistry.registerPresenter(host, this)
         lastGeometryKey = null
+        visibleApplied = null
         val finalizeAttach = {
+            lastGeometryKey = null
+            // Clear desktop suppress before showing — setVisible alone must not, or
+            // geometry updates during VD switches remount the floating overlay.
+            GpuMirrorJni.resumeAfterDesktopSwitch()
             commitGeometry(host)
+            visibleApplied = null
+            visibleRequested = true
+            applyVisible(true)
             GpuMirrorJni.repaintPresenter(presenterId)
         }
         if (SwingUtilities.isEventDispatchThread()) {
@@ -154,16 +159,18 @@ class GpuMirrorPresenter internal constructor(
     fun isAttachedTo(host: Canvas): Boolean = attachedHost === host
 
     fun detach() {
+        warmDetach()
+    }
+
+    /** Hides the overlay and unregisters the host without destroying the native presenter. */
+    private fun warmDetach() {
         val host = attachedHost
         attachedHost = null
-        // Only clear the registry slot when we still own it. Replacing a presenter on the same
-        // Canvas closes the previous one after the new registration; that close must not wipe
-        // the replacement out of GpuMirrorHostRegistry.
         if (host != null && GpuMirrorHostRegistry.presenterFor(host) === this) {
             GpuMirrorHostRegistry.unregisterPresenter(host)
-        } else {
-            GpuMirrorHostRegistry.forgetPresenter(this)
         }
+        visibleRequested = false
+        visibleApplied = null
         applyVisible(false)
     }
 
@@ -267,8 +274,25 @@ class GpuMirrorPresenter internal constructor(
 
     val decoderId: Long get() = pipeline.decoderId
 
+    /** Re-shows a warm presenter after virtual-desktop switches or Live tab remounts. */
+    fun warmResume(host: Canvas) {
+        if (attachedHost !== host) {
+            attach(host, fillHost)
+            return
+        }
+        visibleRequested = true
+        visibleApplied = null
+        lastGeometryKey = null
+        GpuMirrorJni.resumeAfterDesktopSwitch()
+        applyVisible(true)
+        invalidateGeometry()
+        updateGeometry(host)
+        repaint()
+    }
+
     override fun close() {
-        detach()
+        warmDetach()
+        GpuMirrorHostRegistry.forgetPresenter(this)
         GpuMirrorJni.destroyPresenter(presenterId)
     }
 

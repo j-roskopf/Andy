@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents.acp
 
+import app.andy.terminal.IDE_XDG_KEYS
 import app.andy.terminal.replaceProcessEnvironment
 import app.andy.terminal.scrubInheritedTerminalEnvironment
 import kotlinx.coroutines.Dispatchers
@@ -143,8 +144,11 @@ internal fun ProcessBuilder.applyLaunchEnv(
         replaceProcessEnvironment(environment(), env)
     }
     // Defense in depth: a caller that forgot to scrub still must not leak
-    // CURSOR_AGENT / NODE_OPTIONS from the parent JVM into the ACP child.
+    // CURSOR_AGENT / NODE_OPTIONS / sandbox XDG_* from the parent JVM.
+    // Restore only XDG keys the caller (login shell / overrides) actually set.
+    val keepXdg = env.filterKeys { it in IDE_XDG_KEYS }
     scrubInheritedTerminalEnvironment(environment())
+    environment().putAll(keepXdg)
     ensureNodeDirOnPath(environment(), command, nodeBinary)
     return this
 }

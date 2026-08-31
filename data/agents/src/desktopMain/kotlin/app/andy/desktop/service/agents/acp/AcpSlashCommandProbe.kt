@@ -97,7 +97,7 @@ internal class AcpSlashCommandProbe(
             )
             rpc.start()
             val client = Client(rpc)
-            client.initialize(
+            val agentInfo = client.initialize(
                 ClientInfo(
                     capabilities = ClientCapabilities(
                         fs = FileSystemCapability(readTextFile = true, writeTextFile = false),
@@ -106,6 +106,7 @@ internal class AcpSlashCommandProbe(
                     implementation = Implementation("Andy", "desktop", "Andy ACP slash probe"),
                 ),
             )
+            client.authenticateAdvertisedLogin(agent, agentInfo)
             val operationsFactory = ClientOperationsFactory { _, _ ->
                 probeOperations(cwd, commands)
             }

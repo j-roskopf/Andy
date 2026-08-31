@@ -3,6 +3,17 @@ package app.andy.desktop.service
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
+private val IDE_SANDBOX_XDG_KEYS = setOf(
+    "XDG_STATE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+)
+
+private val IDE_SANDBOX_PREFIXES = listOf("CURSOR_", "VSCODE_", "__CURSOR_")
+
+private val KEEP_ENV_KEYS = setOf("CURSOR_API_KEY", "CURSOR_AUTH_TOKEN")
+
 /**
  * Captures the user's real login-shell environment (PATH, JAVA_HOME, NVM_DIR, custom exports
  * from `.zshrc`/`.bashrc`, etc.) so processes Andy launches see what a normal terminal would —
@@ -16,6 +27,21 @@ object LoginShellEnvironment {
     private const val ENV_ENTRY_SEPARATOR = '\u0000'
 
     private val cached = AtomicReference<Map<String, String>?>(null)
+
+    /**
+     * Cursor/VS Code inject sandbox XDG_* and CURSOR_* into the JVM. A login-shell
+     * capture that inherits them makes `env -0` report the IDE store, so cursor-agent
+     * looks in an empty sandbox instead of `~/.local/state/cursor`.
+     */
+    fun dropIdeSandboxEnvironment(env: MutableMap<String, String>) {
+        IDE_SANDBOX_XDG_KEYS.forEach { env.remove(it) }
+        env.keys
+            .filter { key ->
+                key !in KEEP_ENV_KEYS && IDE_SANDBOX_PREFIXES.any { prefix -> key.startsWith(prefix) }
+            }
+            .toList()
+            .forEach { env.remove(it) }
+    }
 
     /** Captures once per process (forks a real shell); memoized after the first call. */
     fun current(): Map<String, String> {
@@ -65,7 +91,9 @@ object LoginShellEnvironment {
      * mode `AgentCliLocator.lookupViaLoginShell` guards against).
      */
     private fun runShellCapture(command: List<String>): String? = runCatching {
-        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val builder = ProcessBuilder(command).redirectErrorStream(true)
+        dropIdeSandboxEnvironment(builder.environment())
+        val process = builder.start()
         process.outputStream.close()
         val output = StringBuffer()
         val reader = Thread({

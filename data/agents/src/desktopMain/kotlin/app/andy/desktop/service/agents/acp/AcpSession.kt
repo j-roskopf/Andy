@@ -14,6 +14,7 @@ import app.andy.model.AgentSessionMode
 import app.andy.model.AgentTask
 import app.andy.model.modelForCli
 import app.andy.model.runtimeKind
+import com.agentclientprotocol.agent.AgentInfo
 import com.agentclientprotocol.client.Client
 import com.agentclientprotocol.client.ClientInfo
 import com.agentclientprotocol.client.ClientOperationsFactory
@@ -157,7 +158,7 @@ class AcpSession(
 
         val acpClient = Client(rpc)
         client = acpClient
-        acpClient.initialize(
+        val agentInfo = acpClient.initialize(
             ClientInfo(
                 capabilities = ClientCapabilities(
                     fs = FileSystemCapability(readTextFile = true, writeTextFile = true),
@@ -166,6 +167,7 @@ class AcpSession(
                 implementation = Implementation("Andy", "desktop", "Andy ACP client"),
             ),
         )
+        acpClient.authenticateAdvertisedLogin(task.runtimeKind(), agentInfo)
 
         val parameters = SessionCreationParameters(
             cwd = cwd.path,
@@ -344,4 +346,16 @@ class AcpSession(
 internal fun acpSessionModelId(task: AgentTask): String? {
     if (task.runtimeKind() == AgentKind.Goose) return gooseProviderAndModel(task).second
     return task.modelForCli()?.trim()?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * cursor-agent always advertises `cursor_login`. `session/new` can succeed when
+ * `~/.config/cursor/auth.json` is visible, but fails with "Authentication required"
+ * when Cursor's sandbox `XDG_CONFIG_HOME` hides it. `authenticate` is the ACP
+ * handshake that binds that login (and yields a clearer error if it is missing).
+ */
+internal suspend fun Client.authenticateAdvertisedLogin(agent: AgentKind, agentInfo: AgentInfo) {
+    if (agent != AgentKind.Cursor) return
+    val methodId = agentInfo.authMethods.firstOrNull()?.id ?: return
+    authenticate(methodId)
 }

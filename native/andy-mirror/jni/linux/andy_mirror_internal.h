@@ -48,8 +48,13 @@ bool andy_x11_init(void);
 Display *andy_x11_display(void);
 bool andy_x11_create_overlay(Window *out_window);
 void andy_x11_destroy_overlay(Window window);
-void andy_x11_configure(Window window, int x, int y, int width, int height, unsigned long parent, bool visible);
+/** Returns true when the overlay is mapped after the configure. */
+bool andy_x11_configure(Window window, int x, int y, int width, int height, unsigned long parent, bool visible,
+                        bool restack);
 void andy_x11_set_visible(Window window, bool visible);
+bool andy_x11_should_map(Window window, Window parent, bool visible);
+bool andy_x11_window_viewable(unsigned long window_id);
+int andy_x11_window_desktop(unsigned long window_id);
 
 typedef struct AndyVkSwapchain AndyVkSwapchain;
 

@@ -66,8 +66,10 @@ else
   exit 1
 fi
 
-PKGS="vulkan x11 xfixes xext libavcodec libavutil"
-CFLAGS="$(pkg-config --cflags $PKGS)"
+# Headers only: linking libavcodec would DT_NEEDED Ubuntu's SONAME and break Fedora/CachyOS.
+PKGS="vulkan x11 xfixes xext"
+AV_CFLAGS="$(pkg-config --cflags libavcodec libavutil)"
+CFLAGS="$(pkg-config --cflags $PKGS) $AV_CFLAGS"
 LIBS="$(pkg-config --libs $PKGS)"
 VK_HEADERS="$ROOT/../../third_party"
 
@@ -80,10 +82,17 @@ cc -shared -fPIC -O2 -std=c11 -DVK_USE_PLATFORM_XLIB_KHR \
   $CFLAGS \
   "$ROOT"/andy_mirror_frame.c \
   "$ROOT"/andy_mirror_x11.c \
+  "$ROOT"/andy_mirror_av.c \
   "$ROOT"/andy_mirror_nvdec.c \
   "$ROOT"/andy_mirror_vk.c \
   "$ROOT"/andy_mirror_hub_linux.c \
   "$ROOT"/andy_mirror_jni_linux.c \
   $LIBS \
-  -lm -lpthread \
+  -ldl -lm -lpthread \
+  -Wl,--as-needed \
   -o "$OUT"
+
+if readelf -d "$OUT" | grep -E 'NEEDED.*libav(codec|util)'; then
+  echo "andy-mirror: libandy-mirror-jni.so must not DT_NEEDED libavcodec/libavutil" >&2
+  exit 1
+fi

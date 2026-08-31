@@ -58,6 +58,12 @@ void andy_hub_set_ios_decoder(int64_t decoder_id);
 void andy_hub_clear_ios_decoder(int64_t decoder_id);
 int64_t andy_hub_ios_decoder(void);
 
+int andy_hub_window_desktop(int parent_window_number);
+void andy_hub_refresh_all_presenters(void);
+void andy_hub_suppress_presenters_for_desktop_switch(void);
+bool andy_hub_should_resume_presenters_after_desktop_switch(void);
+void andy_hub_resume_presenters_after_desktop_switch(void);
+
 #ifdef __cplusplus
 }
 #endif

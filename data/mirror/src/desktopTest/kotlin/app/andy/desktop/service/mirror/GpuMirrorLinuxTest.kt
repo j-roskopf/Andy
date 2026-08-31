@@ -2,11 +2,13 @@ package app.andy.desktop.service.mirror
 
 import java.awt.BorderLayout
 import java.awt.Canvas
+import java.io.File
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Assume.assumeTrue
@@ -21,6 +23,24 @@ class GpuMirrorLinuxTest {
     fun linuxAmd64BridgeLoadsFromPackagedDesktopResources() {
         if (!isLinuxAmd64()) return
         assertTrue(GpuMirrorJni.isAvailable())
+    }
+
+    @Test
+    fun linuxJniDoesNotLinkDistroSpecificFfmpeg() {
+        if (!isLinuxAmd64() || !GpuMirrorJni.isAvailable()) return
+        val so = File(
+            System.getProperty("user.home"),
+            ".andy/mirror/andy-mirror/linux-x86_64/libandy-mirror-jni.so",
+        )
+        assumeTrue("expected extracted JNI after isAvailable()", so.isFile)
+        val proc = ProcessBuilder("readelf", "-d", so.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+        val out = proc.inputStream.bufferedReader().readText()
+        assertEquals(0, proc.waitFor(), out)
+        assertFalse(out.contains("libavcodec"), out)
+        assertFalse(out.contains("libavutil"), out)
+        assertTrue(out.contains("libvulkan"), out)
     }
 
     @Test

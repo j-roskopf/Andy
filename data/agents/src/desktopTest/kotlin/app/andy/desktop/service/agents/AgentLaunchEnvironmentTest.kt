@@ -60,6 +60,26 @@ class AgentLaunchEnvironmentTest {
     }
 
     @Test
+    fun scrubsIdeSandboxXdgSoCursorAgentFindsUserAuth() {
+        val env = mutableMapOf(
+            "HOME" to "/home/test",
+            "PATH" to "/usr/bin",
+            "XDG_STATE_HOME" to "/tmp/cursor-sandbox/state",
+            "XDG_CONFIG_HOME" to "/tmp/cursor-sandbox/config",
+            "XDG_CACHE_HOME" to "/tmp/cursor-sandbox/cache",
+            "XDG_DATA_HOME" to "/tmp/cursor-sandbox/data",
+        )
+
+        scrubInheritedAgentEnvironment(env)
+
+        assertEquals("/home/test", env["HOME"])
+        assertNull(env["XDG_STATE_HOME"])
+        assertNull(env["XDG_CONFIG_HOME"])
+        assertNull(env["XDG_CACHE_HOME"])
+        assertNull(env["XDG_DATA_HOME"])
+    }
+
+    @Test
     fun scrubAfterMergeRemovesIdeVarsThatPutAllCannotDrop() {
         // Reproduces the historical bug: System.getenv() + putAll(scrubbed) left
         // NODE_OPTIONS in place because scrubbed maps omit keys instead of nulling them.
@@ -134,6 +154,37 @@ class AgentLaunchEnvironmentTest {
         )
         assertNull(env["NODE_OPTIONS"])
         assertEquals("/from/shell", env["PATH"])
+    }
+
+    @Test
+    fun buildTerminalLaunchEnvironmentDropsJvmXdgUnlessLoginShellSetsIt() {
+        val env = buildTerminalLaunchEnvironment(
+            loginShellEnv = mapOf("PATH" to "/from/shell"),
+        )
+        assertNull(env["XDG_STATE_HOME"])
+        assertNull(env["XDG_CONFIG_HOME"])
+        assertEquals("/from/shell", env["PATH"])
+    }
+
+    @Test
+    fun buildTerminalLaunchEnvironmentRestoresLoginShellXdgAfterScrub() {
+        val env = buildTerminalLaunchEnvironment(
+            loginShellEnv = mapOf(
+                "PATH" to "/from/shell",
+                "XDG_STATE_HOME" to "/home/test/.local/state",
+            ),
+        )
+        assertEquals("/home/test/.local/state", env["XDG_STATE_HOME"])
+        assertEquals("/from/shell", env["PATH"])
+    }
+
+    @Test
+    fun buildTerminalLaunchEnvironmentPrefersOverrideXdgOverLoginShell() {
+        val env = buildTerminalLaunchEnvironment(
+            overrides = mapOf("XDG_STATE_HOME" to "/custom/state"),
+            loginShellEnv = mapOf("XDG_STATE_HOME" to "/home/test/.local/state"),
+        )
+        assertEquals("/custom/state", env["XDG_STATE_HOME"])
     }
 
     @Test

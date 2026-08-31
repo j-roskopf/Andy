@@ -7,10 +7,16 @@ import kotlin.test.assertTrue
 
 class AgentConnectionRecoveryTest {
     @Test
-    fun autoRetryPolicyAllowsTwoBackoffAttempts() {
-        assertEquals(2, MAX_CONNECTION_STALL_AUTO_RETRIES)
+    fun autoRetryPolicyIsBoundedAndReasonAware() {
+        assertEquals(5, MAX_CONNECTION_STALL_AUTO_RETRIES)
+        assertEquals(2, MAX_RESOURCE_EXHAUSTED_AUTO_RETRIES)
         assertEquals(1_000L, CONNECTION_STALL_AUTO_RETRY_BACKOFF_MS)
         assertEquals(3_000L, RESOURCE_EXHAUSTED_AUTO_RETRY_BACKOFF_MS)
+        assertEquals(1_000L, connectionStallRetryBackoffMillis(1, AgentConnectionRecoveryReason.Transport))
+        assertEquals(16_000L, connectionStallRetryBackoffMillis(5, AgentConnectionRecoveryReason.Transport))
+        assertEquals(30_000L, connectionStallRetryBackoffMillis(6, AgentConnectionRecoveryReason.ResourceExhausted))
+        assertEquals(5, AgentConnectionRecoveryReason.Transport.maxAutomaticAttempts())
+        assertEquals(2, AgentConnectionRecoveryReason.ResourceExhausted.maxAutomaticAttempts())
         assertEquals("Continue where you left off.", CONNECTION_STALL_RETRY_PROMPT)
         assertTrue(CONNECTION_STALL_RETRY_PROMPT.isSilentConnectionRecoveryPrompt())
         assertFalse("keep going".isSilentConnectionRecoveryPrompt())
@@ -169,4 +175,5 @@ class AgentConnectionRecoveryTest {
         assertTrue(events.hasRetriableConnectionStall())
         assertFalse(events.hasRetriableResourceExhausted())
     }
+
 }
