@@ -238,6 +238,67 @@ impl TerminalEngine {
         }
         lines.join("\n")
     }
+
+    /// Extracts plain text within the specified buffer coordinate range.
+    /// `start_line` and `end_line` are buffer line indices (0 is top of visible screen,
+    /// negative numbers are scrollback history lines, up to rows - 1).
+    pub fn extract_text(
+        &self,
+        start_line: i32,
+        start_col: usize,
+        end_line: i32,
+        end_col: usize,
+    ) -> String {
+        let grid = self.term.grid();
+        let columns = self.size.columns;
+        let rows = self.size.rows;
+        if columns == 0 || rows == 0 {
+            return String::new();
+        }
+
+        let history_size = grid.history_size() as i32;
+        let min_line = -history_size;
+        let max_line = (rows as i32) - 1;
+
+        let ((l0, c0), (l1, c1)) = if start_line < end_line
+            || (start_line == end_line && start_col <= end_col)
+        {
+            ((start_line, start_col), (end_line, end_col))
+        } else {
+            ((end_line, end_col), (start_line, start_col))
+        };
+
+        let l0 = l0.clamp(min_line, max_line);
+        let l1 = l1.clamp(min_line, max_line);
+        if l0 > l1 {
+            return String::new();
+        }
+
+        let mut lines = Vec::with_capacity((l1 - l0 + 1) as usize);
+        for line_idx in l0..=l1 {
+            let col_start = if line_idx == l0 { c0.min(columns - 1) } else { 0 };
+            let col_end = if line_idx == l1 { c1.min(columns - 1) } else { columns - 1 };
+
+            let grid_line = &grid[Line(line_idx)];
+            let mut line_str = String::with_capacity(col_end.saturating_sub(col_start) + 1);
+            for col in col_start..=col_end {
+                let cell = &grid_line[Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                line_str.push(ch);
+                if let Some(zerowidth) = cell.zerowidth() {
+                    for &zw in zerowidth {
+                        line_str.push(zw);
+                    }
+                }
+            }
+            lines.push(line_str.trim_end().to_string());
+        }
+
+        lines.join("\n").trim_end().to_string()
+    }
 }
 
 fn cell_to_snapshot(
@@ -376,5 +437,23 @@ mod tests {
         assert_eq!(snap.cursor.col, 5);
         let idx = 2 * 40 + 4;
         assert_eq!(snap.cells[idx].ch, '*');
+    }
+
+    #[test]
+    fn extract_text_across_viewport_and_history() {
+        let mut eng = TerminalEngine::new(20, 5);
+        for i in 0..10 {
+            eng.advance(format!("line{i}\r\n").as_bytes());
+        }
+        // At this point, history has lines 0..5, viewport has line6..line9
+        // Test extracting from viewport lines
+        assert_eq!(eng.extract_text(0, 0, 0, 4), "line6");
+        // Test extracting across multiple lines in viewport
+        assert_eq!(eng.extract_text(0, 0, 1, 4), "line6\nline7");
+        // Test extracting across scrollback history and viewport
+        // line -5 is line1, line -4 is line2 ... line 0 is line6
+        assert_eq!(eng.extract_text(-5, 0, 0, 4), "line1\nline2\nline3\nline4\nline5\nline6");
+        // Test reversed coordinates
+        assert_eq!(eng.extract_text(0, 4, -5, 0), "line1\nline2\nline3\nline4\nline5\nline6");
     }
 }

@@ -132,6 +132,23 @@ class RustTerminalEngineTest {
     }
 
     @Test
+    fun extractTextAcrossViewportAndHistory() {
+        if (!isMacArm64()) return
+        RustTerminalEngine(columns = 20, rows = 4).use { engine ->
+            for (i in 0..10) {
+                engine.advance("line$i\r\n")
+            }
+            // The terminal leaves the cursor on the next line after the final CRLF.
+            // Visible viewport has line8..line10, history has line0..line7.
+            assertEquals("line8", engine.extractText(0, 0, 0, 4))
+            assertEquals("line8\nline9", engine.extractText(0, 0, 1, 4))
+            assertEquals("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8", engine.extractText(-8, 0, 0, 4))
+            // Reverse coordinates extraction
+            assertEquals("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8", engine.extractText(0, 4, -8, 0))
+        }
+    }
+
+    @Test
     fun mouseFlagsExposeSgrReportingAcrossJni() {
         if (!isMacArm64()) return
         RustTerminalEngine(columns = 20, rows = 3).use { engine ->

@@ -8,6 +8,11 @@ import app.andy.model.HostFileDocument
 import app.andy.model.LogLevel
 import app.andy.model.LogcatEntry
 
+data class StampedLogcatEntry(
+    val id: Long,
+    val entry: LogcatEntry,
+)
+
 /** One-shot request to preview `path` at `line` (1-based) in an embedded [app.andy.HostCodeEditor]. */
 data class CodePreviewState(
     val requestedPath: String,
@@ -18,8 +23,22 @@ data class CodePreviewState(
 )
 
 class LogcatState {
-    var entries by mutableStateOf<List<LogcatEntry>>(emptyList())
+    private var nextEntryId = 0L
+    var entries by mutableStateOf<List<StampedLogcatEntry>>(emptyList())
     var search by mutableStateOf("")
+
+    fun appendBatch(batch: List<LogcatEntry>) {
+        if (batch.isEmpty()) return
+        val stamped = batch.map { entry ->
+            StampedLogcatEntry(id = nextEntryId.also { nextEntryId++ }, entry = entry)
+        }
+        entries = (entries + stamped).takeLast(1200)
+    }
+
+    fun clearEntries() {
+        entries = emptyList()
+    }
+
     var live by mutableStateOf(true)
     val levels = mutableStateMapOf<LogLevel, Boolean>().also { map -> LogLevel.entries.forEach { map[it] = it != LogLevel.Verbose && it != LogLevel.Silent } }
     var lastSerial by mutableStateOf<String?>(null)

@@ -26,7 +26,6 @@ fn with_engines<R>(f: impl FnOnce(&mut HashMap<i64, TerminalEngine>) -> R) -> R 
     }
     f(guard.as_mut().unwrap())
 }
-
 /// JNI trivial round-trip (compare with UniFFI's `uniffi_round_trip_add`).
 #[no_mangle]
 pub extern "system" fn Java_app_andy_terminal_rust_JniRoundTrip_nativeAdd(
@@ -458,4 +457,31 @@ pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeDisp
             .map(|e| e.display_offset() as jint)
             .unwrap_or(0)
     })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_andy_terminal_rust_RustTerminalEngine_nativeExtractText<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    handle: jlong,
+    start_line: jint,
+    start_col: jint,
+    end_line: jint,
+    end_col: jint,
+) -> jstring {
+    let text = with_engines(|map| {
+        map.get(&handle)
+            .map(|e| {
+                e.extract_text(
+                    start_line,
+                    start_col.max(0) as usize,
+                    end_line,
+                    end_col.max(0) as usize,
+                )
+            })
+            .unwrap_or_default()
+    });
+    env.new_string(text)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
 }

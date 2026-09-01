@@ -15,6 +15,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -89,6 +91,7 @@ fun RustTerminalCanvas(
     var lastGrid by remember { mutableStateOf(0 to 0) }
     var selection by remember { mutableStateOf<CellRange?>(null) }
     var selecting by remember { mutableStateOf(false) }
+    var dragPointerPosition by remember { mutableStateOf<Offset?>(null) }
     val copyText = rememberCopyText()
     val readClipboardText = rememberReadClipboardText()
     var pasteInFlight by remember { mutableStateOf(false) }
@@ -153,9 +156,52 @@ fun RustTerminalCanvas(
         return col to row
     }
 
+    fun bufferLineAt(y: Float): Int {
+        val row = floor(y / cellHeight).toInt().coerceIn(0, (frame.rows - 1).coerceAtLeast(0))
+        return (row - frame.displayOffset).coerceIn(-frame.historySize, (frame.rows - 1).coerceAtLeast(0))
+    }
+
     fun selectedText(): String {
         val range = selection ?: return ""
+        val n = range.normalized()
+        val extracted = backend.extractText(n.startLine, n.startCol, n.endLine, n.endCol)
+        if (extracted.isNotEmpty()) return extracted
         return extractSelection(frame, range)
+    }
+
+    LaunchedEffect(selecting, dragPointerPosition, viewportPx, cellHeight, cellWidth) {
+        if (!selecting) return@LaunchedEffect
+        while (isActive && selecting) {
+            val pos = dragPointerPosition ?: break
+            val height = viewportPx.height.toFloat()
+            if (height <= 0f || cellHeight <= 0f) break
+
+            val topZone = cellHeight
+            val bottomZone = height - cellHeight
+            var scrollDelta = 0
+
+            if (pos.y < topZone) {
+                val dist = (topZone - pos.y).coerceAtLeast(1f)
+                val speed = (dist / cellHeight).toInt().coerceIn(1, 8)
+                if (frame.displayOffset < frame.historySize) {
+                    scrollDelta = speed
+                }
+            } else if (pos.y > bottomZone && frame.displayOffset > 0) {
+                val dist = (pos.y - bottomZone).coerceAtLeast(1f)
+                val speed = (dist / cellHeight).toInt().coerceIn(1, 8)
+                scrollDelta = -speed
+            }
+
+            if (scrollDelta != 0) {
+                backend.scrollDisplay(scrollDelta)
+                val newOffset = (frame.displayOffset + scrollDelta).coerceIn(0, frame.historySize)
+                val col = floor(pos.x / cellWidth).toInt().coerceIn(0, (frame.columns - 1).coerceAtLeast(0))
+                val targetRow = if (scrollDelta > 0) 0 else (frame.rows - 1).coerceAtLeast(0)
+                val endLine = (targetRow - newOffset).coerceIn(-frame.historySize, (frame.rows - 1).coerceAtLeast(0))
+                selection = selection?.copy(endCol = col, endLine = endLine)
+            }
+            delay(50L)
+        }
     }
 
     Box(
@@ -218,7 +264,13 @@ fun RustTerminalCanvas(
                 if (steps != 0) {
                     localScrollAccum -= steps
                     // Positive Compose delta = wheel down → toward live edge (negative display Δ).
-                    backend.scrollDisplay(-steps)
+                    val displayDelta = -steps
+                    backend.scrollDisplay(displayDelta)
+                    if (selecting) {
+                        val newOffset = (frame.displayOffset + displayDelta).coerceIn(0, frame.historySize)
+                        val line = (row - newOffset).coerceIn(-frame.historySize, (frame.rows - 1).coerceAtLeast(0))
+                        selection = selection?.copy(endCol = col, endLine = line)
+                    }
                     change.consume()
                 }
             }
@@ -242,7 +294,9 @@ fun RustTerminalCanvas(
                     return@onPointerEvent
                 }
                 selecting = true
-                selection = CellRange(col, row, col, row)
+                val line = bufferLineAt(change.position.y)
+                dragPointerPosition = change.position
+                selection = CellRange(col, line, col, line)
                 change.consume()
             }
             .onPointerEvent(PointerEventType.Move, pass = PointerEventPass.Main) { event ->
@@ -259,8 +313,10 @@ fun RustTerminalCanvas(
                     return@onPointerEvent
                 }
                 if (selecting && dragging) {
+                    dragPointerPosition = change.position
                     val start = selection ?: return@onPointerEvent
-                    selection = start.copy(endCol = col, endRow = row)
+                    val line = bufferLineAt(change.position.y)
+                    selection = start.copy(endCol = col, endLine = line)
                     change.consume()
                 }
             }
@@ -282,16 +338,17 @@ fun RustTerminalCanvas(
                 }
                 if (selecting) {
                     selecting = false
+                    dragPointerPosition = null
                     val range = selection
                     if (range != null && range.isEmpty()) {
                         selection = null
                     } else if (range != null) {
-                        val text = extractSelection(frame, range)
+                        val text = selectedText()
                         if (text.isNotEmpty()) copyText(text)
                     }
                     change.consume()
                 }
-            },
+            }
     ) {
         RustTerminalPaintSurface(
             backend = backend,
@@ -373,26 +430,26 @@ internal fun RustTerminalPaintSurface(
 
 internal data class CellRange(
     val startCol: Int,
-    val startRow: Int,
+    val startLine: Int,
     val endCol: Int,
-    val endRow: Int,
+    val endLine: Int,
 ) {
     fun normalized(): CellRange {
-        val a = startRow to startCol
-        val b = endRow to endCol
+        val a = startLine to startCol
+        val b = endLine to endCol
         return if (a.first < b.first || (a.first == b.first && a.second <= b.second)) {
             this
         } else {
-            CellRange(endCol, endRow, startCol, startRow)
+            CellRange(endCol, endLine, startCol, startLine)
         }
     }
 
-    fun isEmpty(): Boolean = startCol == endCol && startRow == endRow
+    fun isEmpty(): Boolean = startCol == endCol && startLine == endLine
 
-    fun contains(col: Int, row: Int): Boolean {
+    fun contains(col: Int, line: Int): Boolean {
         val n = normalized()
-        val afterStart = row > n.startRow || (row == n.startRow && col >= n.startCol)
-        val beforeEnd = row < n.endRow || (row == n.endRow && col <= n.endCol)
+        val afterStart = line > n.startLine || (line == n.startLine && col >= n.startCol)
+        val beforeEnd = line < n.endLine || (line == n.endLine && col <= n.endCol)
         return afterStart && beforeEnd
     }
 }
@@ -400,8 +457,9 @@ internal data class CellRange(
 internal fun extractSelection(frame: RustTerminalFrame, range: CellRange): String {
     if (frame.columns <= 0 || frame.rows <= 0) return ""
     val n = range.normalized()
-    val startRow = n.startRow.coerceIn(0, frame.rows - 1)
-    val endRow = n.endRow.coerceIn(0, frame.rows - 1)
+    val startRow = (n.startLine + frame.displayOffset).coerceIn(0, frame.rows - 1)
+    val endRow = (n.endLine + frame.displayOffset).coerceIn(0, frame.rows - 1)
+    if (startRow > endRow) return ""
     val sb = StringBuilder()
     for (row in startRow..endRow) {
         val c0 = if (row == startRow) n.startCol else 0
@@ -440,6 +498,7 @@ private fun DrawScope.paintFrame(
 
     val native = drawContext.canvas.skiaCanvas
     for (row in 0 until rows) {
+        val bufferLine = row - frame.displayOffset
         for (col in 0 until cols) {
             val idx = row * cols + col
             if (idx >= frame.codePoints.size) continue
@@ -451,7 +510,7 @@ private fun DrawScope.paintFrame(
                 fg = bg
                 bg = tmp
             }
-            val selected = selection?.contains(col, row) == true
+            val selected = selection?.contains(col, bufferLine) == true
             if (selected) {
                 bg = selectionBg.toArgbInt()
                 fg = selectionFg.toArgbInt()
