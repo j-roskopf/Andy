@@ -1823,7 +1823,6 @@ class DesktopAgentRunService(
         if (request.origin == app.andy.model.AgentUserInputOrigin.AcpPermission) {
             val answer = normalizedAnswers.values.firstOrNull().orEmpty()
             if (!acpManager.respondPermission(taskId, requestId, answer)) return
-            appendEvents(taskId, listOf(AgentEvent.UserMessage(System.currentTimeMillis(), answer)))
             return
         }
 

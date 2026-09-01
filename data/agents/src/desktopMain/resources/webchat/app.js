@@ -606,7 +606,7 @@
   }
 
   function isVisibleTranscriptEvent(type) {
-    return type === "user" || type === "assistant" || type === "thinking" || type === "error";
+    return type === "user" || type === "assistant" || type === "thinking" || type === "error" || type === "permission-resolved";
   }
 
   function renderTranscript() {
@@ -632,6 +632,10 @@
       } else if (type === "error") {
         el.className = "bubble error";
         el.textContent = ev.text || "error";
+      } else if (type === "permission-resolved") {
+        el.className = "bubble permission-resolved";
+        el.textContent = `Permission ${ev.allowed ? "allowed" : "rejected"}: ${ev.optionId || "unknown option"}`;
+        if (ev.note) el.textContent += ` (${ev.note})`;
       }
       root.appendChild(el);
     }

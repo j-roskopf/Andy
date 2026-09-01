@@ -353,6 +353,13 @@ details.group > summary.group-header::-webkit-details-marker {
   border: none;
   padding: 4px;
 }
+.bubble.permission-resolved {
+  align-self: flex-start;
+  color: var(--muted);
+  background: #1a1f26;
+  border: 1px dashed var(--border);
+  font-size: 0.85rem;
+}
 .bubble.thinking {
   align-self: flex-start;
   display: inline-flex;
