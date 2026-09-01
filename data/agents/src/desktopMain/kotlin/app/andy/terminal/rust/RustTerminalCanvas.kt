@@ -264,9 +264,10 @@ fun RustTerminalCanvas(
                 if (steps != 0) {
                     localScrollAccum -= steps
                     // Positive Compose delta = wheel down → toward live edge (negative display Δ).
-                    backend.scrollDisplay(-steps)
+                    val displayDelta = -steps
+                    backend.scrollDisplay(displayDelta)
                     if (selecting) {
-                        val newOffset = (frame.displayOffset + steps).coerceIn(0, frame.historySize)
+                        val newOffset = (frame.displayOffset + displayDelta).coerceIn(0, frame.historySize)
                         val line = (row - newOffset).coerceIn(-frame.historySize, (frame.rows - 1).coerceAtLeast(0))
                         selection = selection?.copy(endCol = col, endLine = line)
                     }
