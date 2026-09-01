@@ -359,6 +359,9 @@ private class AgentTaskComposerFormState(
         // Off for every new chat: carrying it over would silently make the next ordinary chat
         // vanish on close, and nothing was persisted to get it back.
         temporary = false
+        // Opt-in per chat only — unlike model/effort, sticky plan mode would silently
+        // leave the next ordinary chat read-only.
+        planMode = false
     }
 
     fun applyProviderDefaults(defaults: AgentProviderDefaults?, agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>> = emptyMap()) {
@@ -373,7 +376,8 @@ private class AgentTaskComposerFormState(
         // Leave the sandbox unset unless it was explicitly saved. This lets the
         // provider derive it from whichever autonomy level the user chooses.
         sandboxMode = defaults?.sandboxMode
-        planMode = defaults?.planMode == true
+        // Never restore from provider defaults — plan mode is per-chat, not sticky.
+        planMode = false
         confirmToolCalls = defaults?.confirmToolCalls == true
         useWorktree = defaults?.useWorktree == true
         attachMcp = defaults?.attachAndyMcp == true

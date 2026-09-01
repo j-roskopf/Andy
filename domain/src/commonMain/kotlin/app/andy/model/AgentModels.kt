@@ -811,6 +811,10 @@ data class AgentProviderDefaults(
     val openClawNewSession: Boolean = true,
     val autonomy: AgentAutonomy = AgentAutonomy.Standard,
     val sandboxMode: AgentSandboxMode? = null,
+    /**
+     * Retained for store round-trip only. New chats never restore this — plan mode is
+     * opt-in per chat, not a sticky provider default like model/effort.
+     */
     val planMode: Boolean = false,
     val confirmToolCalls: Boolean = false,
     val useWorktree: Boolean = false,
@@ -957,7 +961,8 @@ fun AgentTaskDraft.providerDefaults(): AgentProviderDefaults = AgentProviderDefa
     openClawNewSession = openClawNewSession,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
-    planMode = planMode,
+    // Never sticky — see AgentProviderDefaults.planMode.
+    planMode = false,
     confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,
@@ -972,7 +977,8 @@ fun AgentTask.providerDefaults(): AgentProviderDefaults = AgentProviderDefaults(
     openClawNewSession = openClawNewSession,
     autonomy = autonomy,
     sandboxMode = sandboxMode,
-    planMode = planMode,
+    // Never sticky — see AgentProviderDefaults.planMode.
+    planMode = false,
     confirmToolCalls = confirmToolCalls,
     useWorktree = useWorktree,
     attachAndyMcp = attachAndyMcp,

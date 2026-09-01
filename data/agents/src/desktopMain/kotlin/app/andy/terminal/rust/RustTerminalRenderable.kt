@@ -9,6 +9,8 @@ interface RustTerminalRenderable {
     fun copyPaintFrame(into: RustTerminalFrame)
     fun resize(cols: Int, rows: Int)
     fun scrollDisplay(delta: Int)
+    fun displayOffset(): Int = 0
+    fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String = ""
     fun updateAppearance(appearance: TerminalAppearanceSnapshot)
     fun mouseFlags(): Int
     fun bracketedPasteEnabled(): Boolean

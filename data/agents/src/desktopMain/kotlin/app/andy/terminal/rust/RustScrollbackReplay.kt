@@ -45,6 +45,12 @@ class RustScrollbackReplay private constructor(
         publish()
     }
 
+    override fun displayOffset(): Int = engine.displayOffset()
+
+    override fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String {
+        return runCatching { engine.extractText(startLine, startCol, endLine, endCol) }.getOrDefault("")
+    }
+
     override fun updateAppearance(appearance: TerminalAppearanceSnapshot) {
         appearanceRef.set(appearance)
         engine.setPalette(appearance.toRustPaletteArgb())

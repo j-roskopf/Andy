@@ -132,7 +132,11 @@ class RustTerminalBackend(
         dirty.set(true)
     }
 
-    fun displayOffset(): Int = engine.displayOffset()
+    override fun displayOffset(): Int = engine.displayOffset()
+
+    override fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String {
+        return runCatching { engine.extractText(startLine, startCol, endLine, endCol) }.getOrDefault("")
+    }
 
     fun markDirty() {
         dirty.set(true)

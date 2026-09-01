@@ -1,6 +1,7 @@
 package app.andy.ui.logcat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -29,16 +31,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,7 +172,7 @@ fun LogcatPanel(
                     currentLevels != state.lastLevels ||
                     selectedPackage != state.lastPackage
             if (filtersChanged) {
-                state.entries = emptyList()
+                state.clearEntries()
             }
             state.lastSerial = serial
             state.lastSearch = state.search
@@ -175,7 +183,7 @@ fun LogcatPanel(
             if (serial == null || !state.live) return
             streamJob = scope.launch {
                 logcat.stream(serial, LogcatFilter(state.search, currentLevels, packageName = selectedPackage)).collect { batch ->
-                    state.entries = (state.entries + batch).takeLast(1200)
+                    state.appendBatch(batch)
                 }
             }
         } else {
@@ -187,7 +195,7 @@ fun LogcatPanel(
                 state.lastPackage = selectedPackage
                 streamJob = scope.launch {
                     logcat.stream(serial, LogcatFilter(state.search, currentLevels, packageName = selectedPackage)).collect { batch ->
-                        state.entries = (state.entries + batch).takeLast(1200)
+                        state.appendBatch(batch)
                     }
                 }
             }
@@ -267,7 +275,7 @@ fun LogcatPanel(
                         Text(if (state.live) "Live" else "Paused")
                     }
                     OutlinedButton(onClick = {
-                        state.entries = emptyList()
+                        state.clearEntries()
                         if (serial != null) {
                             scope.launch {
                                 logcat.clear(serial)
@@ -350,7 +358,7 @@ fun LogcatPanel(
                                     }
                                 },
                                 onClick = {
-                                    state.entries = emptyList()
+                                    state.clearEntries()
                                     if (serial != null) {
                                         scope.launch {
                                             logcat.clear(serial)
@@ -378,33 +386,45 @@ fun LogcatPanel(
 }
 
 @Composable
-internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modifier: Modifier = Modifier, iosMode: Boolean = false) {
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
-    var stickToBottom by remember { mutableStateOf(true) }
+internal fun LogcatEntryList(entries: List<StampedLogcatEntry>, compact: Boolean, modifier: Modifier = Modifier, iosMode: Boolean = false) {
+    val listState = rememberLazyListState()
+    var followLive by remember { mutableStateOf(true) }
     var timeWidth by remember { mutableStateOf(152f) }
     var levelWidth by remember { mutableStateOf(32f) }
     var tagWidth by remember { mutableStateOf(180f) }
-    val isAtBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val total = layoutInfo.totalItemsCount
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-            total == 0 || (lastVisible?.index == total - 1 && lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset)
-        }
+    val scope = rememberCoroutineScope()
+    val latestEntryCount = remember { mutableIntStateOf(entries.size) }
+    SideEffect { latestEntryCount.intValue = entries.size }
+
+    fun jumpToLatest() {
+        followLive = true
+        scope.launch { listState.scrollLogcatToLiveEdge() }
     }
-    LaunchedEffect(entries.size, stickToBottom) {
-        if (stickToBottom && entries.isNotEmpty()) {
-            listState.scrollToItem(entries.lastIndex)
-        }
-    }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to isAtBottom }
-            .distinctUntilChanged()
-            .collect { (scrolling, atBottom) ->
-                if (scrolling && !atBottom) stickToBottom = false
-                if (atBottom) stickToBottom = true
+
+    // Reverse layout keeps the live edge pinned while followLive is on. If we drift (e.g. layout
+    // catch-up), nudge back once without restarting on every batch — unlike LaunchedEffect(size).
+    LaunchedEffect(followLive, listState) {
+        if (!followLive) return@LaunchedEffect
+        snapshotFlow {
+            latestEntryCount.intValue to listState.firstVisibleItemIndex
+        }.distinctUntilChanged().collect { (_, index) ->
+            if (index != 0) {
+                listState.scrollToItem(0)
             }
+        }
     }
+
+    // Re-arm when the user manually scrolls back to the live edge.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.distinctUntilChanged().collect { (index, offset) ->
+            if (logcatIsAtLiveEdge(index, offset)) {
+                followLive = true
+            }
+        }
+    }
+
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         if (!compact) {
             ResizableLogcatHeader(
@@ -419,8 +439,28 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
         }
         Box(Modifier.fillMaxSize()) {
             SelectionContainer(Modifier.fillMaxSize()) {
-                LazyColumn(Modifier.fillMaxSize().padding(end = 8.dp), state = listState) {
-                    items(entries) { entry ->
+                LazyColumn(
+                    state = listState,
+                    reverseLayout = true,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(end = 8.dp)
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    if (event.type == PointerEventType.Scroll) {
+                                        followLive = false
+                                    }
+                                }
+                            }
+                        },
+                ) {
+                    items(
+                        count = entries.size,
+                        key = { index -> entries[entries.lastIndex - index].id },
+                    ) { index ->
+                        val entry = entries[entries.lastIndex - index].entry
                         if (compact) {
                             Row(verticalAlignment = Alignment.Top) {
                                 DisableSelection {
@@ -470,10 +510,39 @@ internal fun LogcatEntryList(entries: List<LogcatEntry>, compact: Boolean, modif
             }
             DraggableScrollbar(
                 listState = listState,
+                reverseLayout = true,
+                onScroll = { followLive = false },
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
             )
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !followLive && entries.isNotEmpty(),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+            ) {
+                Text(
+                    "↓ follow live",
+                    color = TextSecondary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(AndyRadius.Pill))
+                        .background(PanelSoft.copy(alpha = 0.92f))
+                        .clickable(onClick = ::jumpToLatest)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
     }
+}
+
+/** Live edge is index zero in the reverse log list. */
+internal fun logcatIsAtLiveEdge(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int): Boolean =
+    firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset <= 8
+
+/** Jump once to the live edge; streaming tailing relies on reverseLayout after this. */
+internal suspend fun androidx.compose.foundation.lazy.LazyListState.scrollLogcatToLiveEdge() {
+    scrollToItem(0)
+    withFrameMillis { }
+    scrollToItem(0)
 }
 
 @Composable

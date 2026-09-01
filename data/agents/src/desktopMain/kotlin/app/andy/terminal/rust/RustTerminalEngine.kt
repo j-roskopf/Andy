@@ -117,6 +117,11 @@ class RustTerminalEngine(
         return nativeCellBold(handle, row, col)
     }
 
+    fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String {
+        checkOpen()
+        return nativeExtractText(handle, startLine, startCol, endLine, endCol)
+    }
+
     fun fillFrame(into: RustTerminalFrame): Boolean {
         checkOpen()
         ensureBuffers(columns * rows)
@@ -177,6 +182,13 @@ class RustTerminalEngine(
         @JvmStatic external fun nativeDisplayOffset(handle: Long): Int
         @JvmStatic external fun nativeViewportText(handle: Long): String
         @JvmStatic external fun nativeGridChars(handle: Long): String
+        @JvmStatic external fun nativeExtractText(
+            handle: Long,
+            startLine: Int,
+            startCol: Int,
+            endLine: Int,
+            endCol: Int,
+        ): String
         @JvmStatic external fun nativeCursorRow(handle: Long): Int
         @JvmStatic external fun nativeCursorCol(handle: Long): Int
         @JvmStatic external fun nativeColumns(handle: Long): Int

@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -165,6 +166,55 @@ class RustTerminalCanvasSupportTest {
         }
         val text = extractSelection(frame, CellRange(0, 0, 1, 1))
         assertEquals("ab\ncd", text)
+    }
+
+    @Test
+    fun extractSelectionRespectsDisplayOffset() {
+        val frame = RustTerminalFrame().apply {
+            columns = 4
+            rows = 2
+            displayOffset = 5
+            codePoints = IntArray(8) { ' '.code }
+            // row 0 corresponds to bufferLine = 0 - 5 = -5
+            // row 1 corresponds to bufferLine = 1 - 5 = -4
+            codePoints[0] = 'h'.code
+            codePoints[1] = 'i'.code
+            codePoints[4] = 'b'.code
+            codePoints[5] = 'y'.code
+            codePoints[6] = 'e'.code
+        }
+        val text = extractSelection(frame, CellRange(0, -5, 2, -4))
+        assertEquals("hi\nbye", text)
+    }
+
+    @Test
+    fun cellRangeContainsWorksAcrossBufferLines() {
+        val range = CellRange(startCol = 5, startLine = -10, endCol = 10, endLine = 2)
+        // Before start line
+        assertFalse(range.contains(col = 5, line = -11))
+        // On start line before startCol
+        assertFalse(range.contains(col = 4, line = -10))
+        // On start line at/after startCol
+        assertTrue(range.contains(col = 5, line = -10))
+        assertTrue(range.contains(col = 100, line = -10))
+        // On middle history line
+        assertTrue(range.contains(col = 0, line = -5))
+        assertTrue(range.contains(col = 50, line = 0))
+        // On end line before/at endCol
+        assertTrue(range.contains(col = 0, line = 2))
+        assertTrue(range.contains(col = 10, line = 2))
+        // On end line after endCol
+        assertFalse(range.contains(col = 11, line = 2))
+        // After end line
+        assertFalse(range.contains(col = 0, line = 3))
+    }
+
+    @Test
+    fun cellRangeNormalizedHandlesReversedDrag() {
+        val forward = CellRange(startCol = 2, startLine = -5, endCol = 8, endLine = 3)
+        val backward = CellRange(startCol = 8, startLine = 3, endCol = 2, endLine = -5)
+        assertEquals(forward, backward.normalized())
+        assertTrue(backward.contains(col = 5, line = 0))
     }
 
     @Test
