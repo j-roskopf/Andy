@@ -77,7 +77,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
@@ -352,7 +352,7 @@ private fun AutomationEditor(
                 .widthIn(max = 720.dp)
                 .fillMaxWidth()
                 .background(Panel, AndyShape.Sheet)
-                .border(1.dp, Border, AndyShape.Sheet)
+                .border(1.dp, PaneDividerTint, AndyShape.Sheet)
                 .padding(AndySpace.Space6)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space4),

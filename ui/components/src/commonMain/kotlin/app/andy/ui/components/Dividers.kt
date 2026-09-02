@@ -18,14 +18,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import app.andy.horizontalResizeCursor
 import app.andy.ui.theme.AndyStroke
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.PaneDividerTint
 import app.andy.verticalResizeCursor
 
 @Composable
 fun AndyHorizontalDivider(
     modifier: Modifier = Modifier,
-    color: Color = Border,
+    color: Color = PaneDividerTint,
 ) {
     HorizontalDivider(
         modifier = modifier,

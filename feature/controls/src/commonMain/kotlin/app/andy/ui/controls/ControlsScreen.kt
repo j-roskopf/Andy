@@ -56,7 +56,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -495,7 +495,7 @@ private fun talkBackCommand(enabled: Boolean): List<String> {
 private fun HardwareCommand(label: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
-        border = BorderStroke(1.dp, Border.copy(alpha = 0.90f)),
+        border = BorderStroke(1.dp, PaneDividerTint),
         colors = overlayOutlinedButtonColors(),
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
     ) {

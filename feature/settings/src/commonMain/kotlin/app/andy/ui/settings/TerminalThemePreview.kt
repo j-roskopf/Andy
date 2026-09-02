@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.MonoFont
 
 data class TerminalThemeColors(
@@ -125,14 +125,14 @@ internal fun TerminalThemePreview(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
             .background(themeColors.background),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(themeColors.background.copy(alpha = 0.95f))
-                .border(1.dp, Border.copy(alpha = 0.5f))
+                .border(1.dp, PaneDividerTint)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,

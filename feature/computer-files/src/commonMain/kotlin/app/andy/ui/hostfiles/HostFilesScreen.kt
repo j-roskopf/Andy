@@ -99,7 +99,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -391,7 +391,7 @@ fun HostFilesScreen(
                     Row(
                         Modifier.fillMaxWidth()
                             .background(if (root == selectedRoot) AndyColors.OrangeSubtle else PanelSoft, RoundedCornerShape(AndyRadius.Control))
-                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else Border, RoundedCornerShape(AndyRadius.Control))
+                            .border(1.dp, if (root == selectedRoot) AndyColors.OrangeBorder.copy(alpha = 0.52f) else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                             .padding(AndySpace.Space3),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -420,7 +420,6 @@ fun HostFilesScreen(
                 }
                 }
                 AndyHorizontalDivider(
-                    color = Border,
                     modifier = Modifier.padding(vertical = AndySpace.Space2),
                 )
                 Text("Recent", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)

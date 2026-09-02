@@ -84,7 +84,7 @@ import app.andy.ui.live.RecordingExportSheet
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Red
@@ -197,7 +197,7 @@ fun BugsScreen(
                         Column(
                             Modifier.fillMaxWidth()
                                 .background(if (active) PanelSoft else Panel, RoundedCornerShape(AndyRadius.Control))
-                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else Border, RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, if (active) Rust.copy(alpha = 0.45f) else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                                 .clickable { state.selectedId = report.id }
                                 .padding(10.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -395,7 +395,7 @@ fun BugsScreen(
                             Box(
                                 Modifier.weight(1f).fillMaxWidth()
                                     .background(Color.Black, RoundedCornerShape(AndyRadius.Control))
-                                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                                    .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                                     .clickable(enabled = state.playbackFrameCount > 0) { toggleBugReplay() },
                                 contentAlignment = Alignment.Center,
                             ) {

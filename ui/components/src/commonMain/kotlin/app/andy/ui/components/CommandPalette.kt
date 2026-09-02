@@ -49,9 +49,9 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
@@ -142,7 +142,7 @@ fun CommandPalette(
                 .shadow(8.dp, AndyShape.Sheet)
                 .clip(AndyShape.Sheet)
                 .background(AndyColors.SurfacePopover)
-                .border(1.dp, Border, AndyShape.Sheet)
+                .border(1.dp, PaneDividerTint, AndyShape.Sheet)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     when (event.key) {
@@ -321,7 +321,7 @@ fun CommandPaletteFooter(modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .padding(horizontal = AndySpace.Space4)
                 .height(1.dp)
-                .background(Border.copy(alpha = 0.55f)),
+                .background(PaneDividerTint),
         )
         Row(
             Modifier

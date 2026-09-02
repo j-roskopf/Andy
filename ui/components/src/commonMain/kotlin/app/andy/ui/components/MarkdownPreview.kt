@@ -37,10 +37,10 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -95,7 +95,7 @@ fun MarkdownPreview(
     Box(
         modifier
             .background(Panel, RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control)),
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control)),
     ) {
         if (text.isBlank()) {
             Text(
@@ -250,7 +250,7 @@ private fun AndyMarkdown(
             // Read fragment's less-indented lines still read as inside the fence, not as body text.
             codeBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.72f else 0.55f),
             inlineCodeBackground = AndyColors.Neutral700.copy(alpha = if (thinking) 0.45f else 0.72f),
-            dividerColor = Border.copy(alpha = if (thinking) 0.35f else 0.45f),
+            dividerColor = PaneDividerTint,
             tableBackground = AndyColors.Neutral850.copy(alpha = if (thinking) 0.4f else 0.65f),
         ),
         typography = markdownTypography(

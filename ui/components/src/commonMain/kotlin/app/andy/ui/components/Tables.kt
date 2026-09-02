@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.horizontalResizeCursor
 import app.andy.model.LogLevel
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -59,7 +59,7 @@ fun DataTableHeader(
             Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(Border.copy(alpha = 0.35f)),
+                .background(PaneDividerTint),
         )
     }
 }
@@ -157,7 +157,7 @@ fun HeaderCell(
                 Modifier
                     .width(1.dp)
                     .fillMaxHeight(0.55f)
-                    .background(Border.copy(alpha = 0.45f)),
+                    .background(PaneDividerTint),
             )
             Box(Modifier.width(6.dp))
         }
@@ -188,7 +188,7 @@ fun HeaderTrailingLabel(
                 Modifier
                     .width(1.dp)
                     .fillMaxHeight(0.55f)
-                    .background(Border.copy(alpha = 0.45f)),
+                    .background(PaneDividerTint),
             )
             Box(Modifier.width(6.dp))
         }

@@ -70,7 +70,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -298,7 +298,7 @@ private fun CatalogFilterSidebar(
     Column(
         Modifier.width(240.dp).fillMaxHeight()
             .background(Panel, AndyShape.Interactive)
-            .border(1.dp, Border, AndyShape.Interactive)
+            .border(1.dp, PaneDividerTint, AndyShape.Interactive)
             .padding(12.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp),

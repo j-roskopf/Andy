@@ -154,7 +154,7 @@ import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyStroke
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
@@ -1962,7 +1962,7 @@ private fun WorktreeTreeRow(
             .fillMaxWidth()
             .padding(start = indent)
             .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
             .then(
                 if (taskId != null) {
                     Modifier.clickable { onOpenTask(taskId) }
@@ -2064,7 +2064,7 @@ private fun ProjectRunbook(
                         Column(
                             Modifier.fillMaxWidth()
                                 .background(if (expanded) AndyColors.OrangeSubtle else AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
-                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else Border, RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, if (expanded) AndyColors.OrangeBorder.copy(alpha = 0.58f) else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                                 .clickable { onExpandedActionChange(if (expanded) null else action.id) }
                                 .animateContentSize(animationSpec = tween(220))
                                 .padding(12.dp),
@@ -2099,7 +2099,7 @@ private fun ProjectRunbook(
                         Row(
                             Modifier.fillMaxWidth()
                                 .background(AndyColors.Neutral900.copy(alpha = 0.72f), RoundedCornerShape(AndyRadius.Control))
-                                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                                .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2305,7 +2305,7 @@ private fun RepoSourceBadge() {
     Surface(
         color = AndyColors.Neutral800,
         shape = RoundedCornerShape(AndyRadius.Control),
-        border = BorderStroke(1.dp, AndyColors.Neutral600),
+        border = BorderStroke(1.dp, PaneDividerTint),
     ) {
         Text(
             "from repo",

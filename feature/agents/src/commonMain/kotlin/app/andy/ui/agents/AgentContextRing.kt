@@ -40,7 +40,7 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentTask
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
@@ -117,7 +117,7 @@ internal fun AgentContextUsageIndicator(
                         .onGloballyPositioned { popupHeightPx = it.size.height }
                         .width(252.dp)
                         .background(Panel, RoundedCornerShape(AndyRadius.Control))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                         .padding(AndySpace.Space4),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -157,7 +157,7 @@ private fun ContextRingGlyph(fraction: Float?, color: Color, diameter: Dp) {
         val inset = stroke.width / 2f
         val arcSize = Size(size.width - stroke.width, size.height - stroke.width)
         drawArc(
-            color = Border,
+            color = PaneDividerTint,
             startAngle = -90f,
             sweepAngle = 360f,
             useCenter = false,

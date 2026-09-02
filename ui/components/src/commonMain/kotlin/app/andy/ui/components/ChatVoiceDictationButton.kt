@@ -55,7 +55,7 @@ import app.andy.service.VoiceSetupState
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -269,7 +269,7 @@ fun ChatVoiceDictationButton(
             .width(width)
             .height(AndyLayout.ControlHeightMd)
             .clip(RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, if (recording) Rust.copy(alpha = 0.6f) else Border, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, if (recording) Rust.copy(alpha = 0.6f) else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
             .background(AndyColors.Neutral800.copy(alpha = if (ready) 0.55f else 0.28f))
             .alpha(if (interactive) 1f else 0.7f)
             .pointerInput(interactive) {

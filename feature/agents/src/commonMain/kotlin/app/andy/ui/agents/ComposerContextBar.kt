@@ -71,7 +71,6 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
@@ -208,7 +207,6 @@ private fun ComposerContinueInChip(
                 )
                 AndyHorizontalDivider(
                     modifier = Modifier.padding(vertical = AndySpace.Space1),
-                    color = Border.copy(alpha = 0.65f),
                 )
                 Row(
                     Modifier
@@ -537,7 +535,6 @@ private fun ComposerBranchChip(
                 }
                 AndyHorizontalDivider(
                     modifier = Modifier.padding(vertical = AndySpace.Space1),
-                    color = Border.copy(alpha = 0.65f),
                 )
                 if (creating) {
                     Column(

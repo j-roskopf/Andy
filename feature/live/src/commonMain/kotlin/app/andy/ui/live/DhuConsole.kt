@@ -57,7 +57,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -121,7 +121,7 @@ internal fun DhuConsolePanel(
                 .fillMaxWidth()
                 .heightIn(min = 96.dp, max = 160.dp)
                 .background(AndyColors.Neutral900, shape)
-                .border(1.dp, Border.copy(alpha = 0.6f), shape)
+                .border(1.dp, PaneDividerTint, shape)
                 .padding(8.dp)
                 .verticalScroll(scroll),
         ) {
@@ -160,7 +160,7 @@ internal fun DhuConsolePanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(AndyColors.Neutral900, shape)
-                .border(1.dp, Border, shape)
+                .border(1.dp, PaneDividerTint, shape)
                 .padding(horizontal = 10.dp, vertical = 8.dp)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

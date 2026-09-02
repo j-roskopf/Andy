@@ -41,11 +41,11 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndyStroke
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -252,7 +252,7 @@ fun FilterPill(
     }
     val borderColor = when {
         !enabled -> Color.Transparent
-        selected -> Border.copy(alpha = 0.5f)
+        selected -> PaneDividerTint
         else -> Color.Transparent
     }
     val contentColor = when {

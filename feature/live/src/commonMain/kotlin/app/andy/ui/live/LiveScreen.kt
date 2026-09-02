@@ -75,7 +75,6 @@ import app.andy.ui.controls.sizeForPosture
 import app.andy.service.DeviceService
 import app.andy.ui.logcat.LogcatState
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary

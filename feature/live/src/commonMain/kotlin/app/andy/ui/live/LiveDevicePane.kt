@@ -75,7 +75,6 @@ import app.andy.ui.theme.andyPressScale
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.LocalWindowResizing
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust

@@ -152,6 +152,7 @@ import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Yellow
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
@@ -1438,7 +1439,7 @@ private fun AgentTaskHeader(
     Column(
         Modifier
             .fillMaxWidth()
-            .bottomBorder(Border)
+            .bottomBorder(PaneDividerTint)
             .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {

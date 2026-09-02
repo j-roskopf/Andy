@@ -42,7 +42,7 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyOverlay
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
@@ -426,7 +426,7 @@ private fun SplitDiffCodeRow(pair: SplitDiffPair) {
             Modifier
                 .width(1.dp)
                 .height(18.dp)
-                .background(Border),
+                .background(PaneDividerTint),
         )
         SplitDiffPane(
             line = pair.new,
