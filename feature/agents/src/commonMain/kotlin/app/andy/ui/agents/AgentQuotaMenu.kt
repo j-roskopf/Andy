@@ -39,7 +39,7 @@ import app.andy.ui.components.FilterPill
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
@@ -131,7 +131,7 @@ private fun ProviderUsagePanel(
             }
         }
 
-        AndyHorizontalDivider(color = Border)
+        AndyHorizontalDivider()
 
         if (!accountAccessEnabled && agent != AgentKind.Codex) {
             AccountAccessPrompt(agent, onEnableAccountAccess)
@@ -140,7 +140,7 @@ private fun ProviderUsagePanel(
                 Modifier
                     .fillMaxWidth()
                     .background(PanelSoft, RoundedCornerShape(AndyRadius.Control))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                    .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                     .padding(AndySpace.Space4),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -170,7 +170,7 @@ private fun ProviderUsagePanel(
             }
         }
 
-        AndyHorizontalDivider(color = Border)
+        AndyHorizontalDivider()
 
         Text("local activity", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AndySpace.Space5)) {
@@ -215,7 +215,7 @@ private fun AccountAccessPrompt(agent: AgentKind, onEnable: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .background(PanelSoft, RoundedCornerShape(AndyRadius.Control))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
             .padding(AndySpace.Space4),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {

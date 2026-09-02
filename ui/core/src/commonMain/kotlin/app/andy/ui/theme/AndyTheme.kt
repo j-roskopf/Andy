@@ -204,7 +204,7 @@ data class AndyTonalPalette(
                 neutral850 = content,
                 neutral900 = window,
                 border = border,
-                borderMedium = border.copy(alpha = 0.14f),
+                borderMedium = border.copy(alpha = 0.10f),
                 windowBg = window,
                 sidebarBg = sidebar,
                 paneBg = pane,
@@ -235,7 +235,8 @@ data class AndyTonalPalette(
             neutral850 = AndyPalette.Carbon,
             neutral900 = AndyPalette.Void,
             border = AndyPalette.Smoke,
-            borderMedium = AndyPalette.Ash,
+            // Quiet hairlines for pane/rail dividers; inputs keep borderEmphasized.
+            borderMedium = AndyPalette.Ash.copy(alpha = 0.20f),
             windowBg = AndyPalette.Void,
             sidebarBg = AndyPalette.Carbon,
             paneBg = AndyPalette.Obsidian,
@@ -265,7 +266,8 @@ data class AndyTonalPalette(
             neutral850 = AndyPalette.Paper,
             neutral900 = AndyPalette.Paper,
             border = AndyPalette.Smoke,
-            borderMedium = AndyPalette.Ash,
+            // Quiet hairlines for pane/rail dividers; inputs keep borderEmphasized.
+            borderMedium = AndyPalette.Smoke.copy(alpha = 0.12f),
             windowBg = AndyPalette.Paper,
             sidebarBg = AndyPalette.Bone,
             paneBg = AndyPalette.Paper,
@@ -540,7 +542,9 @@ val MonoFont = FontFamily.Monospace
 val Ink get() = AndyColors.WindowBg
 val Panel get() = AndyColors.PaneBg
 val PanelSoft get() = AndyColors.SurfaceRaised
+/** Emphasized chrome for inputs, toggles, and focused controls. */
 val Border get() = AndyColors.BorderEmphasized
+/** Quiet hairlines for pane/rail/card dividers and structural borders. */
 val PaneDividerTint get() = AndyColors.BorderMedium
 val TextPrimary get() = AndyColors.TextPrimaryToken
 val TextSecondary get() = AndyColors.TextSecondaryToken

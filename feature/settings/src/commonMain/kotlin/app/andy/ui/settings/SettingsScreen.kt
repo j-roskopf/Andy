@@ -147,7 +147,7 @@ import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.PanelSoft
@@ -564,7 +564,7 @@ private fun AppearancePanel(
                         .size(32.dp)
                         .clip(CircleShape)
                         .background(tint.color, CircleShape)
-                        .border(if (selected) 3.dp else 1.dp, if (selected) AndyColors.Neutral100 else Border, CircleShape)
+                        .border(if (selected) 3.dp else 1.dp, if (selected) AndyColors.Neutral100 else PaneDividerTint, CircleShape)
                         .selectable(
                             selected = selected,
                             onClick = { update { it.copy(tintId = tint.id) } },
@@ -2323,7 +2323,7 @@ private fun McpToolsPanel(toolNames: List<String>) {
                 Box(
                     Modifier
                         .background(AndyColors.Neutral850, AndyShape.Interactive)
-                        .border(1.dp, Border, AndyShape.Interactive)
+                        .border(1.dp, PaneDividerTint, AndyShape.Interactive)
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)

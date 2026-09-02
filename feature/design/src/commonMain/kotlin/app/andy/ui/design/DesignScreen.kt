@@ -56,7 +56,7 @@ import app.andy.ui.live.MirrorFrameContent
 import app.andy.ui.live.rememberMirrorInputSender
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyLayout
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Red
@@ -256,7 +256,7 @@ fun DesignScreen(
                     Box(
                         Modifier.size(34.dp)
                             .background(swatch, RoundedCornerShape(6.dp))
-                            .border(if (swatch == color) 2.dp else 1.dp, if (swatch == color) TextPrimary else Border, RoundedCornerShape(6.dp))
+                            .border(if (swatch == color) 2.dp else 1.dp, if (swatch == color) TextPrimary else PaneDividerTint, RoundedCornerShape(6.dp))
                             .clickable { color = swatch },
                     )
                 }
@@ -266,7 +266,7 @@ fun DesignScreen(
                 Box(
                     Modifier.size(18.dp)
                         .background(pickedColor.toColorOrNull() ?: Color.Transparent, RoundedCornerShape(4.dp))
-                        .border(1.dp, Border, RoundedCornerShape(4.dp))
+                        .border(1.dp, PaneDividerTint, RoundedCornerShape(4.dp))
                 )
                 Text("Under pointer $pickedColor · swatch ${color.toHex()}", color = if (pickerEnabled) TextPrimary else TextSecondary)
             }

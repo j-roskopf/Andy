@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -82,9 +82,9 @@ private fun PosturePresetButton(
 ) {
     val shape = RoundedCornerShape(AndyRadius.Control)
     val borderColor = when {
-        !enabled -> Border.copy(alpha = 0.40f)
+        !enabled -> PaneDividerTint.copy(alpha = 0.40f)
         selected -> Rust
-        else -> Border.copy(alpha = 0.80f)
+        else -> PaneDividerTint
     }
     val container = when {
         !enabled -> AndyColors.Neutral850.copy(alpha = 0.35f)

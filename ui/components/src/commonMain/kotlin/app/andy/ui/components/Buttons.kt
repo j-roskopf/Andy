@@ -25,7 +25,6 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.andyPressScale
 import app.andy.ui.theme.andyTokens

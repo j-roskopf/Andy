@@ -40,7 +40,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.components.secondaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
@@ -123,7 +123,7 @@ internal fun ProjectsIntroduction(onComplete: () -> Unit, modifier: Modifier = M
             .fillMaxSize()
             .clip(RoundedCornerShape(AndyRadius.Row))
             .background(AndyColors.Neutral850)
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row)),
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Row)),
     ) {
         Box(
             Modifier

@@ -43,7 +43,7 @@ import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Panel
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.Rust
@@ -146,7 +146,7 @@ internal fun PairOverWifiDialog(
                                 Row(
                                     Modifier.fillMaxWidth()
                                         .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
-                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
+                                        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Row))
                                         .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -197,7 +197,7 @@ internal fun PairOverWifiDialog(
                                 Row(
                                     Modifier.fillMaxWidth()
                                         .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
-                                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
+                                        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Row))
                                         .padding(10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -48,7 +48,6 @@ internal fun SidebarCollapsiblePanel(
     Column(modifier.fillMaxWidth()) {
         if (showTopDivider) {
             AndyHorizontalDivider(
-                color = Border.copy(alpha = 0.4f),
                 modifier = Modifier.padding(vertical = AndySpace.Space2),
             )
         }

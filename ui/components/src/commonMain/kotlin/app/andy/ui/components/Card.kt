@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.andyTokens
 
 enum class CardVariant {
@@ -57,7 +57,7 @@ fun Card(
     }
     val border = when (borderColor) {
         Color.Transparent -> null
-        null -> if (variant == CardVariant.Default) Border else null
+        null -> if (variant == CardVariant.Default) PaneDividerTint else null
         else -> borderColor
     }
     val shadowElevation = when (elevation) {

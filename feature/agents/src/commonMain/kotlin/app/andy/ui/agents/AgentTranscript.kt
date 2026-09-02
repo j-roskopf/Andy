@@ -72,6 +72,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -132,11 +133,11 @@ import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -1074,7 +1075,7 @@ private fun TranscriptEvent(
                 kind = event.kind,
                 locations = event.locations,
                 images = event.images,
-                color = Cyan,
+                color = TextSecondary,
                 forceVisible = event.state == AgentToolState.Failed,
                 onToolFileOpen = onToolFileOpen,
             )
@@ -1238,8 +1239,60 @@ private fun PlanEntryLine(index: Int, entry: AgentPlanEntry) {
     }
 }
 
-private val TranscriptAsideIndent = 14.dp
-private val TranscriptAsideContentIndent = 22.dp
+private val TranscriptAsideIndent = 2.dp
+private val TranscriptAsideContentIndent = 6.dp
+
+/** Leading action verb weight for activity headlines ("Edited", "Thought", "Ran", …). */
+private val ActivityActionWeight = FontWeight.SemiBold
+
+/**
+ * Bolds the first whitespace-delimited token when it looks like an action verb
+ * (letters only — skips shell/code dumps that start with punctuation).
+ */
+private fun activityHeadlineAnnotated(text: String, color: Color): AnnotatedString {
+    val trimmed = text.trimStart()
+    val leading = text.length - trimmed.length
+    val firstBreak = trimmed.indexOfFirst { it.isWhitespace() }
+    val verbEnd = if (firstBreak < 0) trimmed.length else firstBreak
+    val verb = trimmed.take(verbEnd)
+    val boldVerb = verb.isNotEmpty() && verb.all { it.isLetter() }
+    return buildAnnotatedString {
+        if (leading > 0) append(text.take(leading))
+        if (boldVerb) {
+            withStyle(SpanStyle(color = color, fontWeight = ActivityActionWeight)) { append(verb) }
+            if (verbEnd < trimmed.length) {
+                withStyle(SpanStyle(color = color, fontWeight = FontWeight.Normal)) {
+                    append(trimmed.substring(verbEnd))
+                }
+            }
+        } else {
+            withStyle(SpanStyle(color = color, fontWeight = FontWeight.Normal)) { append(trimmed) }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptActivityLine(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable(onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
+            .padding(vertical = 3.dp),
+    ) {
+        content()
+    }
+}
 
 @Composable
 private fun ThinkingStep(
@@ -1250,7 +1303,7 @@ private fun ThinkingStep(
 ) {
     val expandable = text.lineSequence().any { it.isNotBlank() }
     TranscriptExpandableRow(
-        headline = "Thinking",
+        headline = "Thought",
         expanded = expanded,
         onExpandedChange = onExpandedChange,
         expandable = expandable,
@@ -1407,7 +1460,7 @@ private fun ChatAttachedImage(
                 .heightIn(max = maxHeight)
                 .clip(RoundedCornerShape(AndyRadius.Control))
                 .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium))
-                .border(1.dp, Border.copy(alpha = 0.75f), RoundedCornerShape(AndyRadius.Control))
+                .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                 .then(
                     if (image != null) {
                         Modifier
@@ -1451,7 +1504,7 @@ private fun ChatAttachedImage(
                         .padding(4.dp)
                         .clip(RoundedCornerShape(AndyRadius.Control))
                         .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong))
-                        .border(1.dp, Border.copy(alpha = 0.8f), RoundedCornerShape(AndyRadius.Control))
+                        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                         .pointerHoverIcon(PointerIcon.Hand)
                         .clickable(onClick = onRemove)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -1493,7 +1546,7 @@ private fun ChatImagePreviewDialog(
                     .widthIn(max = 1100.dp)
                     .heightIn(max = 860.dp)
                     .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong), RoundedCornerShape(AndyRadius.Control))
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                    .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                     .clickable(onClick = onDismiss)
                     .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
@@ -1570,7 +1623,7 @@ private fun ChatAttachedToolImage(
                 .heightIn(max = maxHeight)
                 .clip(RoundedCornerShape(AndyRadius.Control))
                 .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium))
-                .border(1.dp, Border.copy(alpha = 0.75f), RoundedCornerShape(AndyRadius.Control))
+                .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                 .then(
                     if (bmp != null) {
                         Modifier
@@ -1684,7 +1737,7 @@ private fun CompactToolCallsBlock(
     ) {
         Column(
             Modifier.fillMaxWidth().padding(top = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             events.forEachIndexed { offset, event ->
                 val eventKey = transcriptEventKey(startIndex + offset, event)
@@ -1717,7 +1770,7 @@ private fun CompactToolCallsBlock(
                             kind = event.kind,
                             locations = event.locations,
                             images = event.images,
-                            color = Cyan,
+                            color = TextSecondary,
                             forceVisible = event.state == AgentToolState.Failed,
                             indent = TranscriptAsideContentIndent,
                             onToolFileOpen = onToolFileOpen,
@@ -1845,43 +1898,48 @@ private fun SpawnedAgentLine(
         }
     }
     DisableSelection {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = indent),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Created ", color = muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1)
-            Text(
-                displayName,
-                color = nameColor,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .then(
-                        if (taskId != null) {
-                            Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable {
-                                    openAgentTask(OpenAgentTaskRequest(taskId, linkedTask?.projectId))
-                                }
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
-            if (suffix.isNotBlank()) {
-                Text(
-                    suffix,
-                    color = muted,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
+        Row(Modifier.fillMaxWidth().padding(start = indent)) {
+            TranscriptActivityLine(modifier = Modifier.weight(1f, fill = false)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Created ",
+                        color = muted,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        maxLines = 1,
+                        fontWeight = ActivityActionWeight,
+                    )
+                    Text(
+                        displayName,
+                        color = nameColor,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .then(
+                                if (taskId != null) {
+                                    Modifier
+                                        .pointerHoverIcon(PointerIcon.Hand)
+                                        .clickable {
+                                            openAgentTask(OpenAgentTaskRequest(taskId, linkedTask?.projectId))
+                                        }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    )
+                    if (suffix.isNotBlank()) {
+                        Text(
+                            suffix,
+                            color = muted,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
@@ -1956,16 +2014,18 @@ private fun ToolBlock(
     }
 
     if (!expandable) {
-        ToolPathText(
-            text = headline.ifBlank { marker },
-            fileContent = openableContent,
-            onOpen = onToolFileOpen,
-            color = color.copy(alpha = 0.88f),
-            modifier = Modifier.padding(start = indent),
-            maxLines = 1,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-        )
+        TranscriptActivityLine(modifier = Modifier.padding(start = indent)) {
+            ToolPathText(
+                text = headline.ifBlank { marker },
+                fileContent = openableContent,
+                onOpen = onToolFileOpen,
+                color = color.copy(alpha = 0.92f),
+                maxLines = 1,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                boldFirstWord = true,
+            )
+        }
         return
     }
 
@@ -1974,7 +2034,7 @@ private fun ToolBlock(
         expanded = expanded,
         onExpandedChange = onExpandedChange,
         animateExpansion = animateExpansion,
-        headlineColor = color.copy(alpha = 0.88f),
+        headlineColor = color.copy(alpha = 0.92f),
         indent = indent,
         headlineContent = openableContent?.let { content ->
             {
@@ -1982,10 +2042,11 @@ private fun ToolBlock(
                     text = headline,
                     fileContent = content,
                     onOpen = onToolFileOpen,
-                    color = color.copy(alpha = 0.88f),
+                    color = color.copy(alpha = 0.92f),
                     maxLines = if (expanded) Int.MAX_VALUE else 1,
                     fontSize = 12.sp,
-                    lineHeight = 17.sp,
+                    lineHeight = 16.sp,
+                    boldFirstWord = true,
                 )
             }
         },
@@ -2186,13 +2247,14 @@ private fun ToolPathText(
     maxLines: Int = Int.MAX_VALUE,
     fontSize: androidx.compose.ui.unit.TextUnit = 11.sp,
     lineHeight: androidx.compose.ui.unit.TextUnit = 15.sp,
+    boldFirstWord: Boolean = false,
 ) {
     val path = fileContent?.path?.takeIf { it.isNotBlank() && it in text }
     if (path == null) {
         Text(
-            text,
-            color = color,
-            fontFamily = MonoFont,
+            text = if (boldFirstWord) activityHeadlineAnnotated(text, color) else
+                buildAnnotatedString { withStyle(SpanStyle(color = color)) { append(text) } },
+            fontFamily = DisplayFont,
             fontSize = fontSize,
             lineHeight = lineHeight,
             maxLines = maxLines,
@@ -2206,10 +2268,11 @@ private fun ToolPathText(
     DisableSelection {
         Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             if (prefixEnd > 0) {
+                val prefix = text.substring(0, prefixEnd)
                 Text(
-                    text.substring(0, prefixEnd),
-                    color = color,
-                    fontFamily = MonoFont,
+                    text = if (boldFirstWord) activityHeadlineAnnotated(prefix, color) else
+                        buildAnnotatedString { withStyle(SpanStyle(color = color)) { append(prefix) } },
+                    fontFamily = DisplayFont,
                     fontSize = fontSize,
                     lineHeight = lineHeight,
                     maxLines = maxLines,
@@ -2218,8 +2281,8 @@ private fun ToolPathText(
             }
             Text(
                 path,
-                color = Cyan,
-                fontFamily = MonoFont,
+                color = TextPrimary.copy(alpha = 0.92f),
+                fontFamily = DisplayFont,
                 fontSize = fontSize,
                 lineHeight = lineHeight,
                 maxLines = maxLines,
@@ -2233,7 +2296,7 @@ private fun ToolPathText(
                 Text(
                     text.substring(suffixStart),
                     color = color,
-                    fontFamily = MonoFont,
+                    fontFamily = DisplayFont,
                     fontSize = fontSize,
                     lineHeight = lineHeight,
                     maxLines = maxLines,
@@ -2265,33 +2328,27 @@ private fun TranscriptExpandableRow(
     }
     Column(columnModifier) {
         DisableSelection {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = indent)
-                    .then(
-                        if (expandable) {
-                            Modifier
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { onExpandedChange(!expanded) }
-                        } else {
-                            Modifier
-                        },
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (headlineContent != null) {
-                    Box(Modifier.weight(1f, fill = false)) { headlineContent() }
-                } else {
-                    Text(
-                        headline,
-                        color = headlineColor,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        maxLines = if (expanded) Int.MAX_VALUE else 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
+            Row(Modifier.fillMaxWidth().padding(start = indent)) {
+                TranscriptActivityLine(
+                    modifier = Modifier.weight(1f, fill = false),
+                    onClick = if (expandable) {
+                        { onExpandedChange(!expanded) }
+                    } else {
+                        null
+                    },
+                ) {
+                    if (headlineContent != null) {
+                        headlineContent()
+                    } else {
+                        Text(
+                            text = activityHeadlineAnnotated(headline, headlineColor),
+                            fontFamily = DisplayFont,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            maxLines = if (expanded) Int.MAX_VALUE else 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -2319,7 +2376,7 @@ private fun compactActivityHeadline(events: List<AgentEvent>): String {
             val thinkingLabel = if (thinkingCount == 1) "thought" else "$thinkingCount thoughts"
             "$thinkingLabel, $toolHeadline"
         }
-        thinkingCount > 0 -> if (thinkingCount == 1) "Thinking" else "$thinkingCount thinking steps"
+        thinkingCount > 0 -> if (thinkingCount == 1) "Thought" else "$thinkingCount thoughts"
         else -> toolHeadline
     }
 }
@@ -2697,7 +2754,7 @@ fun PlanApprovalCard(
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PaneDividerTint))
         TextField(
             value = feedback,
             onValueChange = { feedback = it },

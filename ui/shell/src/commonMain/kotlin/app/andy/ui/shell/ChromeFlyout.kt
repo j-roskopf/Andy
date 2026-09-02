@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.components.bottomBorder
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -82,7 +82,7 @@ internal fun ChromeFlyout(
             Modifier
                 .fillMaxWidth()
                 .background(AndyColors.SurfaceRaised)
-                .bottomBorder(Border)
+                .bottomBorder(PaneDividerTint)
                 .padding(horizontal = AndySpace.Space5, vertical = AndySpace.Space3)
                 .heightIn(max = 320.dp)
                 .verticalScroll(rememberScrollState()),

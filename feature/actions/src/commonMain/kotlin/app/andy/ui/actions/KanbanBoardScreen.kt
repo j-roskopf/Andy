@@ -99,7 +99,7 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
@@ -409,7 +409,7 @@ private fun KanbanBoardHeader(
             Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(Border.copy(alpha = 0.65f)),
+                .background(PaneDividerTint),
         )
     }
 }

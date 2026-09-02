@@ -37,10 +37,10 @@ import app.andy.ui.components.TextButton
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -64,7 +64,7 @@ internal fun EditedFilesCard(
     PanelCard(
         modifier = modifier.fillMaxWidth().testTag("edited-files-card"),
         background = AndyColors.SurfaceRaised,
-        borderColor = Border,
+        borderColor = PaneDividerTint,
         contentPadding = PaddingValues(0.dp),
         verticalArrangement = Arrangement.Top,
     ) {
@@ -80,7 +80,7 @@ internal fun EditedFilesCard(
                     .size(28.dp)
                     .clip(RoundedCornerShape(AndyRadius.Control))
                     .background(AndyColors.Neutral850)
-                    .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control)),
+                    .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -121,7 +121,7 @@ internal fun EditedFilesCard(
             }
         }
 
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Border))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PaneDividerTint))
 
         Column(
             Modifier

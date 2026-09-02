@@ -23,7 +23,7 @@ import app.andy.ui.components.PanelCard
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -38,7 +38,7 @@ internal fun TracePresetCard(
     PanelCard(
         modifier = modifier.clickable(onClick = onClick),
         background = if (selected) AndyColors.OrangeSubtle.copy(alpha = 0.35f) else AndyColors.Neutral900.copy(alpha = 0.55f),
-        borderColor = if (selected) Rust else Border,
+        borderColor = if (selected) Rust else PaneDividerTint,
         contentPadding = PaddingValues(AndySpace.Space4),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
     ) {

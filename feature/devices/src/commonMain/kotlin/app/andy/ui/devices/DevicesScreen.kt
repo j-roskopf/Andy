@@ -92,7 +92,7 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.Panel
@@ -683,7 +683,7 @@ private fun AndroidDevicesTab(
                     Modifier.fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
-                        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
+                        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Row))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),

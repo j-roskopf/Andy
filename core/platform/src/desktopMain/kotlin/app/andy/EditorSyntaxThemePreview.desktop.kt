@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.EditorSyntaxTheme
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.TextPrimary
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants
@@ -39,7 +39,7 @@ actual fun EditorSyntaxThemePreview(
         .fillMaxWidth()
         .height(132.dp)
         .clip(RoundedCornerShape(AndyRadius.Control))
-        .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+        .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
     // Roborazzi's off-window scene cannot host heavyweight Swing interop.
     if (System.getProperty("andy.screenshot.renderer") == "compose") {
         Box(chrome.background(panelBackground).padding(horizontal = 10.dp, vertical = 8.dp)) {

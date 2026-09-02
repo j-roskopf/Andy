@@ -73,7 +73,7 @@ import app.andy.ui.logcat.LogcatState
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
@@ -1105,7 +1105,7 @@ internal fun DockIconChromeButton(
         onBleedSurface -> AndyColors.SurfaceRaised
         else -> AndyColors.Neutral850
     }
-    val stroke = if (lifted) Color.White.copy(alpha = 0.12f) else Border
+    val stroke = if (lifted) Color.White.copy(alpha = 0.12f) else PaneDividerTint
     Box(
         Modifier
             .size(28.dp)

@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
@@ -69,7 +69,7 @@ fun AndyDropdownMenu(
             .heightIn(max = 300.dp),
         containerColor = AndyColors.SurfacePopover,
         shape = AndyShape.Sheet,
-        border = BorderStroke(1.dp, Border),
+        border = BorderStroke(1.dp, PaneDividerTint),
         shadowElevation = 8.dp,
         tonalElevation = 0.dp,
     ) {

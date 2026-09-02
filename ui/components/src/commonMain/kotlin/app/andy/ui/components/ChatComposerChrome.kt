@@ -60,9 +60,9 @@ import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
@@ -245,7 +245,7 @@ private fun ChatComposerDrawerImageChip(
         modifier
             .clip(chipShape)
             .background(AndyColors.Neutral800, chipShape)
-            .border(1.dp, Border.copy(alpha = 0.55f), chipShape)
+            .border(1.dp, PaneDividerTint, chipShape)
             .padding(horizontal = AndySpace.Space1, vertical = AndySpace.Space1),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -345,7 +345,7 @@ private fun ChatComposerImagePreviewDialog(
                     AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong),
                     RoundedCornerShape(AndyRadius.Control),
                 )
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
+                .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                 .clickable(onClick = onDismiss)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
@@ -386,7 +386,7 @@ private fun ChatComposerDrawerChip(
         modifier
             .clip(chipShape)
             .background(AndyColors.Neutral800, chipShape)
-            .border(1.dp, Border.copy(alpha = 0.55f), chipShape)
+            .border(1.dp, PaneDividerTint, chipShape)
             .padding(start = AndySpace.Space2, end = AndySpace.Space1)
             .height(AndyLayout.ControlHeightSm),
         verticalAlignment = Alignment.CenterVertically,

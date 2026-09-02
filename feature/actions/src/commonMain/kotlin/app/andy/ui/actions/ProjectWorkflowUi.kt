@@ -108,7 +108,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
+import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.Green
@@ -164,7 +164,7 @@ internal fun ProjectWorkflowList(
                     val childBuilds = builds.filter { it.linkedSpecTaskId == spec.id }.sortedByDescending { it.updatedAtMillis }
                     val open = expanded[spec.id] ?: true
                     Column(
-                        Modifier.fillMaxWidth().border(1.dp, if (selectedTaskId == spec.id) AndyColors.OrangeBorder else Border, RoundedCornerShape(AndyRadius.Control))
+                        Modifier.fillMaxWidth().border(1.dp, if (selectedTaskId == spec.id) AndyColors.OrangeBorder else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                             .animateContentSize(tween(180)),
                     ) {
                         WorkflowRow(
@@ -195,7 +195,7 @@ internal fun ProjectWorkflowList(
                         Text("STANDALONE BUILDS", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                     }
                     items(standaloneBuilds, key = { "standalone-build-${it.id}" }) { build ->
-                        Column(Modifier.fillMaxWidth().border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))) {
+                        Column(Modifier.fillMaxWidth().border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))) {
                             WorkflowBuildPairRows(workflow, build, selectedTaskId, onSelectTask)
                         }
                     }
@@ -616,7 +616,7 @@ private fun BuildDetail(
                             )
                             .border(
                                 if (followUpImageDragActive) 2.dp else 1.dp,
-                                if (followUpImageDragActive) Cyan else Border.copy(alpha = 0.35f),
+                                if (followUpImageDragActive) Cyan else PaneDividerTint,
                                 RoundedCornerShape(AndyRadius.Control),
                             ),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
@@ -1010,7 +1010,7 @@ internal fun SpecTaskDialog(
                             )
                             .border(
                                 if (imageDragActive) 2.dp else 1.dp,
-                                if (imageDragActive) Cyan else Border.copy(alpha = 0.35f),
+                                if (imageDragActive) Cyan else PaneDividerTint,
                                 RoundedCornerShape(AndyRadius.Control),
                             ),
                         textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont),
@@ -1411,7 +1411,7 @@ private fun ProjectProfileSection(
             Spacer(Modifier.width(6.dp))
             Text(title.uppercase(), color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 9.sp)
             Spacer(Modifier.width(8.dp))
-            AndyHorizontalDivider(modifier = Modifier.weight(1f), color = Border.copy(alpha = 0.7f))
+            AndyHorizontalDivider(modifier = Modifier.weight(1f))
         }
         content()
     }

@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import app.andy.ui.components.AndyHorizontalDivider
-import app.andy.ui.components.rightBorder
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,7 +59,6 @@ import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyMotion
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
@@ -244,7 +242,7 @@ internal fun Sidebar(
                     StatusRow("Local only", "port 10000", true)
                 }
 
-                AndyHorizontalDivider(color = Border, modifier = Modifier.padding(vertical = AndySpace.Space1))
+                AndyHorizontalDivider(modifier = Modifier.padding(vertical = AndySpace.Space1))
 
                 if (updates != null) {
                     val updateText = when (updateState) {
