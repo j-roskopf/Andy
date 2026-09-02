@@ -124,7 +124,6 @@ import app.andy.domain.visibleChatSessions
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
-import app.andy.ui.components.PowerSearchField
 import app.andy.ui.components.Button
 import app.andy.ui.components.CommandPalette
 import app.andy.ui.components.CommandPaletteItem
@@ -518,7 +517,6 @@ private fun ProjectCockpit(
                                 project = item,
                                 selected = item.id == selectedProjectId,
                                 hasUnread = item.id in unreadProjectIds,
-                                chatCount = chatLists.active.size,
                                 sessions = visibleSessions,
                                 pinPriority = pinPriority && visibleSessions.any { it.isPriorityChat() },
                                 selectedSessionId = selectedTaskId,
@@ -573,7 +571,6 @@ private fun ProjectCockpit(
                             )
                         }
                     }
-                        ProjectsSidebarFooter()
                     }
                     PaneDivider(
                         drawLine = false,
@@ -1046,8 +1043,9 @@ private fun ProjectsSidebarHeader(
     onNew: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = AndySpace.Space1),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -1055,12 +1053,11 @@ private fun ProjectsSidebarHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "PROJECTS",
+                "Repositories",
                 color = TextSecondary,
-                fontFamily = MonoFont,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 10.sp,
-                letterSpacing = 0.8.sp,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Normal,
+                fontSize = 12.sp,
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1073,11 +1070,6 @@ private fun ProjectsSidebarHeader(
                 PlusGlyphButton(onClick = onNew)
             }
         }
-        PowerSearchField(
-            placeholder = "Search projects and chats",
-            onClick = onOpenSearch,
-            shortcutHint = "⌘K",
-        )
     }
 }
 
@@ -1178,7 +1170,7 @@ private fun ProjectFolderGlyph(
     expanded: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val fillColor = AndyColors.SurfaceHover.copy(alpha = 0.85f)
+    val fillColor = Color.Transparent
     val strokeColor = TextSecondary.copy(alpha = 0.78f)
     val stroke = remember(strokeColor) {
         Stroke(width = 1.15f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
@@ -1279,8 +1271,6 @@ private fun projectSidebarTaskMatches(query: String, task: AgentTask): Boolean {
     return fields.any { it.contains(query, ignoreCase = true) }
 }
 
-private val ProjectSidebarViolet = Color(0xFF8B5CF6)
-
 @Composable
 private fun ProjectMonogram(
     name: String,
@@ -1323,10 +1313,10 @@ private fun WorktreeBranchGlyph(modifier: Modifier = Modifier) {
                 size.width * 0.72f, size.height * 0.82f,
             )
         }
-        drawPath(path, ProjectSidebarViolet, style = stroke)
-        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.18f))
-        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.28f, size.height * 0.42f))
-        drawCircle(ProjectSidebarViolet, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.82f))
+        drawPath(path, TextSecondary, style = stroke)
+        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.18f))
+        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.28f, size.height * 0.42f))
+        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.82f))
     }
 }
 
@@ -1353,7 +1343,6 @@ private fun ProjectSessionGroup(
     project: ActionProject,
     selected: Boolean,
     hasUnread: Boolean,
-    chatCount: Int,
     sessions: List<AgentTask>,
     pinPriority: Boolean,
     selectedSessionId: String?,
@@ -1376,37 +1365,32 @@ private fun ProjectSessionGroup(
     val hovered by interactionSource.collectIsHoveredAsState()
 
     Column(
-        Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = AndySpace.Space1),
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clip(AndyShape.Row)
+                .background(if (selected && selectedSessionId == null) AndyColors.SurfaceSelected else Color.Transparent)
                 .hoverable(interactionSource)
                 .clickable(onClick = onToggleProject)
                 .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
+            ProjectFolderGlyph(expanded = !sessionsCollapsed)
             Column(
                 Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(1.dp),
             ) {
                 Text(
                     project.name,
-                    color = TextPrimary.copy(alpha = 0.94f),
+                    color = if (selected) TextPrimary else TextSecondary,
                     fontFamily = DisplayFont,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                     fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "$chatCount ${if (chatCount == 1) "chat" else "chats"} · ${if (project.source == ConfigSource.Repo) "repository" else "local"}",
-                    color = TextSecondary.copy(alpha = 0.62f),
-                    fontFamily = MonoFont,
-                    fontSize = 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1544,6 +1528,8 @@ private fun ProjectSessionRow(
             task = task,
             selected = selected,
             onClick = onOpen,
+            showAgentIcon = false,
+            showRelativeAge = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .pointerInput(task.id) {
@@ -1560,16 +1546,26 @@ private fun ProjectSessionRow(
                     }
                 },
             trailing = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
-                ) {
-                    if (hovered) {
-                        SessionRowDeleteButton(onClick = onDelete)
-                    } else {
+                // Keep idle glyphs and the hover delete control in-layout so the row width
+                // does not jump when the pointer enters (alpha swap only).
+                Box(contentAlignment = Alignment.CenterEnd) {
+                    Row(
+                        Modifier.alpha(if (hovered) 0f else 1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                    ) {
                         when {
                             task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
                             task.worktreePath != null || task.branchName != null -> WorktreeBranchGlyph()
+                            else -> Spacer(Modifier.size(20.dp))
+                        }
+                    }
+                    Box(Modifier.alpha(if (hovered) 1f else 0f)) {
+                        // Keep hit-testing off while invisible so the idle glyphs stay clickable.
+                        if (hovered) {
+                            SessionRowDeleteButton(onClick = onDelete)
+                        } else {
+                            Spacer(Modifier.size(20.dp))
                         }
                     }
                 }

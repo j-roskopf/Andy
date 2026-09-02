@@ -112,7 +112,7 @@ class DesktopWorkspaceStore(
             workspaceStatusExpanded = props.getProperty("workspaceStatusExpanded")?.toBooleanStrictOrNull() ?: false,
             projectsIntroductionCompleted = props.getProperty("projectsIntroductionCompleted")?.toBooleanStrictOrNull() ?: false,
             projectListPaneVisible = props.getProperty("projectListPaneVisible")?.toBooleanStrictOrNull() ?: true,
-            projectListPaneWidth = props.getProperty("projectListPaneWidth")?.toFloatOrNull()?.coerceIn(220f, 600f) ?: 300f,
+            projectListPaneWidth = props.getProperty("projectListPaneWidth")?.toFloatOrNull()?.coerceIn(220f, 600f) ?: 252f,
             proxyRules = loadProxyRules(props),
             pairedWifiDevices = loadPairedWifi(props),
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 720f,

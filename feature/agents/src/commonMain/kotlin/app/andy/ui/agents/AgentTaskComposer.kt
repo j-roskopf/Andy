@@ -73,8 +73,8 @@ import app.andy.model.WorkingTreeStatus
 import app.andy.model.WorkspaceState
 import app.andy.model.composerCommandName
 import app.andy.model.composerCommandToken
+import app.andy.model.agentModelMenuSections
 import app.andy.model.defaultSandboxMode
-import app.andy.model.groupedByModelFamily
 import app.andy.model.hasAvailableAgentProvider
 import app.andy.model.HostSearchResult
 import app.andy.model.labelFor
@@ -751,7 +751,23 @@ private fun AgentChatComposer(
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         ChatComposerLayout(
-            modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onVoiceDictationShortcut(voiceShortcut, voiceController)
+                .then(
+                    if (!form.services.remoteSession.isRemote) {
+                        Modifier.onImageFilesDropped(
+                            onFiles = { dropped ->
+                                state.imagePaths = attachChatImages(state.imagePaths, dropped)
+                            },
+                            onDragActiveChange = { active ->
+                                state.imageDragActive = active
+                            },
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
             highlighted = state.imageDragActive,
             drawerItems = drawerItems,
             contextBar = {
@@ -849,19 +865,7 @@ private fun AgentChatComposer(
                                 if (!form.services.remoteSession.isRemote) {
                                     state.imagePaths = attachChatImages(state.imagePaths, added)
                                 }
-                            }
-                            .onImageFilesDropped(
-                                onFiles = { dropped ->
-                                    if (!form.services.remoteSession.isRemote) {
-                                        state.imagePaths = attachChatImages(state.imagePaths, dropped)
-                                    }
-                                },
-                                onDragActiveChange = { active ->
-                                    if (!form.services.remoteSession.isRemote) {
-                                        state.imageDragActive = active
-                                    }
-                                },
-                            ),
+                            },
                         textStyle = LocalTextStyle.current.copy(
                             color = TextPrimary,
                             fontFamily = DisplayFont,
@@ -1023,22 +1027,25 @@ private fun AgentChatComposer(
                                     },
                                 )
                             }
-                            if (state.agent == AgentKind.Cursor) {
-                                form.modelOptions.groupedByModelFamily().forEach { (family, options) ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                family.label.uppercase(),
-                                                color = TextSecondary,
-                                                fontFamily = MonoFont,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 10.sp,
-                                            )
-                                        },
-                                        onClick = {},
-                                        enabled = false,
-                                    )
-                                    options.forEach { option ->
+                            val modelSections = agentModelMenuSections(state.agent, form.modelOptions)
+                            if (modelSections != null) {
+                                modelSections.forEach { section ->
+                                    section.header?.let { header ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    header,
+                                                    color = TextSecondary,
+                                                    fontFamily = MonoFont,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 10.sp,
+                                                )
+                                            },
+                                            onClick = {},
+                                            enabled = false,
+                                        )
+                                    }
+                                    section.options.forEach { option ->
                                         DropdownMenuItem(
                                             text = { Text(option.label, color = TextPrimary) },
                                             onClick = {

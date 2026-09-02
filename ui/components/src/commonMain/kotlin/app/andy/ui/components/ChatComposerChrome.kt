@@ -181,7 +181,8 @@ private fun ChatComposerHeaderArea(
     Column(
         modifier = modifier
             .shadow(elevation = 1.dp, shape = shape, clip = false)
-            .background(AndyColors.Neutral850, shape)
+            // Rail/well tone — distinct from SurfacePopover (composer / chat chrome) in every mode.
+            .background(AndyColors.SidebarBg, shape)
             .padding(
                 start = AndySpace.Space3,
                 end = AndySpace.Space3,
@@ -706,7 +707,8 @@ fun ChatComposerFrame(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = AndyShape.Chat
-    Column(
+    val tokens = andyTokens()
+    Box(
         modifier
             .shadow(
                 elevation = if (highlighted) 4.dp else 2.dp,
@@ -714,11 +716,23 @@ fun ChatComposerFrame(
                 clip = false,
             )
             .clip(shape)
-            .background(AndyColors.SurfacePopover, shape)
-            .padding(contentPadding),
-        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-        content = content,
-    )
+            .background(AndyColors.SurfacePopover, shape),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(contentPadding),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            content = content,
+        )
+        if (highlighted) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .border(2.dp, tokens.accent, shape),
+            )
+        }
+    }
 }
 
 /** Quiet ghost chip for the composer toolbar (model, effort, access). */
@@ -731,7 +745,7 @@ fun ComposerChip(
     enabled: Boolean = true,
     leadingContent: (@Composable () -> Unit)? = null,
     showChevron: Boolean = true,
-    showBackground: Boolean = true,
+    showBackground: Boolean = false,
 ) {
     val tokens = andyTokens()
     val contentColor = when {
@@ -741,8 +755,7 @@ fun ComposerChip(
     }
     val container = when {
         !showBackground -> Color.Transparent
-        !enabled -> Color.Transparent
-        selected -> tokens.neutralFill
+        selected -> tokens.palette.surfaceHover
         else -> Color.Transparent
     }
     val chipRadius = maxOf(AndyRadius.Interactive.value, AndyRadius.Chat.value - AndySpace.Space3.value).dp

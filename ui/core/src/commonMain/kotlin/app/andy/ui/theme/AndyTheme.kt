@@ -23,20 +23,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Andy design system — Astryx-aligned product UI (Compose M3 + app tokens).
+ * Andy design system — Airtable-aligned product UI (Compose M3 + app tokens).
  *
- * Visual source: [Meta Astryx](https://astryx.atmeta.com/components) (`facebook/astryx` tokens).
+ * Visual source: Airtable's editorial light system and its dark surface counterpart.
  *
- * **Shape:** element 8dp · container 12dp · chat/composer 28dp · pill 999dp.
+ * **Shape:** element 6dp · container 12dp · chat/composer 10dp · pill 999dp.
  *
- * **Color:** body `#F1F4F7` / `#111112`, surface `#FFFFFF` / `#1F1F22`, accent `#0064E0` / `#2694FE`.
+ * **Color:** paper `#FFFFFF` / void `#08090A`, elevated bone `#E5E5E6` / graphite `#23252A`.
  *
- * **Typography:** 14px body/label, system sans; mono for paths/commands.
+ * **Typography:** modest system sans weights; mono remains reserved for paths/commands.
  *
  * Tokens flow: [AndySemanticTokens] → CompositionLocal → atoms → molecules → screens.
  */
 enum class AndyTint(val id: String, val label: String, val color: Color) {
-    Default("andy-blue", "Astryx blue", Color(0xFF0064E0)),
+    // Keep the persisted id for existing workspaces and preserve the established default tint.
+    Default("andy-blue", "Airtable blue", Color(0xFF1B61C9)),
     Sky("sky", "Sky", Color(0xFF38BDF8)),
     Azure("azure", "Azure", Color(0xFF3B82F6)),
     Indigo("indigo", "Indigo", Color(0xFF6366F1)),
@@ -65,7 +66,7 @@ enum class AndyTint(val id: String, val label: String, val color: Color) {
 /**
  * Background treatment independent of accent tint.
  * Tinted washes surfaces with the selected accent hue.
- * Dark uses the DNA dark neutrals. Light uses the DNA light palette.
+ * Dark and light use the supplied neutral token family.
  */
 enum class AndySurfaceMode(val id: String, val label: String) {
     Tinted("tinted", "Tinted"),
@@ -77,6 +78,26 @@ enum class AndySurfaceMode(val id: String, val label: String) {
     companion object {
         fun fromId(id: String): AndySurfaceMode = entries.firstOrNull { it.id == id } ?: Tinted
     }
+}
+
+/** Named color tokens supplied for the Andy light and dark visual systems. */
+object AndyPalette {
+    val Void = Color(0xFF08090A)
+    val Carbon = Color(0xFF0F1011)
+    val Obsidian = Color(0xFF161718)
+    val Graphite = Color(0xFF23252A)
+    val Smoke = Color(0xFF383B3F)
+    val Ash = Color(0xFF62666D)
+    val Fog = Color(0xFF8A8F98)
+    val Mist = Color(0xFFD0D6E0)
+    val Bone = Color(0xFFE5E5E6)
+    val Paper = Color(0xFFFFFFFF)
+    val AcidLime = Color(0xFFE4F222)
+    val PulseGreen = Color(0xFF27A644)
+    val CoralRed = Color(0xFFEB5757)
+    val SignalTeal = Color(0xFF02B8CC)
+    val IrisViolet = Color(0xFF6366F1)
+    val Lavender = Color(0xFF8B5CF6)
 }
 
 private data class HslColor(val hue: Float, val saturation: Float, val lightness: Float)
@@ -137,9 +158,9 @@ data class AndyTonalPalette(
     val surfaceHover: Color,
     val surfaceSelected: Color,
     val surfaceRaised: Color,
-    /** Popover / chat composer — Astryx `--color-background-popover`. */
+    /** Popover / chat composer — elevated surface token. */
     val surfacePopover: Color,
-    /** Input and emphasized chrome — Astryx `--color-border-emphasized`. */
+    /** Input and emphasized chrome — strong border token. */
     val borderEmphasized: Color,
     val textPrimary: Color,
     val textSecondary: Color,
@@ -154,8 +175,8 @@ data class AndyTonalPalette(
         }
 
         /**
-         * Accent-washed dark surfaces. Lightness follows the DNA dark ladder so
-         * hierarchy stays familiar; hue/saturation come from the selected tint.
+         * Accent-washed surfaces for the existing Tinted mode. Hue and saturation come from
+         * the selected tint while the tonal hierarchy stays quiet.
          */
         fun tinted(tint: Color): AndyTonalPalette {
             val hsl = tint.toHsl()
@@ -200,64 +221,64 @@ data class AndyTonalPalette(
             )
         }
 
-        /** Astryx dark palette — body `#111112`, surface `#1F1F22`, popover `#28292C`. */
+        /** Dark palette — void window, carbon rail, obsidian content, graphite chat chrome. */
         fun dark() = AndyTonalPalette(
-            neutral100 = Color(0xFFDFE2E5),
-            neutral200 = Color(0xFFDFE2E5),
-            neutral300 = Color(0xFFAAAFB5),
-            neutral400 = Color(0xFF6F747C),
-            neutral500 = Color(0xFF494D53),
-            neutral600 = Color(0xFF33363B),
-            neutral700 = Color(0xFF28292C),
-            neutral750 = Color(0xFF1F1F22),
-            neutral800 = Color(0xFF181819),
-            neutral850 = Color(0xFF141415),
-            neutral900 = Color(0xFF111112),
-            border = Color(0xFFF2F4F6).copy(alpha = 0.10f),
-            borderMedium = Color(0xFF494D53),
-            windowBg = Color(0xFF111112),
-            sidebarBg = Color(0xFF1F1F22),
-            paneBg = Color(0xFF111112),
-            contentBg = Color(0xFF111112),
-            surfaceHover = Color(0xFFDFE2E5).copy(alpha = 0.08f),
-            surfaceSelected = Color(0xFFDFE2E5).copy(alpha = 0.14f),
-            surfaceRaised = Color(0xFF1F1F22),
-            surfacePopover = Color(0xFF28292C),
-            borderEmphasized = Color(0xFF494D53),
-            textPrimary = Color(0xFFDFE2E5),
-            textSecondary = Color(0xFFAAAFB5),
-            textTertiary = Color(0xFF6F747C),
-            textDisabled = Color(0xFF6F747C),
+            neutral100 = AndyPalette.Paper,
+            neutral200 = AndyPalette.Bone,
+            neutral300 = AndyPalette.Mist,
+            neutral400 = AndyPalette.Fog,
+            neutral500 = AndyPalette.Ash,
+            neutral600 = AndyPalette.Smoke,
+            neutral700 = AndyPalette.Graphite,
+            neutral750 = AndyPalette.Graphite,
+            neutral800 = AndyPalette.Obsidian,
+            neutral850 = AndyPalette.Carbon,
+            neutral900 = AndyPalette.Void,
+            border = AndyPalette.Smoke,
+            borderMedium = AndyPalette.Ash,
+            windowBg = AndyPalette.Void,
+            sidebarBg = AndyPalette.Carbon,
+            paneBg = AndyPalette.Obsidian,
+            contentBg = AndyPalette.Obsidian,
+            surfaceHover = AndyPalette.Graphite,
+            surfaceSelected = AndyPalette.Smoke,
+            surfaceRaised = AndyPalette.Graphite,
+            surfacePopover = AndyPalette.Graphite,
+            borderEmphasized = AndyPalette.Ash,
+            textPrimary = AndyPalette.Paper,
+            textSecondary = AndyPalette.Mist,
+            textTertiary = AndyPalette.Fog,
+            textDisabled = AndyPalette.Ash,
         )
 
-        /** Astryx light palette — body `#F1F4F7`, surface `#FFFFFF`. */
+        /** Light palette — paper canvas with bone and mist surfaces. */
         fun light() = AndyTonalPalette(
-            neutral100 = Color(0xFF0A1317),
-            neutral200 = Color(0xFF0A1317),
-            neutral300 = Color(0xFF4E606F),
-            neutral400 = Color(0xFFA4B0BC),
-            neutral500 = Color(0xFFCCD3DB),
-            neutral600 = Color(0xFFE8ECF0),
-            neutral700 = Color(0xFFFFFFFF),
-            neutral750 = Color(0xFFF1F4F7),
-            neutral800 = Color(0xFFF1F4F7),
-            neutral850 = Color(0xFFF1F4F7),
-            neutral900 = Color(0xFFF1F4F7),
-            border = Color(0xFF053659).copy(alpha = 0.10f),
-            borderMedium = Color(0xFFCCD3DB),
-            windowBg = Color(0xFFF1F4F7),
-            sidebarBg = Color(0xFFFFFFFF),
-            paneBg = Color(0xFFF1F4F7),
-            contentBg = Color(0xFFF1F4F7),
-            surfaceHover = Color(0xFF053659).copy(alpha = 0.05f),
-            surfaceSelected = Color(0xFF053659).copy(alpha = 0.10f),
-            surfaceRaised = Color(0xFFFFFFFF),
-            surfacePopover = Color(0xFFFFFFFF),
-            borderEmphasized = Color(0xFFCCD3DB),
-            textPrimary = Color(0xFF0A1317),
-            textSecondary = Color(0xFF4E606F),
-            textTertiary = Color(0xFFA4B0BC),
-            textDisabled = Color(0xFFA4B0BC),
+            neutral100 = AndyPalette.Void,
+            neutral200 = AndyPalette.Carbon,
+            neutral300 = AndyPalette.Obsidian,
+            neutral400 = AndyPalette.Graphite,
+            neutral500 = AndyPalette.Smoke,
+            neutral600 = AndyPalette.Ash,
+            neutral700 = AndyPalette.Paper,
+            neutral750 = AndyPalette.Bone,
+            neutral800 = AndyPalette.Paper,
+            neutral850 = AndyPalette.Paper,
+            neutral900 = AndyPalette.Paper,
+            border = AndyPalette.Smoke,
+            borderMedium = AndyPalette.Ash,
+            windowBg = AndyPalette.Paper,
+            sidebarBg = AndyPalette.Bone,
+            paneBg = AndyPalette.Paper,
+            contentBg = AndyPalette.Paper,
+            surfaceHover = AndyPalette.Bone,
+            surfaceSelected = AndyPalette.Mist,
+            surfaceRaised = AndyPalette.Paper,
+            surfacePopover = AndyPalette.Paper,
+            borderEmphasized = AndyPalette.Ash,
+            textPrimary = AndyPalette.Void,
+            textSecondary = AndyPalette.Obsidian,
+            textTertiary = AndyPalette.Smoke,
+            textDisabled = AndyPalette.Ash,
         )
     }
 }
@@ -295,17 +316,12 @@ data class AndySemanticTokens(
         fun from(colors: AndyColorsState): AndySemanticTokens {
             val isLight = colors.isLight
             val accent = when {
-                !isLight && colors.selectedTint == AndyTint.Default ->
-                    Color(0xFF2694FE)
+                !isLight && colors.selectedTint == AndyTint.Default -> Color(0xFF458FFF)
                 else -> colors.selectedTint.color
             }
-            val accentMuted = if (isLight) Color(0x330082FB) else Color(0x3F0082FB)
-            val neutralFill = if (isLight) {
-                Color(0xFF053659).copy(alpha = 0.10f)
-            } else {
-                Color(0xFFDFE2E5).copy(alpha = 0.20f)
-            }
-            val skeleton = if (isLight) Color(0xFFCCD3DB) else Color(0xFF5A5E66)
+            val accentMuted = accent.copy(alpha = if (isLight) 0.12f else 0.20f)
+            val neutralFill = colors.tonalPalette.surfaceHover
+            val skeleton = colors.tonalPalette.surfaceHover
             return AndySemanticTokens(
                 palette = colors.tonalPalette,
                 accent = accent,
@@ -316,14 +332,14 @@ data class AndySemanticTokens(
                 accentMuted = accentMuted,
                 neutralFill = neutralFill,
                 skeleton = skeleton,
-                onAccent = Color.White,
-                success = Color(0xFF0D8626),
-                successSoft = Color(0xFF26A756),
-                successSubtle = if (isLight) Color(0x330B991F) else Color(0x3F0B991F),
-                warning = if (isLight) Color(0xFFE9AF08) else Color(0xFFF2C00B),
-                error = if (isLight) Color(0xFFE3193B) else Color(0xFFF5394F),
-                diffAddBg = Color(0xFF0D8626).copy(alpha = 0.10f),
-                diffRemoveBg = (if (isLight) Color(0xFFE3193B) else Color(0xFFF5394F)).copy(alpha = 0.10f),
+                onAccent = AndyPalette.Paper,
+                success = AndyPalette.PulseGreen,
+                successSoft = AndyPalette.PulseGreen,
+                successSubtle = AndyPalette.PulseGreen.copy(alpha = if (isLight) 0.20f else 0.24f),
+                warning = AndyPalette.AcidLime,
+                error = AndyPalette.CoralRed,
+                diffAddBg = AndyPalette.PulseGreen.copy(alpha = 0.10f),
+                diffRemoveBg = AndyPalette.CoralRed.copy(alpha = 0.10f),
                 isLight = isLight,
             )
         }
@@ -405,14 +421,14 @@ object AndyColors {
     val OrangePressed get() = state.selectedTint.color.copy(alpha = 0.68f)
     val OrangeSubtle get() = state.selectedTint.color.copy(alpha = if (isLight) 0.12f else 0.16f)
     val OrangeBorder get() = state.selectedTint.color.copy(alpha = if (isLight) 0.40f else 0.48f)
-    val Green = Color(0xFF0D8626)
-    val GreenSoft = Color(0xFF26A756)
-    val GreenSubtle get() = if (isLight) Color(0x330B991F) else Color(0x3F0B991F)
+    val Green = AndyPalette.PulseGreen
+    val GreenSoft = AndyPalette.PulseGreen
+    val GreenSubtle get() = AndyPalette.PulseGreen.copy(alpha = if (isLight) 0.20f else 0.24f)
     val Blue get() = if (isLight) state.selectedTint.color else {
-        if (state.selectedTint == AndyTint.Default) Color(0xFF2694FE) else state.selectedTint.color
+        if (state.selectedTint == AndyTint.Default) Color(0xFF458FFF) else state.selectedTint.color
     }
-    val Warning get() = if (isLight) Color(0xFFE9AF08) else Color(0xFFF2C00B)
-    val Error get() = if (isLight) Color(0xFFE3193B) else Color(0xFFF5394F)
+    val Warning = AndyPalette.AcidLime
+    val Error = AndyPalette.CoralRed
 
     /** Full-row diff tinting — added/removed lines and diff-stat chips share these. */
     val DiffAddBg get() = Green.copy(alpha = 0.10f)
@@ -426,7 +442,7 @@ object AndyOverlay {
     val Strong = 0.90f
 }
 
-/** Harness spacing scale — dense workbench rhythm (4/8/12/16…). */
+/** Shared spacing scale (4/8/12/16/24/32…). */
 object AndySpace {
     val Space1 = 4.dp
     val Space2 = 8.dp
@@ -438,16 +454,16 @@ object AndySpace {
     val Space8 = 32.dp
 }
 
-/** Astryx radius — element 8 · container 12 · chat 28. */
+/** Airtable radius — element 6 · container 12 · chat 10. */
 object AndyRadius {
-    val Interactive = 8.dp
-    val Control = 8.dp
-    val Row = 8.dp
-    val Menu = 12.dp
-    /** Cards, panels, sheets — Astryx `--radius-container`. */
+    val Interactive = 6.dp
+    val Control = 6.dp
+    val Row = 6.dp
+    val Menu = 10.dp
+    /** Cards, panels, sheets — Airtable container radius. */
     val Sheet = 12.dp
-    /** Chat composer and bubbles — Astryx `--radius-chat`. */
-    val Chat = 28.dp
+    /** Chat composer and user turns — Airtable compact rounded radius. */
+    val Chat = 10.dp
     val Window = 14.dp
     val Pill = 999.dp
 }
@@ -467,7 +483,7 @@ object AndyLayout {
     val ToolbarHeight = 48.dp
     val SidebarWidth = 220.dp
     val SidebarCollapsedWidth = 52.dp
-    val ListWidth = 300.dp
+    val ListWidth = 252.dp
     val SidebarRowHeight = 36.dp
     val ControlHeightXs = 26.dp
     val ControlHeightSm = 28.dp
@@ -481,11 +497,12 @@ object AndyLayout {
     val IconLg = 17.dp
     val IconHitArea = 30.dp
     val ContentMaxWidth = 760.dp
+    val ChatContentMaxWidth = 800.dp
     /** Leading accent bar width for active navigation rows. */
     val NavAccentBar = 3.dp
 }
 
-/** Astryx motion — `--duration-fast` 175ms, `--ease-standard`. */
+/** Shared motion — fast interaction transition and standard easing. */
 object AndyMotion {
     const val FastMs = 175
     const val StandardMs = 175
@@ -505,7 +522,7 @@ object AndyMotion {
 }
 
 object AndyStroke {
-    /** Hairline separators between panes and rows (DNA border-subtle weight). */
+    /** Hairline separators between panes and rows. */
     val Hairline = 1.dp
     /** Invisible drag target width for vertical pane resize handles. */
     val PaneHandleHitWidth = 10.dp
@@ -549,7 +566,7 @@ fun AndyTheme(
             primaryContainer = tokens.accentSubtle,
             onPrimaryContainer = tokens.accent,
             secondary = tokens.success,
-            onSecondary = Color.White,
+            onSecondary = AndyPalette.Void,
             secondaryContainer = tokens.successSubtle,
             onSecondaryContainer = tokens.success,
             tertiary = palette.textSecondary,
@@ -564,10 +581,10 @@ fun AndyTheme(
             outline = palette.border,
             outlineVariant = palette.borderMedium,
             error = tokens.error,
-            onError = Color.White,
+            onError = AndyPalette.Paper,
             errorContainer = tokens.error.copy(alpha = 0.12f),
             onErrorContainer = tokens.error,
-            scrim = Color(0xFF09090B).copy(alpha = 0.45f),
+            scrim = AndyPalette.Void.copy(alpha = 0.45f),
             inverseSurface = palette.textPrimary,
             inverseOnSurface = palette.windowBg,
             inversePrimary = tokens.accent,
@@ -579,7 +596,7 @@ fun AndyTheme(
             primaryContainer = tokens.accentSubtle,
             onPrimaryContainer = tokens.accent,
             secondary = tokens.success,
-            onSecondary = Color(0xFF09090B),
+            onSecondary = AndyPalette.Void,
             secondaryContainer = tokens.successSubtle,
             onSecondaryContainer = tokens.success,
             tertiary = palette.textSecondary,
@@ -594,10 +611,10 @@ fun AndyTheme(
             outline = palette.border,
             outlineVariant = palette.borderMedium,
             error = tokens.error,
-            onError = Color(0xFF09090B),
+            onError = AndyPalette.Void,
             errorContainer = tokens.error.copy(alpha = 0.12f),
             onErrorContainer = tokens.error,
-            scrim = Color(0xFF09090B).copy(alpha = 0.55f),
+            scrim = AndyPalette.Void.copy(alpha = 0.55f),
             inverseSurface = palette.textPrimary,
             inverseOnSurface = palette.windowBg,
             inversePrimary = tokens.accent,

@@ -414,3 +414,23 @@ fun List<AgentModelOption>.groupedByModelFamily(): List<Pair<AgentModelFamily, L
         buckets.getValue(family).takeIf { it.isNotEmpty() }?.let { family to it }
     }
 }
+
+data class AgentModelMenuSection(
+    val header: String?,
+    val options: List<AgentModelOption>,
+)
+
+/** Sectioned model menus for providers whose picker is grouped in the native CLI. */
+fun agentModelMenuSections(agent: AgentKind, options: List<AgentModelOption>): List<AgentModelMenuSection>? = when (agent) {
+    AgentKind.Cursor -> options.groupedByModelFamily().map { (family, sectionOptions) ->
+        AgentModelMenuSection(family.label.uppercase(), sectionOptions)
+    }
+    AgentKind.ClaudeCode -> {
+        if (options.size <= ClaudeCodePrimaryModelCount) return null
+        listOf(
+            AgentModelMenuSection(null, options.take(ClaudeCodePrimaryModelCount)),
+            AgentModelMenuSection("MORE MODELS", options.drop(ClaudeCodePrimaryModelCount)),
+        )
+    }
+    else -> null
+}

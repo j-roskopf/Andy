@@ -214,6 +214,16 @@ class AgentUiTest {
     }
 
     @Test
+    fun formatChatAgeUsesCompactRepositoryRailLabels() {
+        val now = 1_000_000L
+        assertEquals("now", formatChatAge(now, now))
+        assertEquals("2m", formatChatAge(now - 2 * 60_000L, now))
+        assertEquals("3h", formatChatAge(now - 3 * 60 * 60_000L, now))
+        assertEquals("4d", formatChatAge(now - 4 * 24 * 60 * 60_000L, now))
+        assertEquals("2mo", formatChatAge(now - 2 * 30 * 24 * 60 * 60_000L, now))
+    }
+
+    @Test
     fun completedTurnChromeShowsAfterWorkingEnds() {
         assertFalse(showsCompletedTurnChrome(task(AgentStatus.Working)))
         assertTrue(showsCompletedTurnChrome(task(AgentStatus.Done).copy(finishedAtMillis = 5L)))

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -184,6 +185,7 @@ fun Toolbar(
     onPrimary: (() -> Unit)? = null,
     primaryLabel: String = "Run",
     primaryEnabled: Boolean = true,
+    colors: ButtonColors = primaryButtonColors(),
     modifier: Modifier = Modifier,
 ) {
     // Page title/subtitle chrome lives in the global TopChrome; keep only trailing actions here.
@@ -196,7 +198,7 @@ fun Toolbar(
         Button(
             onClick = onPrimary,
             enabled = primaryEnabled,
-            colors = primaryButtonColors(),
+            colors = colors,
             shape = RoundedCornerShape(AndyRadius.Row),
             contentPadding = PaddingValues(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
         ) { Text(primaryLabel, fontFamily = DisplayFont, fontSize = 12.sp, fontWeight = FontWeight.Medium) }

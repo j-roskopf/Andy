@@ -1,7 +1,6 @@
 package app.andy.ui.devices
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,7 +30,6 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.components.StatusTag
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.Green
 import app.andy.ui.theme.PanelSoft
 import app.andy.ui.theme.TextPrimary
@@ -63,11 +61,6 @@ internal fun ConnectedDeviceRow(
                 .heightIn(min = 76.dp)
                 .background(
                     if (isActive) AndyColors.GreenSubtle else AndyColors.Neutral900.copy(alpha = 0.7f),
-                    rowShape,
-                )
-                .border(
-                    1.dp,
-                    if (isActive) Green.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.05f),
                     rowShape,
                 )
                 .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -167,7 +160,6 @@ internal fun VirtualDeviceRow(
         modifier.fillMaxWidth()
             .heightIn(min = 68.dp)
             .background(PanelSoft, RoundedCornerShape(AndyRadius.Row))
-            .border(1.dp, Border, RoundedCornerShape(AndyRadius.Row))
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

@@ -881,7 +881,21 @@ fun AgentTaskDetail(
             }
             val followUpModelLabel = task.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Auto"
             ChatComposerLayout(
-                modifier = Modifier.fillMaxWidth().onVoiceDictationShortcut(voiceShortcut, voiceController),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onVoiceDictationShortcut(voiceShortcut, voiceController)
+                    .then(
+                        if (task.userInputRequest == null) {
+                            Modifier.onImageFilesDropped(
+                                onFiles = { dropped ->
+                                    followUpImagePaths = attachChatImages(followUpImagePaths, dropped)
+                                },
+                                onDragActiveChange = { active -> followUpImageDragActive = active },
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
                 highlighted = followUpImageDragActive,
                 drawerItems = followUpDrawerItems,
                 contextFraction = contextStatus?.fraction,
@@ -1002,11 +1016,7 @@ fun AgentTaskDetail(
                                 }
                                 .onChatImagePaste(scope) { added ->
                                     followUpImagePaths = attachChatImages(followUpImagePaths, added)
-                                }
-                                .onImageFilesDropped(
-                                    onFiles = { dropped -> followUpImagePaths = attachChatImages(followUpImagePaths, dropped) },
-                                    onDragActiveChange = { active -> followUpImageDragActive = active },
-                                ),
+                                },
                             textStyle = LocalTextStyle.current.copy(
                                 color = TextPrimary,
                                 fontFamily = DisplayFont,

@@ -37,7 +37,6 @@ import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
-import app.andy.ui.theme.Border
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextPrimary
@@ -73,7 +72,7 @@ fun WorkspaceRail(
 ) {
     Column(
         modifier
-            .rightBorder(Border)
+            .rightBorder(AndyColors.tonalPaletteBorder)
             .padding(end = AndySpace.Space3),
         verticalArrangement = Arrangement.spacedBy(contentSpacing),
         content = content,

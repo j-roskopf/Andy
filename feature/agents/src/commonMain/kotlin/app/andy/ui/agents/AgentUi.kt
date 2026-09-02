@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -15,7 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +65,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -255,6 +263,8 @@ fun ChatSessionSidebarRow(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    showAgentIcon: Boolean = true,
+    showRelativeAge: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val working = isSessionWorking(task) || isChatLaunching(task) || isChatRelaunching(task)
@@ -262,25 +272,48 @@ fun ChatSessionSidebarRow(
         task.prompt.lineSequence().firstOrNull()?.trim().orEmpty()
             .ifBlank { task.title }
     }
+    val interactionSource = remember(task.id) { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val rowBackground = when {
+        selected -> AndyColors.SurfaceSelected
+        hovered -> AndyColors.SurfaceHover
+        else -> Color.Transparent
+    }
+    // Relative ages are minute-granular; tick so "now" advances without waiting on task updates.
+    var nowMillis by remember(task.id) { mutableStateOf(currentTimeMillis()) }
+    LaunchedEffect(showRelativeAge, task.id) {
+        if (!showRelativeAge) return@LaunchedEffect
+        while (true) {
+            nowMillis = currentTimeMillis()
+            delay(30_000)
+        }
+    }
     Row(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(AndyRadius.Row))
-            .background(if (selected) AndyColors.SurfaceSelected else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .background(rowBackground)
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 10.dp, vertical = if (showRelativeAge) 7.dp else 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Avatar(
-            size = AvatarSize.Xsm,
-            name = task.agent.label,
-        ) {
-            Image(
-                painter = painterResource(agentIconResource(task.agent)),
-                contentDescription = task.agent.label,
-                modifier = Modifier.fillMaxSize(),
-            )
+        if (showAgentIcon) {
+            Avatar(
+                size = AvatarSize.Xsm,
+                name = task.agent.label,
+            ) {
+                Image(
+                    painter = painterResource(agentIconResource(task.agent)),
+                    contentDescription = task.agent.label,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
         // Marked in every rail, not just the Agents Temporary section — a project chat list
         // shows temporary chats inline, and closing one is unrecoverable.
@@ -311,6 +344,15 @@ fun ChatSessionSidebarRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (showRelativeAge) {
+            Text(
+                formatChatAge(task.lastActivityMillis(), nowMillis),
+                color = TextSecondary.copy(alpha = 0.76f),
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+        }
         when {
             working -> ProjectActivityIndicator(12.dp)
             trailing != null -> trailing()
@@ -318,6 +360,29 @@ fun ChatSessionSidebarRow(
         if (task.unread && !selected) {
             UnreadDot()
         }
+    }
+}
+
+private fun AgentTask.lastActivityMillis(): Long = maxOf(
+    createdAtMillis,
+    startedAtMillis ?: 0L,
+    finishedAtMillis ?: 0L,
+)
+
+fun formatChatAge(timestampMillis: Long, nowMillis: Long = currentTimeMillis()): String {
+    val elapsed = (nowMillis - timestampMillis).coerceAtLeast(0L)
+    val minute = 60_000L
+    val hour = 60 * minute
+    val day = 24 * hour
+    val month = 30 * day
+    val year = 365 * day
+    return when {
+        elapsed < minute -> "now"
+        elapsed < hour -> "${elapsed / minute}m"
+        elapsed < day -> "${elapsed / hour}h"
+        elapsed < month -> "${elapsed / day}d"
+        elapsed < year -> "${elapsed / month}mo"
+        else -> "${elapsed / year}y"
     }
 }
 

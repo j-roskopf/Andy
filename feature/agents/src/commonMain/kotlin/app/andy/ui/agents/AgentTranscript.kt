@@ -425,14 +425,19 @@ fun AgentTranscript(
         listState.scrollToItem(0)
     }
 
-    Box(modifier) {
+    Box(modifier.fillMaxSize()) {
         if (events.isEmpty() && !originalPromptVisible && !isActive) {
-            EmptyState("waiting for agent output")
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState("waiting for agent output")
+            }
         } else {
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .widthIn(max = AndyLayout.ChatContentMaxWidth)
+                    .fillMaxWidth()
                     .fillMaxSize()
                     .testTag("transcript-list")
                     .graphicsLayer { alpha = if (scrollInitialized) 1f else 0f }
@@ -922,7 +927,7 @@ fun AgentEvent.chatBubbleSenderOrNull(): ChatBubbleSender? = when (this) {
     else -> null
 }
 
-/** Astryx-style grouping for consecutive bubbles from the same sender. */
+/** Groups consecutive bubbles from the same sender while preserving transcript chronology. */
 fun transcriptChatBubbleGroup(
     displayItems: List<TranscriptDisplayItem>,
     itemIndex: Int,
@@ -1196,7 +1201,6 @@ private fun PlanDocumentBlock(
             Modifier
                 .fillMaxWidth()
                 .background(AndyColors.SurfaceRaised, RoundedCornerShape(AndyRadius.Control))
-                .border(1.dp, Border, RoundedCornerShape(AndyRadius.Control))
                 .padding(AndySpace.Space4),
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {

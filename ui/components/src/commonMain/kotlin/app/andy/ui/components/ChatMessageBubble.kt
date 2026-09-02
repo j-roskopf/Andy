@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
 import app.andy.andy.generated.resources.markdown_copy
 import app.andy.rememberCopyText
-import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -69,9 +68,9 @@ enum class ChatBubbleGroup {
 }
 
 /**
- * Astryx ChatMessageBubble — 28dp chat radius, sender-aware fill.
+ * Airtable ChatMessageBubble — quiet full-width user turns and open assistant prose.
  *
- * Optional [metadata] (Astryx ChatMessageMetadata) is always shown under the bubble when set.
+ * Optional metadata is always shown under the bubble when set.
  */
 @Composable
 fun ChatMessageBubble(
@@ -88,12 +87,13 @@ fun ChatMessageBubble(
     val tokens = andyTokens()
     val background = when {
         variant == ChatBubbleVariant.Ghost -> Color.Transparent
-        sender == ChatBubbleSender.User -> tokens.accent.copy(alpha = if (AndyColors.isLight) 0.12f else 0.20f)
+        sender == ChatBubbleSender.User -> tokens.palette.neutral750
         sender == ChatBubbleSender.System -> tokens.neutralFill
-        else -> AndyColors.SurfaceRaised
+        else -> tokens.palette.surfaceRaised
     }
     val shape = chatBubbleShape(group, alignEnd)
     val widthModifier = when {
+        sender == ChatBubbleSender.User -> Modifier.fillMaxWidth()
         alignEnd -> Modifier.widthIn(max = 640.dp)
         variant == ChatBubbleVariant.Ghost -> Modifier.fillMaxWidth()
         else -> Modifier.fillMaxWidth(0.85f)
@@ -102,8 +102,8 @@ fun ChatMessageBubble(
         ChatBubbleGroup.Middle, ChatBubbleGroup.Last -> -ChatBubbleGroupPullUp
         else -> 0.dp
     }
-    // Chat radius is 28dp — keep content clear of the curve. Metadata sits outside the
-    // bubble, so bottom padding stays full even when a copy/timestamp row follows.
+    // Keep content clear of the compact curve. Metadata sits outside the bubble, so bottom
+    // padding stays full even when a copy/timestamp row follows.
     val horizontalPad = AndySpace.Space4
     val verticalPadding = when (group) {
         ChatBubbleGroup.First -> PaddingValues(
@@ -202,7 +202,7 @@ fun ChatBubbleText(
 }
 
 /**
- * Astryx ChatMessageMetadata — `timestamp · footer · status`.
+ * Airtable ChatMessageMetadata — `timestamp · footer · status`.
  */
 @Composable
 fun ChatMessageMetadata(
