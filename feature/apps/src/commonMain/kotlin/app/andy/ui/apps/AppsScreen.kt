@@ -55,6 +55,8 @@ import app.andy.ui.components.EmptyState
 import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.ui.components.MonoCell
 import app.andy.ui.components.OutlinedButton
+import app.andy.ui.components.TextButton
+import app.andy.ui.components.mutedTextButtonColors
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TableHeader
@@ -288,11 +290,14 @@ fun AppsScreen(
                             Text(activity.name, color = TextSecondary, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                             val app = selected
                             if (app != null && serial != null) {
-                                OutlinedButton(onClick = {
-                                    runAppAction("Launch ${activity.name}", app.packageName, app.label) {
-                                        apps.launchActivity(serial, app.packageName, activity.name)
-                                    }
-                                }) { Text("Launch") }
+                                TextButton(
+                                    onClick = {
+                                        runAppAction("Launch ${activity.name}", app.packageName, app.label) {
+                                            apps.launchActivity(serial, app.packageName, activity.name)
+                                        }
+                                    },
+                                    colors = mutedTextButtonColors(),
+                                ) { Text("Launch", fontSize = 12.sp) }
                             }
                         }
                     }
