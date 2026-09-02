@@ -195,7 +195,7 @@ fun DevicesScreen(
         Toolbar("Devices", deviceSummary, onPrimary = {
             onRefresh()
             refreshAvds()
-        }, primaryLabel = "Refresh")
+        }, primaryLabel = "Refresh", colors = primaryButtonColors())
         val web = services.web
         if (web != null && webConnection != null) {
             PanelCard {

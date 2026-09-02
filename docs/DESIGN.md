@@ -1,85 +1,100 @@
-# Design System: Andy
+# Andy design system
 
-## 1. Visual Theme & Atmosphere
+Andy supports light, dark, and tinted surface modes. Light and dark use the supplied neutral and
+accent token family; tinted remains the user-selected color wash. The project chat rail and
+transcript use the same structure in every mode so changing appearance never changes the
+interaction model.
 
-A soft, minimal developer workspace with gallery-airy density and fluid motion. The atmosphere is calm and focused — deep charcoal surfaces, generous negative space, and a single accent used as punctuation rather than decoration. Inspired by modern AI-native tools: rounded containers, borderless hierarchy, and tonal separation instead of hard lines.
+## Light mode
 
-- **Density:** 4 — balanced for daily developer workflows without cockpit clutter
-- **Variance:** 5 — left-aligned navigation with centered content columns where appropriate
-- **Motion:** 6 — spring-weighted transitions, staggered reveals, perpetual micro-loops on active indicators
+The light system is a paper canvas with bone wells, dark ink, quiet hairlines, modest system sans
+typography, and a dark primary action. The established Airtable-blue tint remains the default
+interactive accent; the supplied accent colors are available for status and provider states.
+There are no gradients, neon fills, or decorative chrome.
 
-## 2. Color Palette & Roles
+### Color tokens
 
-### Dark (default)
+| Token | Value | Use |
+| --- | --- | --- |
+| void | `#08090a` | deepest window and dark primary text |
+| carbon | `#0f1011` | dark project rail and header wells |
+| obsidian | `#161718` | dark transcript canvas and pane surface |
+| graphite | `#23252a` | dark composer, cards, and user turns |
+| smoke | `#383b3f` | dark selected rows and hairlines |
+| ash | `#62666d` | borders, disabled text, and muted controls |
+| fog | `#8a8f98` | tertiary text and metadata |
+| mist | `#d0d6e0` | secondary text on dark surfaces |
+| bone | `#e5e5e6` | light rail and light hover wells |
+| paper | `#ffffff` | light canvas and primary light text |
+| acid-lime | `#e4f222` | warnings and available accent |
+| pulse-green | `#27a644` | success and additions |
+| coral-red | `#eb5757` | errors and removals |
+| signal-teal | `#02b8cc` | available secondary accent |
+| iris-violet | `#6366f1` | violet provider/model accent |
+| lavender | `#8b5cf6` | purple provider/model accent |
 
-- **Void Canvas** (`#0A0A0A`) — Primary window and content background
-- **Sidebar Veil** (`#111111`) — Navigation rail, slightly lifted from canvas
-- **Pane Surface** (`#0F0F0F`) — Secondary panels, sidebars within screens
-- **Raised Surface** (`#171717`) — Cards, popovers, elevated containers
-- **Hover Wash** (`#1A1A1A`) — Interactive hover states
-- **Selected Fill** (`#1F1F1F`) — Active navigation rows, selected list items
-- **Ink Primary** (white @ 92%) — Headlines, primary labels
-- **Ink Secondary** (white @ 68%) — Descriptions, metadata
-- **Ink Tertiary** (white @ 44%) — Timestamps, hints, disabled-adjacent text
-- **Whisper Border** (white @ 5%) — Structural separators; prefer tonal shifts over borders
-- **Accent** (user tint, saturation < 80%) — CTAs, active nav indicator, focus rings, cursor
+### Type and geometry
 
-### Light
+- Primary face: Haas Grotesk substitute, `Inter, system-ui, sans-serif`; weights 400 and 500.
+- Supporting face: the same system sans; mono remains reserved for paths, commands, and raw data.
+- Display scale: 48 / 40 / 32 px. Product titles: 24 / 20 / 18 px. Body and labels: 16 / 14 px.
+- Line heights: 1.1 for display, 1.2–1.4 for titles and labels, 1.5 for body prose.
+- Spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 px. Section rhythm is 96 px.
+- Radius: 2 / 6 / 10 / 12 px. Pill controls use a fully rounded shape.
+- Primary buttons are dark, rounded, and padded; secondary buttons are white with a quiet outline.
 
-- **Canvas** (`#F2F2F2`) — Window and main content background (recessed base)
-- **Sidebar Mist** (`#E8E8E8`) — Navigation rail
-- **Pane / Well** (`#EBEBEB`) — Secondary panels, kanban lanes, list wells
-- **Raised White** (`#FFFFFF`) — Cards, composer, elevated chrome
-- **Ink Primary** (black @ 88%) — Primary text
-- **Whisper Border** (black @ 8%) — Subtle structural lines
+## Project page screenshot extraction
 
-Max 1 accent color. No purple/blue neon gradients. No pure black (`#000000`).
+The two supplied references define the project chat rail and transcript composition. Their dark
+appearance is treated as the dark-mode rendering of the same tokens above.
 
-## 3. Typography Rules
+### Chat rail
 
-- **Display:** System sans-serif — track-tight headlines, weight-driven hierarchy
-- **Body:** System sans-serif — relaxed 1.45 leading, 65ch max-width in prose areas
-- **Mono:** System monospace — paths, serials, log output, command input
-- **Scale:** 13sp body, 12sp labels, 14sp section titles, 20–24sp display
-- **Banned:** Inter (not available in Compose desktop anyway), generic serif in dashboards
+- Rail width: 252 px at the reference viewport; keep it resizable and preserve the saved width.
+- Rail surface: a slightly lifted tonal surface with one vertical hairline at the content edge.
+- Header: a small, regular `Repositories` label at the top-left with compact filter/search and
+  new-chat actions at the top-right. Do not show a large title or an always-open search field.
+- Repository rows: 13–14 px regular labels, 16 px folder/home glyphs, 8–10 px horizontal inset.
+- Chat rows: 12–13 px regular text, indented beneath the repository, single-line ellipsis, and a
+  quiet right-aligned relative age (`2d`, `1mo`, etc.). Provider/status glyphs remain secondary.
+- Selection: one full-width rounded row fill (`6–8 px` radius), with primary ink and no extra card.
+- Row rhythm: approximately 32 px for repositories and 31–32 px for chat rows; avoid nested cards.
+- Keep collapse, unread, priority, archive, show-more, context menu, delete, and new-chat actions.
 
-## 4. Component Stylings
+### Transcript
 
-- **Buttons:** Pill-shaped (`999dp` radius) for primary actions; ghost/outline for secondary. Tactile `-1px` translate on press. No outer glows.
-- **Cards:** Borderless by default — elevation through background color shift only. Generous 14–16dp corner radius. Borders reserved for focus/error states.
-- **Inputs:** Floating pill containers, 32dp height, label above (never floating). Accent focus ring.
-- **Filter pills:** Full pill shape, tonal fill when selected, no hard borders when unselected.
-- **Navigation:** Active row gets a 3dp accent bar on the leading edge plus selected fill.
-- **Loaders:** Skeletal shimmer matching layout dimensions. No circular spinners.
-- **Empty states:** Composed center-aligned message with secondary color, no clipart.
+- Center the transcript column in the available project content area. Use a readable prose width
+  (about 800 px including the list's breathing room) rather than stretching to the pane edges.
+- Keep approximately 10–18 px of inner horizontal breathing room. The reference user prompt spans
+  nearly the whole centered column; assistant prose starts slightly inset within that same column.
+- User turns are quiet tonal surfaces with a 10–12 px radius and 12 px internal padding. They are
+  not right-floating speech bubbles and do not need an outline.
+- Assistant turns are open text on the canvas. Use 14 px body type, approximately 20–21 px
+  leading, and 14–16 px paragraph separation.
+- Turn metadata (`Worked for…`, timestamps, copy/reply controls) is muted and sits close to the
+  associated turn. It must not create a second card around assistant prose.
+- Code and inline code use a restrained tonal block and the documented link/ink roles; do not add
+  a new accent solely for transcript decoration.
+- Keep selection, markdown links, file previews, tool expansion, permission requests, follow-live,
+  transcript restoration, and composer/follow-up behavior unchanged.
 
-## 5. Layout Principles
+## Dark mode
 
-- CSS Grid / Compose `Row`+`Column` with fixed token spacing — no percentage flexbox math
-- Max content width 760dp for chat/prose columns
-- Sidebar 220dp expanded, 52dp collapsed
-- Toolbar 52dp, controls 32dp tall
-- Single-column collapse below 768dp equivalent (not applicable to desktop primary target)
-- Separation via background tonal shifts, not borders
+Dark mode uses the same restrained editorial relationships against the supplied neutral scale:
 
-## 6. Motion & Interaction
+- Window and deepest canvas: `#08090a` (void).
+- Project rail and header wells: `#0f1011` (carbon).
+- Transcript content: `#161718` (obsidian).
+- Composer, cards, and user turns: `#23252a` (graphite), with `#383b3f` (smoke) for
+  selected rows and hairlines.
+- Primary text: `#ffffff` (paper); supporting text uses `#d0d6e0` (mist) and `#8a8f98` (fog).
+- Strong borders and disabled controls use `#62666d` (ash). No blue overlay or extra composer
+  border is added to create separation.
 
-- **Spring default:** stiffness 100, damping 20 — weighty, premium feel
-- **Timing:** 100ms fast, 170ms standard, 240ms spatial
-- **Sidebar collapse:** width + label fade orchestrated together
-- **Hover:** background wash transition 140–200ms
-- **Active press:** scale 0.98 or translateY 1px
-- Animate `transform` and `opacity` only
+Tinted mode continues to derive its quiet surfaces from the selected tint. The project rail and
+transcript use the same geometry in all modes while mapping fills and ink to the active palette.
 
-## 7. Anti-Patterns (Banned)
+## Validation
 
-- No emojis in UI chrome
-- No pure black backgrounds
-- No neon/outer glow shadows
-- No oversaturated accent colors
-- No 3-column equal feature grids
-- No generic placeholder names ("John Doe", "Acme Corp")
-- No AI copywriting clichés ("Elevate", "Seamless", "Unleash")
-- No filler UI ("Scroll to explore", bouncing chevrons)
-- No visible borders where tonal separation suffices
-- No sharp 90° corners on interactive elements
+Visual changes are checked with the desktop Compose UI tests and macOS Roborazzi captures. Only
+intentional macOS baseline changes belong under `src/screenshotTest/roborazzi/macos/`.

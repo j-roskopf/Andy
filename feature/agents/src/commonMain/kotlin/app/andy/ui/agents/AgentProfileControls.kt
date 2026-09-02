@@ -22,7 +22,7 @@ import app.andy.model.AgentPickerOption
 import app.andy.model.ProjectAgentProfile
 import app.andy.model.agentPickerOptions
 import app.andy.model.comboReady
-import app.andy.model.groupedByModelFamily
+import app.andy.model.agentModelMenuSections
 import app.andy.model.isLocalModelBackend
 import app.andy.model.runtimeKind
 import app.andy.ui.components.FilterPill
@@ -53,7 +53,7 @@ fun AgentProviderModelProfileControls(
     val modelOptions = AgentModelCatalog.options(profile.agent, providerModels)
     val selectedModel = AgentModelCatalog.option(profile.agent, profile.model, providerModels)
     val customModel = profile.model != null && selectedModel == null
-    val groupedModels = if (profile.agent == AgentKind.Cursor) modelOptions.groupedByModelFamily() else null
+    val groupedModels = agentModelMenuSections(profile.agent, modelOptions)
 
     if (showProviderControls) {
         Text("Agent", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
@@ -114,16 +114,18 @@ fun AgentProviderModelProfileControls(
                     onChange(profile.copy(model = profile.model.takeIf { customModel }.orEmpty(), reasoningEffort = null, fastMode = false))
                 }
             }
-            groupedModels.forEach { (family, options) ->
-                Text(
-                    family.label.uppercase(),
-                    color = TextSecondary.copy(alpha = 0.75f),
-                    fontFamily = MonoFont,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 9.sp,
-                )
+            groupedModels.forEach { section ->
+                section.header?.let { header ->
+                    Text(
+                        header,
+                        color = TextSecondary.copy(alpha = 0.75f),
+                        fontFamily = MonoFont,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.sp,
+                    )
+                }
                 ProfileOptionRow(wrapOptions) {
-                    options.forEach { option ->
+                    section.options.forEach { option ->
                         FilterPill(option.label, selectedModel?.id == option.id, agentColor(profile.agent)) {
                             onChange(profile.copy(model = option.id, reasoningEffort = null, fastMode = option.fastRequired))
                         }

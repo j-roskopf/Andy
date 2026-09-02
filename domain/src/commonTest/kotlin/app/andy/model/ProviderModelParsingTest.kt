@@ -384,4 +384,35 @@ class ProviderModelParsingTest {
         assertTrue(gooseLooksConfigured("active_provider: databricks\n"))
         assertFalse(gooseLooksConfigured("extensions:\n  developer:\n    enabled: true\n"))
     }
+
+    @Test
+    fun claudeCodeCatalogMatchesNativePicker() {
+        val options = AgentModelCatalog.options(AgentKind.ClaudeCode)
+        assertEquals(
+            listOf(
+                "Fable 5.1",
+                "Opus 5",
+                "Sonnet 5",
+                "Haiku 4.5",
+                "Fable 5",
+                "Opus 4.8",
+                "Opus 4.7",
+                "Opus 4.6",
+                "Sonnet 4.6",
+            ),
+            options.map { it.label },
+        )
+        val sections = agentModelMenuSections(AgentKind.ClaudeCode, options)!!
+        assertEquals(null, sections[0].header)
+        assertEquals(ClaudeCodePrimaryModelCount, sections[0].options.size)
+        assertEquals("MORE MODELS", sections[1].header)
+        assertEquals(5, sections[1].options.size)
+    }
+
+    @Test
+    fun legacyClaudeAliasesResolveInCatalog() {
+        assertEquals("claude-opus-5", claudeModelBaseId("opus"))
+        assertEquals("claude-sonnet-5", claudeModelBaseId("sonnet"))
+        assertEquals("claude-opus-5", AgentModelCatalog.option(AgentKind.ClaudeCode, "opus")?.id)
+    }
 }

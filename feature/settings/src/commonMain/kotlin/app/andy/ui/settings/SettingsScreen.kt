@@ -583,7 +583,7 @@ private fun AppearancePanel(
     }
     SettingsGroup(
         title = "Background",
-        description = "Tinted washes chrome with the accent hue. Dark uses quiet macOS neutrals. Light uses an independently tuned bright palette.",
+        description = "Tinted washes chrome with the accent hue. Light and dark use the supplied neutral token family.",
         ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AndySurfaceMode.entries.forEach { mode ->
@@ -625,7 +625,7 @@ private fun AppearancePanel(
     TerminalAppearancePanel(workspace, update)
     SettingsGroup(
         title = "Design system",
-        description = "Live preview of Astryx-aligned Andy components.",
+        description = "Live preview of Airtable-aligned Andy components.",
     ) {
         ComponentGallery()
     }

@@ -102,7 +102,7 @@ class ClaudeCodeInteractiveAdapterTest {
             maxBudgetUsd = 12.5,
         )
         val argv = adapter.buildInteractiveCommand("/bin/claude", configured, mcpUrl = "http://127.0.0.1:8565/mcp")
-        assertTrue("--model" in argv && "opus" in argv)
+        assertTrue("--model" in argv && "claude-opus-5" in argv)
         assertTrue("--effort" in argv && "max" in argv)
         assertTrue("--max-budget-usd" in argv && "12.5" in argv)
         assertTrue("--mcp-config" in argv)

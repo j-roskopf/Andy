@@ -58,7 +58,7 @@ import app.andy.model.automationTimeZoneLabel
 import app.andy.model.automationTimeZonePickerOptions
 import app.andy.model.cadenceLabel
 import app.andy.model.clockToHour24
-import app.andy.model.groupedByModelFamily
+import app.andy.model.agentModelMenuSections
 import app.andy.model.hour24ToClock
 import app.andy.model.resolveAutomationTimeZoneId
 import app.andy.domain.excludingTemporary
@@ -695,22 +695,25 @@ private fun AutomationLaunchChips(
                         onModelMenu(false)
                     },
                 )
-                if (agent == AgentKind.Cursor) {
-                    modelOptions.groupedByModelFamily().forEach { (family, options) ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    family.label.uppercase(),
-                                    color = TextSecondary,
-                                    fontFamily = MonoFont,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 10.sp,
-                                )
-                            },
-                            onClick = {},
-                            enabled = false,
-                        )
-                        options.forEach { option ->
+                val modelSections = agentModelMenuSections(agent, modelOptions)
+                if (modelSections != null) {
+                    modelSections.forEach { section ->
+                        section.header?.let { header ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        header,
+                                        color = TextSecondary,
+                                        fontFamily = MonoFont,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                    )
+                                },
+                                onClick = {},
+                                enabled = false,
+                            )
+                        }
+                        section.options.forEach { option ->
                             DropdownMenuItem(
                                 text = { Text(option.label, color = TextPrimary) },
                                 onClick = {

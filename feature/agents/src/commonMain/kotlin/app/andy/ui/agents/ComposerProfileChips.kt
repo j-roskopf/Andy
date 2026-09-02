@@ -24,7 +24,7 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.agentPickerOptions
 import app.andy.model.comboReady
-import app.andy.model.groupedByModelFamily
+import app.andy.model.agentModelMenuSections
 import app.andy.model.isLocalModelBackend
 import app.andy.model.labelFor
 import app.andy.model.runtimeKind
@@ -112,22 +112,25 @@ fun ComposerProfileChips(
                     },
                 )
             }
-            if (agent == AgentKind.Cursor) {
-                modelOptions.groupedByModelFamily().forEach { (family, options) ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                family.label.uppercase(),
-                                color = TextSecondary,
-                                fontFamily = MonoFont,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp,
-                            )
-                        },
-                        onClick = {},
-                        enabled = false,
-                    )
-                    options.forEach { option ->
+            val modelSections = agentModelMenuSections(agent, modelOptions)
+            if (modelSections != null) {
+                modelSections.forEach { section ->
+                    section.header?.let { header ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    header,
+                                    color = TextSecondary,
+                                    fontFamily = MonoFont,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
+                                )
+                            },
+                            onClick = {},
+                            enabled = false,
+                        )
+                    }
+                    section.options.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option.label, color = TextPrimary) },
                             onClick = {

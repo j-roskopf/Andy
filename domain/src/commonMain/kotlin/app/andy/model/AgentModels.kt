@@ -210,6 +210,15 @@ private val ClaudeCodeEfforts = listOf(
     AgentReasoningEffort.Ultracode,
 )
 
+private val ClaudeCodeHaikuEfforts = listOf(
+    AgentReasoningEffort.Low,
+    AgentReasoningEffort.Medium,
+    AgentReasoningEffort.High,
+)
+
+/** Primary Claude Code models shown before the "More models" submenu in Claude Code itself. */
+const val ClaudeCodePrimaryModelCount = 4
+
 data class AgentModelOption(
     /** Model identifier passed to the provider CLI, before any provider-specific variant syntax. */
     val id: String,
@@ -254,10 +263,15 @@ object AgentModelCatalog {
             AgentModelOption("gpt-5.2-codex", "GPT-5.2-Codex", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh)),
         )
         AgentKind.ClaudeCode -> listOf(
-            AgentModelOption("opus", "Opus", ClaudeCodeEfforts),
-            AgentModelOption("sonnet", "Sonnet", ClaudeCodeEfforts),
-            AgentModelOption("haiku", "Haiku", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
-            AgentModelOption("fable", "Fable", ClaudeCodeEfforts),
+            AgentModelOption("claude-fable-5-1", "Fable 5.1", ClaudeCodeEfforts),
+            AgentModelOption("claude-opus-5", "Opus 5", ClaudeCodeEfforts),
+            AgentModelOption("claude-sonnet-5", "Sonnet 5", ClaudeCodeEfforts),
+            AgentModelOption("claude-haiku-4-5", "Haiku 4.5", ClaudeCodeHaikuEfforts),
+            AgentModelOption("claude-fable-5", "Fable 5", ClaudeCodeEfforts),
+            AgentModelOption("claude-opus-4-8", "Opus 4.8", ClaudeCodeEfforts),
+            AgentModelOption("claude-opus-4-7", "Opus 4.7", ClaudeCodeEfforts),
+            AgentModelOption("claude-opus-4-6", "Opus 4.6", ClaudeCodeEfforts),
+            AgentModelOption("claude-sonnet-4-6", "Sonnet 4.6", ClaudeCodeEfforts),
         )
         AgentKind.Cursor -> listOf(
             AgentModelOption("auto", "Auto", emptyList()),
@@ -356,8 +370,30 @@ object AgentModelCatalog {
 
 /** Normalize persisted catalog labels / full variants to the base model id Andy stores. */
 internal fun normalizeModelId(agent: AgentKind, selected: String): String = when (agent) {
+    AgentKind.ClaudeCode -> claudeModelBaseId(selected)
     AgentKind.Cursor -> cursorModelBaseId(selected)
     AgentKind.Antigravity -> antigravityModelBaseId(selected)
+    else -> selected
+}
+
+/**
+ * Map legacy Claude Code alias ids and display labels to the versioned model ids Andy stores.
+ * Aliases still work when passed directly to the CLI; normalization keeps catalog lookups stable.
+ */
+internal fun claudeModelBaseId(selected: String): String = when (selected) {
+    "Opus", "opus" -> "claude-opus-5"
+    "Sonnet", "sonnet" -> "claude-sonnet-5"
+    "Haiku", "haiku" -> "claude-haiku-4-5"
+    "Fable", "fable" -> "claude-fable-5-1"
+    "Fable 5.1", "claude-fable-5-1" -> "claude-fable-5-1"
+    "Opus 5", "claude-opus-5" -> "claude-opus-5"
+    "Sonnet 5", "claude-sonnet-5" -> "claude-sonnet-5"
+    "Haiku 4.5", "claude-haiku-4-5" -> "claude-haiku-4-5"
+    "Fable 5", "claude-fable-5" -> "claude-fable-5"
+    "Opus 4.8", "claude-opus-4-8" -> "claude-opus-4-8"
+    "Opus 4.7", "claude-opus-4-7" -> "claude-opus-4-7"
+    "Opus 4.6", "claude-opus-4-6" -> "claude-opus-4-6"
+    "Sonnet 4.6", "claude-sonnet-4-6" -> "claude-sonnet-4-6"
     else -> selected
 }
 
@@ -1004,6 +1040,7 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
             }
         }
         AgentKind.Antigravity -> antigravityModelBaseId(selected)
+        AgentKind.ClaudeCode -> claudeModelBaseId(selected)
         // Pi requires provider/model (e.g. openai-codex/gpt-5.5). A bare provider
         // column from a bad --list-models parse must not be passed as --model.
         AgentKind.Pi -> selected.takeIf { '/' in it }
