@@ -18,8 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,6 +65,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.abs
@@ -275,6 +279,15 @@ fun ChatSessionSidebarRow(
         hovered -> AndyColors.SurfaceHover
         else -> Color.Transparent
     }
+    // Relative ages are minute-granular; tick so "now" advances without waiting on task updates.
+    var nowMillis by remember(task.id) { mutableStateOf(currentTimeMillis()) }
+    LaunchedEffect(showRelativeAge, task.id) {
+        if (!showRelativeAge) return@LaunchedEffect
+        while (true) {
+            nowMillis = currentTimeMillis()
+            delay(30_000)
+        }
+    }
     Row(
         modifier
             .fillMaxWidth()
@@ -333,7 +346,7 @@ fun ChatSessionSidebarRow(
         )
         if (showRelativeAge) {
             Text(
-                formatChatAge(task.lastActivityMillis()),
+                formatChatAge(task.lastActivityMillis(), nowMillis),
                 color = TextSecondary.copy(alpha = 0.76f),
                 fontFamily = DisplayFont,
                 fontSize = 12.sp,
