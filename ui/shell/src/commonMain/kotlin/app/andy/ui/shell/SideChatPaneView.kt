@@ -140,6 +140,8 @@ private fun SideChatStarter(
     var reasoningEffort by remember(parent.id) { mutableStateOf<AgentReasoningEffort?>(null) }
     var sandboxMode by remember(parent.id) { mutableStateOf(AgentSandboxMode.ReadOnly) }
     var seededForAgent by remember(parent.id) { mutableStateOf<AgentKind?>(null) }
+    val scope = rememberCoroutineScope()
+    var refreshingProviders by remember { mutableStateOf(false) }
 
     LaunchedEffect(parent.id, cliStatuses) {
         if (!agentChosen) agent = sideChatAgent(parent.agent, cliStatuses)
@@ -332,6 +334,17 @@ private fun SideChatStarter(
                         onModelChange = { modelId = it },
                         onReasoningEffortChange = { reasoningEffort = it },
                         onSandboxChange = { sandboxMode = it },
+                        refreshingProviders = refreshingProviders,
+                        onRefreshProviders = {
+                            scope.launch {
+                                refreshingProviders = true
+                                try {
+                                    services.agentRuns.refreshCliStatuses()
+                                } finally {
+                                    refreshingProviders = false
+                                }
+                            }
+                        },
                     )
                 }
             },

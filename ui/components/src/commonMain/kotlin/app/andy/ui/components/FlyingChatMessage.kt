@@ -1,10 +1,12 @@
 package app.andy.ui.components
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,6 +44,8 @@ data class FlyingChatMessage(
     val text: String,
     val start: Rect,
     val end: Rect,
+    /** Right edge of the clipped overlay host, in the same coordinate space as [start]/[end]. */
+    val containerRight: Float,
 )
 
 /**
@@ -99,6 +103,56 @@ fun flyingChatMessageTargetFromRects(
     )
 }
 
+/**
+ * Frame for the two-phase send flight.
+ *
+ * Progress `0 → 1` slides off to the right at the composer Y; `1 → 2` slides in from the
+ * right at the landing Y. At progress `1` the bubble is fully past [containerRight].
+ */
+@Immutable
+data class FlyingChatMessageFrame(
+    val left: Float,
+    val top: Float,
+    val width: Float,
+    val height: Float,
+    val alpha: Float,
+    val scale: Float,
+)
+
+fun flyingChatMessageFrame(
+    start: Rect,
+    end: Rect,
+    containerRight: Float,
+    progress: Float,
+): FlyingChatMessageFrame {
+    val t = progress.coerceIn(0f, 2f)
+    // Fully off-screen when the bubble's left edge reaches the host's right edge.
+    val offscreenLeft = containerRight
+    return if (t <= 1f) {
+        val phase = t
+        FlyingChatMessageFrame(
+            left = lerp(start.left, offscreenLeft, phase),
+            top = start.top,
+            width = start.width.coerceAtLeast(1f),
+            height = start.height.coerceAtLeast(1f),
+            alpha = 1f,
+            scale = 1f,
+        )
+    } else {
+        val phase = t - 1f
+        // Stay opaque through landing; the real bubble is suppressed until onFinished
+        // so dissolving early would flash an empty chat slot.
+        FlyingChatMessageFrame(
+            left = lerp(offscreenLeft, end.left, phase),
+            top = end.top,
+            width = lerp(start.width, end.width, phase).coerceAtLeast(1f),
+            height = lerp(start.height, end.height, phase).coerceAtLeast(1f),
+            alpha = 1f,
+            scale = lerp(1f, 0.98f, phase),
+        )
+    }
+}
+
 @Composable
 fun FlyingChatMessageOverlay(
     flight: FlyingChatMessage?,
@@ -114,47 +168,58 @@ fun FlyingChatMessageOverlay(
         progress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
-                durationMillis = AndyMotion.SpatialMs + AndyMotion.FastMs,
-                easing = FastOutSlowInEasing,
+                durationMillis = AndyMotion.SpatialMs,
+                easing = FastOutLinearInEasing,
+            ),
+        )
+        progress.animateTo(
+            targetValue = 2f,
+            animationSpec = tween(
+                durationMillis = AndyMotion.SpatialMs,
+                easing = LinearOutSlowInEasing,
             ),
         )
         onFinished(flight)
     }
 
-    val t = progress.value
-    val left = lerp(flight.start.left, flight.end.left, t)
-    val top = lerp(flight.start.top, flight.end.top, t)
-    val width = lerp(flight.start.width, flight.end.width, t).coerceAtLeast(1f)
-    val height = lerp(flight.start.height, flight.end.height, t).coerceAtLeast(1f)
-    // Hold full opacity through most of the flight, then dissolve into the real bubble.
-    val alpha = if (t < 0.82f) 1f else ((1f - t) / 0.18f).coerceIn(0f, 1f)
-    val scale = lerp(1f, 0.98f, t)
+    val frame = flyingChatMessageFrame(
+        start = flight.start,
+        end = flight.end,
+        containerRight = flight.containerRight,
+        progress = progress.value,
+    )
 
-    // Sized to the bubble only so the overlay does not steal pointer hits from the chat.
+    // Host fills the pane and clips so the bubble disappears at the right edge
+    // before re-entering toward the chat list landing.
     Box(
         modifier
-            .zIndex(2f)
-            .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
-            .size(
-                width = with(density) { width.toDp() },
-                height = with(density) { height.toDp() },
-            )
-            .graphicsLayer {
-                this.alpha = alpha
-                scaleX = scale
-                scaleY = scale
-            }
-            .clip(RoundedCornerShape(AndyRadius.Control))
-            .background(AndyColors.SurfaceRaised)
-            .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+            .fillMaxSize()
+            .zIndex(2f),
     ) {
-        Text(
-            text = flight.text,
-            color = TextPrimary,
-            fontFamily = DisplayFont,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Box(
+            Modifier
+                .offset { IntOffset(frame.left.roundToInt(), frame.top.roundToInt()) }
+                .size(
+                    width = with(density) { frame.width.toDp() },
+                    height = with(density) { frame.height.toDp() },
+                )
+                .graphicsLayer {
+                    alpha = frame.alpha
+                    scaleX = frame.scale
+                    scaleY = frame.scale
+                }
+                .clip(RoundedCornerShape(AndyRadius.Control))
+                .background(AndyColors.SurfaceRaised)
+                .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space3),
+        ) {
+            Text(
+                text = flight.text,
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }

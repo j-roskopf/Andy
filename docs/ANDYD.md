@@ -312,7 +312,7 @@ Stale `andyd.sock` / `andyd.pid` files left after a crash are removed automatica
 
 In addition to the existing device tools:
 
-- `chat.list` / `chat.events` / `chat.composer_options` / `chat.start` / `chat.stop` / `chat.resume` / `chat.respond` / `chat.set_mode`
+- `chat.list` / `chat.events` / `chat.composer_options` / `chat.refresh_providers` / `chat.start` / `chat.stop` / `chat.resume` / `chat.respond` / `chat.set_mode`
 - `chat.status` / `chat.attach_command` / `chat.reattach`
 - `project.list`
 - `workflow.run_spec` / `workflow.start_build`

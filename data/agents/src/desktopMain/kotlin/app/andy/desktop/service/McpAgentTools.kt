@@ -253,10 +253,37 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "chat.refresh_providers",
+        description = "Re-detect installed provider CLIs and refresh model catalogs",
+    ) {
+        agentRuns.refreshCliStatuses()
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put(
+                    "available",
+                    buildJsonArray {
+                        agentRuns.cliStatuses.value.filter { it.available }.forEach { status ->
+                            add(
+                                buildJsonObject {
+                                    put("id", status.kind.name)
+                                    put("label", status.kind.label)
+                                    put("version", status.version.orEmpty())
+                                },
+                            )
+                        }
+                    },
+                )
+            }.toString(),
+        )
+    }
+
+    register(
         name = "chat.composer_options",
         description = "Catalog for starting a chat: providers, models, autonomy, projects",
     ) {
         // Use cached CLI/model probes — do not refresh here (that blocks the CLI for seconds).
+        // Call chat.refresh_providers when discovery must re-run after a CLI install.
         val statuses = agentRuns.cliStatuses.value.associateBy { it.kind }
         val discovered = agentRuns.providerModels.value
         val localBackends = agentRuns.localModelBackends.value
@@ -1297,6 +1324,7 @@ internal fun inheritedParentTask(
 fun agentProjectToolNames(): List<String> = listOf(
     "chat.list",
     "chat.composer_options",
+    "chat.refresh_providers",
     "chat.events",
     "chat.provider_preferences",
     "chat.set_provider_lane",

@@ -1109,6 +1109,9 @@ class McpAgentRunClient(
     override suspend fun undoChangeSnapshot(taskId: String, snapshot: AgentThreadChangeSnapshot) =
         CommandResult.failure("not available in client mode")
     override suspend fun refreshCliStatuses() {
+        // composer_options only reads andyd's cached probe results. Force a re-locate
+        // first so a CLI installed after the daemon started shows up without restart.
+        runCatching { callTool("chat.refresh_providers", emptyMap()) }
         refreshComposerOptions()
     }
     override suspend fun isGitRepo(dir: String): Boolean = withContext(Dispatchers.IO) {

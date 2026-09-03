@@ -39,4 +39,34 @@ class FlyingChatMessageTest {
         assertTrue(target.left >= transcript.left)
         assertTrue(target.width <= 640f)
     }
+
+    @Test
+    fun flightExitsRightThenEntersFromRight() {
+        val start = Rect(left = 40f, top = 400f, right = 340f, bottom = 520f)
+        val end = Rect(left = 200f, top = 260f, right = 380f, bottom = 360f)
+        val containerRight = 400f
+
+        val atStart = flyingChatMessageFrame(start, end, containerRight, progress = 0f)
+        assertEquals(start.left, atStart.left)
+        assertEquals(start.top, atStart.top)
+
+        val midExit = flyingChatMessageFrame(start, end, containerRight, progress = 0.5f)
+        assertTrue(midExit.left > start.left)
+        assertTrue(midExit.left < containerRight)
+        assertEquals(start.top, midExit.top)
+
+        val fullyOff = flyingChatMessageFrame(start, end, containerRight, progress = 1f)
+        assertEquals(containerRight, fullyOff.left)
+        assertEquals(start.top, fullyOff.top)
+
+        val midEnter = flyingChatMessageFrame(start, end, containerRight, progress = 1.5f)
+        assertTrue(midEnter.left < containerRight)
+        assertTrue(midEnter.left > end.left)
+        assertEquals(end.top, midEnter.top)
+
+        val landed = flyingChatMessageFrame(start, end, containerRight, progress = 2f)
+        assertEquals(end.left, landed.left)
+        assertEquals(end.top, landed.top)
+        assertEquals(1f, landed.alpha)
+    }
 }

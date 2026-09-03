@@ -53,6 +53,8 @@ fun ComposerProfileChips(
     onModelChange: (String?) -> Unit,
     onReasoningEffortChange: (AgentReasoningEffort?) -> Unit,
     onSandboxChange: (AgentSandboxMode) -> Unit,
+    onRefreshProviders: (() -> Unit)? = null,
+    refreshingProviders: Boolean = false,
 ) {
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
@@ -92,6 +94,23 @@ fun ComposerProfileChips(
                     onClick = {
                         onAgentChange(option.agent, option.localRuntime)
                         agentMenuExpanded = false
+                    },
+                )
+            }
+            if (onRefreshProviders != null) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (refreshingProviders) "refreshing providers…" else "refresh providers",
+                            color = TextSecondary,
+                            fontFamily = MonoFont,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    enabled = !refreshingProviders,
+                    onClick = {
+                        agentMenuExpanded = false
+                        onRefreshProviders()
                     },
                 )
             }
