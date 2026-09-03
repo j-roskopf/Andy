@@ -167,4 +167,29 @@ class AgentTaskComposerTest {
         assertNull(composerLinkAt(text, text.indexOf("nope")))
         assertEquals("https://example.com", composerLinkAt(text, text.indexOf("example"))?.url)
     }
+
+    @Test
+    fun preservesBalancedParenthesesInMarkdownLinks() {
+        val text = "check [wiki](https://en.wikipedia.org/wiki/Function_(mathematics)) for details"
+        val links = findComposerLinks(text)
+        assertEquals(1, links.size)
+        assertEquals("https://en.wikipedia.org/wiki/Function_(mathematics)", links[0].url)
+        assertEquals(text.indexOf("wiki"), links[0].start)
+        assertEquals(text.indexOf("wiki") + "wiki".length, links[0].end)
+
+        val annotated = annotateComposerMarkdown(
+            text = text,
+            styles = ComposerMarkdownStyles(
+                linkColor = Color.Blue,
+                codeColor = Color.White,
+                codeBackground = Color.DarkGray,
+            ),
+        )
+        val wikiStart = text.indexOf("wiki")
+        assertTrue(
+            annotated.spanStyles.any {
+                it.start == wikiStart && it.end == wikiStart + 4 && it.item.color == Color.Blue
+            },
+        )
+    }
 }

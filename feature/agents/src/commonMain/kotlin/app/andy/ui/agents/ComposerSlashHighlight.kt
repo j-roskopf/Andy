@@ -16,7 +16,7 @@ private val COMPOSER_SLASH_TOKEN = Regex("""(?:^|\s)(/([A-Za-z0-9:_-]+))(?=\s|$)
 private val COMPOSER_MENTION_TOKEN = Regex("""(?:^|\s)(@(\S+))(?=\s|$)""")
 
 private val COMPOSER_INLINE_CODE = Regex("""`([^`\n]+)`""")
-private val COMPOSER_MD_LINK = Regex("""\[([^\]\n]+)]\(([^)\s]+)\)""")
+private val COMPOSER_MD_LINK = Regex("""\[([^\]\n]+)]\(((?:[^\s()]|\((?:[^\s()]|\([^\s()]*\))*\))+)\)""")
 private val COMPOSER_AUTOLINK = Regex("""https?://[^\s<>\]]+""", RegexOption.IGNORE_CASE)
 private val COMPOSER_BOLD = Regex("""\*\*([^*\n]+)\*\*""")
 /** Single-asterisk emphasis; rejects whitespace-flanking so `**bold**, *italic*` stays two spans. */

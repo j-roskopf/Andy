@@ -1,5 +1,6 @@
 package app.andy.ui.components
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -40,7 +41,11 @@ fun LucideIcon(
     val bytes by produceState(initialValue = lucideBytes[path], key1 = path) {
         value = lucideBytes[path] ?: Res.readBytes(path).also { lucideBytes[path] = it }
     }
-    val data = bytes ?: return
+    val data = bytes
+    if (data == null) {
+        Box(modifier = modifier)
+        return
+    }
     AsyncImage(
         model = ImageRequest.Builder(context)
             .data(data)
