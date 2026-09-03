@@ -37,6 +37,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -702,13 +703,18 @@ fun rememberComposerSlashHighlight(
 fun rememberComposerSlashHighlight(
     skillNames: Set<String>,
     commandNames: Set<String>,
-) = remember(skillNames, commandNames, Cyan, Green, Yellow) {
+) = remember(skillNames, commandNames, Cyan, Green, Yellow, TextPrimary) {
     composerSlashTokenTransformation(
         skillNames = skillNames,
         commandNames = commandNames,
         skillColor = Cyan,
         commandColor = Green,
         mentionColor = Yellow,
+        markdown = ComposerMarkdownStyles(
+            linkColor = Cyan,
+            codeColor = TextPrimary,
+            codeBackground = Cyan.copy(alpha = 0.12f),
+        ),
     )
 }
 
@@ -861,6 +867,7 @@ private fun AgentChatComposer(
             wrapBottomControls = wrapComposerControls,
             input = {
                 Box(Modifier.fillMaxWidth()) {
+                    var promptLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                     TextField(
                         state.promptValue,
                         {
@@ -873,6 +880,7 @@ private fun AgentChatComposer(
                         enabled = hasAvailableProvider,
                         modifier = Modifier.fillMaxWidth()
                             .heightIn(min = 72.dp, max = 180.dp)
+                            .composerOpenLinks(state.promptValue.text, promptLayout)
                             .onVoiceDictationShortcut(voiceShortcut, voiceController)
                             .onPreviewKeyEvent { event ->
                                 if (
@@ -911,6 +919,7 @@ private fun AgentChatComposer(
                         colors = fieldColors(),
                         chromeStyle = FieldChromeStyle.Borderless,
                         visualTransformation = slashHighlight,
+                        onTextLayout = { promptLayout = it },
                         placeholder = {
                             ComposerPlaceholderHint(
                                 text = when {

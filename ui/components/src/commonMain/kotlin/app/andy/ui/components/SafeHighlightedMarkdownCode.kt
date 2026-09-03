@@ -1,6 +1,5 @@
 package app.andy.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,7 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
@@ -32,8 +30,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.markdown_copy
 import app.andy.rememberCopyText
 import app.andy.ui.theme.AndyStroke
 import com.mikepenz.markdown.compose.LocalMarkdownColors
@@ -48,7 +44,6 @@ import dev.snipme.highlights.model.BoldHighlight
 import dev.snipme.highlights.model.ColorHighlight
 import dev.snipme.highlights.model.SyntaxLanguage
 import org.intellij.markdown.ast.ASTNode
-import org.jetbrains.compose.resources.painterResource
 
 /**
  * Syntax-highlighted fenced code with range validation. The Highlights dependency can return
@@ -180,17 +175,7 @@ private fun AndyMarkdownCodeTopBar(
             fontFamily = FontFamily.Monospace,
             color = textColor.copy(alpha = 0.6f),
         )
-        Image(
-            painter = painterResource(Res.drawable.markdown_copy),
-            contentDescription = "Copy code",
-            colorFilter = ColorFilter.tint(iconTint),
-            modifier = Modifier
-                .size(24.dp)
-                .pointerHoverIcon(PointerIcon.Hand)
-                .semantics { role = Role.Button }
-                .clickable(onClickLabel = "Copy code") { copyText(code) }
-                .padding(4.dp),
-        )
+        LucideIcon(Lucide.Copy, iconTint, Modifier.size(24.dp).padding(4.dp).pointerHoverIcon(PointerIcon.Hand).semantics { role = Role.Button }.clickable(onClickLabel = "Copy code") { copyText(code) })
     }
 }
 

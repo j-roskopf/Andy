@@ -1,7 +1,6 @@
 package app.andy.ui.components
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -35,13 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
@@ -51,8 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.composer_attach
 import app.andy.loadImageBitmap
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
@@ -71,7 +63,6 @@ import app.andy.ui.theme.andyTokens
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.jetbrains.compose.resources.painterResource
 
 /** Removable chip shown in the Astryx ChatComposerDrawer (files, skills, context). */
 data class ChatComposerDrawerItem(
@@ -308,7 +299,7 @@ private fun ChatComposerDrawerImageChip(
             modifier = Modifier.size(AndyLayout.ControlHeightSm),
             contentDescription = "Remove $label",
         ) {
-            ComposerCloseGlyph(color = TextSecondary.copy(alpha = 0.75f), modifier = Modifier.size(10.dp))
+            LucideIcon(Lucide.X, TextSecondary.copy(alpha = 0.75f), Modifier.size(10.dp))
         }
     }
     if (previewOpen && image != null) {
@@ -406,7 +397,7 @@ private fun ChatComposerDrawerChip(
             modifier = Modifier.size(AndyLayout.ControlHeightSm),
             contentDescription = "Remove $label",
         ) {
-            ComposerCloseGlyph(color = TextSecondary.copy(alpha = 0.75f), modifier = Modifier.size(10.dp))
+            LucideIcon(Lucide.X, TextSecondary.copy(alpha = 0.75f), Modifier.size(10.dp))
         }
     }
 }
@@ -436,13 +427,10 @@ private fun ChatComposerTopBar(
                     enabled = attachEnabled,
                     contentDescription = "Attach file",
                 ) {
-                    Image(
-                        painter = painterResource(Res.drawable.composer_attach),
-                        contentDescription = null,
-                        modifier = Modifier.size(AndyLayout.IconLg),
-                        colorFilter = ColorFilter.tint(
-                            if (attachEnabled) TextSecondary else AndyColors.TextDisabled,
-                        ),
+                    LucideIcon(
+                        Lucide.Paperclip,
+                        if (attachEnabled) TextSecondary else AndyColors.TextDisabled,
+                        Modifier.size(AndyLayout.IconLg),
                     )
                 }
             }
@@ -644,27 +632,7 @@ fun ComposerProviderChip(
 
 @Composable
 fun ComposerSparkleGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val arm = size.minDimension * 0.42f
-        val stroke = Stroke(width = size.minDimension * 0.11f, cap = StrokeCap.Round)
-        drawLine(color, Offset(cx, cy - arm), Offset(cx, cy + arm), stroke.width, StrokeCap.Round)
-        drawLine(color, Offset(cx - arm, cy), Offset(cx + arm, cy), stroke.width, StrokeCap.Round)
-        val diag = arm * 0.72f
-        drawLine(color, Offset(cx - diag, cy - diag), Offset(cx + diag, cy + diag), stroke.width, StrokeCap.Round)
-        drawLine(color, Offset(cx + diag, cy - diag), Offset(cx - diag, cy + diag), stroke.width, StrokeCap.Round)
-    }
-}
-
-@Composable
-private fun ComposerCloseGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val pad = size.minDimension * 0.22f
-        val stroke = size.minDimension * 0.12f
-        drawLine(color, Offset(pad, pad), Offset(size.width - pad, size.height - pad), stroke, StrokeCap.Round)
-        drawLine(color, Offset(size.width - pad, pad), Offset(pad, size.height - pad), stroke, StrokeCap.Round)
-    }
+    LucideIcon(Lucide.Sparkles, color, modifier)
 }
 
 fun chatComposerDrawerItemsFromPaths(
@@ -775,18 +743,7 @@ fun ComposerChip(
             overflow = TextOverflow.Ellipsis,
         )
         if (showChevron) {
-            Box(
-                Modifier.size(12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "⌄",
-                    color = contentColor.copy(alpha = 0.55f),
-                    fontSize = 10.sp,
-                    lineHeight = 10.sp,
-                    modifier = Modifier.offset(y = (-1).dp),
-                )
-            }
+            LucideIcon(Lucide.ChevronDown, contentColor.copy(alpha = 0.55f), Modifier.size(12.dp))
         }
     }
 }

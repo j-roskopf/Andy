@@ -82,9 +82,12 @@ fun skillRootsFor(
         File(codexHome, "skills"),
     )
     // Antigravity CLI loads workspace Agent Skills and its own global root.
+    // Also include portable ~/.agents/skills so skills installed once (e.g. via
+    // `npx skills`) appear in Andy's slash menu the same way they do for Claude/Cursor.
     AgentKind.Antigravity -> listOfNotNull(
         workspace?.let { File(it, ".agents/skills") },
         File(home, ".gemini/antigravity-cli/skills"),
+        File(home, ".agents/skills"),
     )
     AgentKind.OpenCode -> listOfNotNull(
         workspace?.let { File(it, ".opencode/skills") },

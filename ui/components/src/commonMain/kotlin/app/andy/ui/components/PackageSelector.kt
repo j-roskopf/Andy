@@ -138,7 +138,7 @@ fun PackageSelector(
             if (busy) {
                 Spinner(spinnerSize = SpinnerSize.Sm)
             } else {
-                Text("▼", color = TextSecondary, fontSize = 10.sp)
+                LucideIcon(Lucide.ChevronDown, TextSecondary, Modifier.size(10.dp))
             }
         }
 

@@ -36,6 +36,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -161,6 +162,7 @@ fun TextField(
     isError: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
+    onTextLayout: (TextLayoutResult) -> Unit = {},
 ) {
     @Suppress("UNUSED_VARIABLE")
     val retainedColorsForCallSiteCompatibility = colors
@@ -208,6 +210,7 @@ fun TextField(
         visualTransformation = visualTransformation,
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions,
+        onTextLayout = onTextLayout,
         cursorBrush = SolidColor(if (isError) MaterialTheme.colorScheme.error else tokens.accent),
         interactionSource = interactionSource,
         decorationBox = { innerTextField ->

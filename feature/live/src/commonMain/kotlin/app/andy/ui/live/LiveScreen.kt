@@ -88,6 +88,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.snapshotFlow
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 private fun transferStatusColor(status: String): Color = when {
     status.startsWith("App installed") ||
@@ -958,37 +960,15 @@ internal suspend fun awaitLogicalOrientationChange(
 
 @Composable
 internal fun NavIconBack(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(16.dp)) {
-        val path = androidx.compose.ui.graphics.Path().apply {
-            moveTo(size.width * 0.85f, size.height * 0.1f)
-            lineTo(size.width * 0.15f, size.height * 0.5f)
-            lineTo(size.width * 0.85f, size.height * 0.9f)
-            close()
-        }
-        drawPath(path, color)
-    }
+    LucideIcon(Lucide.ChevronLeft, color, modifier.size(16.dp))
 }
 
 @Composable
 internal fun NavIconHome(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(16.dp)) {
-        drawCircle(
-            color = color,
-            radius = size.minDimension / 2f * 0.85f
-        )
-    }
+    LucideIcon(Lucide.Circle, color, modifier.size(16.dp))
 }
 
 @Composable
 internal fun NavIconRecents(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(16.dp)) {
-        val side = size.minDimension * 0.75f
-        val offset = (size.minDimension - side) / 2f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(offset, offset),
-            size = Size(side, side),
-            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
-        )
-    }
+    LucideIcon(Lucide.Square, color, modifier.size(16.dp))
 }

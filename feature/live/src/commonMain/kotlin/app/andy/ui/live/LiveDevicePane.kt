@@ -48,15 +48,6 @@ import androidx.compose.ui.unit.sp
 import app.andy.MirrorOverlay
 import app.andy.MirrorVideoSurface
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.hardware_bug
-import app.andy.andy.generated.resources.hardware_capture
-import app.andy.andy.generated.resources.hardware_clipboard
-import app.andy.andy.generated.resources.hardware_pop_out
-import app.andy.andy.generated.resources.hardware_power
-import app.andy.andy.generated.resources.hardware_record
-import app.andy.andy.generated.resources.hardware_rotate
-import app.andy.andy.generated.resources.hardware_volume_down
-import app.andy.andy.generated.resources.hardware_volume_up
 import app.andy.domain.scalePointFromStreamToDisplay
 import app.andy.model.AndroidDevice
 import app.andy.service.MirrorFrame
@@ -83,6 +74,8 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.Flow
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.roundToInt
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 data class MirrorSourceSize(val width: Int, val height: Int)
 
 internal data class FoldableStreamContext(
@@ -1047,22 +1040,17 @@ internal enum class HardwareIcon {
 @Composable
 internal fun HardwareControlIcon(icon: HardwareIcon, color: Color, modifier: Modifier = Modifier) {
     val resource = when (icon) {
-        HardwareIcon.Power -> Res.drawable.hardware_power
-        HardwareIcon.VolumeUp -> Res.drawable.hardware_volume_up
-        HardwareIcon.VolumeDown -> Res.drawable.hardware_volume_down
-        HardwareIcon.Rotate -> Res.drawable.hardware_rotate
-        HardwareIcon.Capture -> Res.drawable.hardware_capture
-        HardwareIcon.Bug -> Res.drawable.hardware_bug
-        HardwareIcon.Clip -> Res.drawable.hardware_clipboard
-        HardwareIcon.PopOut -> Res.drawable.hardware_pop_out
-        HardwareIcon.Record -> Res.drawable.hardware_record
+        HardwareIcon.Power -> Lucide.Power
+        HardwareIcon.VolumeUp -> Lucide.Volume2
+        HardwareIcon.VolumeDown -> Lucide.Volume1
+        HardwareIcon.Rotate -> Lucide.RotateCw
+        HardwareIcon.Capture -> Lucide.Camera
+        HardwareIcon.Bug -> Lucide.Bug
+        HardwareIcon.Clip -> Lucide.Clipboard
+        HardwareIcon.PopOut -> Lucide.SquareArrowOutUpRight
+        HardwareIcon.Record -> Lucide.Circle
     }
-    Image(
-        painter = painterResource(resource),
-        contentDescription = null,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(resource, color, modifier)
 }
 
 @Composable

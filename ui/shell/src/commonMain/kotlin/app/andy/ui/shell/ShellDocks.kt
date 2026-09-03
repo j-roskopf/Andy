@@ -61,7 +61,9 @@ import app.andy.resignEmbeddedBrowserKey
 import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.LogcatService
-import app.andy.ui.actions.actionIconMarker
+import app.andy.ui.actions.ActionIcon
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.EmptyState
 import app.andy.LocalSuppressHeavyweightSurfaces
 import app.andy.ui.components.PanelCard
@@ -509,33 +511,15 @@ private fun PaneToggle(
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(15.dp)) {
-            val stroke = Stroke(width = 1.35.dp.toPx())
-            val color = if (selected) TextPrimary else TextSecondary
-            val inset = 0.5.dp.toPx()
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(inset, inset),
-                size = Size(this.size.width - inset * 2, this.size.height - inset * 2),
-                cornerRadius = CornerRadius(2.2.dp.toPx(), 2.2.dp.toPx()),
-                style = stroke,
-            )
-            val indicatorStroke = 1.6.dp.toPx()
+        LucideIcon(
             when (edge) {
-                PaneToggleEdge.Left, PaneToggleEdge.Right -> {
-                    val x = this.size.width * if (edge == PaneToggleEdge.Left) 0.28f else 0.72f
-                    val top = this.size.height * 0.28f
-                    val bottom = this.size.height * 0.72f
-                    drawLine(color, Offset(x, top), Offset(x, bottom), strokeWidth = indicatorStroke)
-                }
-                PaneToggleEdge.Bottom -> {
-                    val y = this.size.height * 0.72f
-                    val left = this.size.width * 0.28f
-                    val right = this.size.width * 0.72f
-                    drawLine(color, Offset(left, y), Offset(right, y), strokeWidth = indicatorStroke)
-                }
-            }
-        }
+                PaneToggleEdge.Left -> Lucide.PanelLeft
+                PaneToggleEdge.Right -> Lucide.PanelRight
+                PaneToggleEdge.Bottom -> Lucide.PanelBottom
+            },
+            if (selected) TextPrimary else TextSecondary,
+            Modifier.size(15.dp),
+        )
     }
 }
 
@@ -589,95 +573,17 @@ private fun DockLandingItem(
 
 @Composable
 private fun DockKindIcon(kind: DockTabKind, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = Stroke(width = 1.3.dp.toPx())
-        val color = TextSecondary
+    LucideIcon(
         when (kind) {
-            DockTabKind.Live -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(size.width * 0.22f, size.height * 0.08f),
-                    size = Size(size.width * 0.56f, size.height * 0.84f),
-                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-                    style = stroke,
-                )
-                drawLine(
-                    color,
-                    Offset(size.width * 0.38f, size.height * 0.18f),
-                    Offset(size.width * 0.62f, size.height * 0.18f),
-                    strokeWidth = stroke.width,
-                )
-            }
-            DockTabKind.Terminal -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(size.width * 0.08f, size.height * 0.14f),
-                    size = Size(size.width * 0.84f, size.height * 0.72f),
-                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-                    style = stroke,
-                )
-                val prompt = Path().apply {
-                    moveTo(size.width * 0.24f, size.height * 0.38f)
-                    lineTo(size.width * 0.36f, size.height * 0.50f)
-                    lineTo(size.width * 0.24f, size.height * 0.62f)
-                }
-                drawPath(prompt, color = color, style = stroke)
-                drawLine(
-                    color,
-                    Offset(size.width * 0.42f, size.height * 0.62f),
-                    Offset(size.width * 0.68f, size.height * 0.62f),
-                    strokeWidth = stroke.width,
-                )
-            }
-            DockTabKind.Logs -> {
-                val left = size.width * 0.18f
-                val right = size.width * 0.82f
-                listOf(0.28f, 0.50f, 0.72f).forEach { yFrac ->
-                    drawLine(
-                        color,
-                        Offset(left, size.height * yFrac),
-                        Offset(right, size.height * yFrac),
-                        strokeWidth = stroke.width,
-                    )
-                }
-            }
-            DockTabKind.Browser -> {
-                drawCircle(
-                    color = color,
-                    radius = size.minDimension * 0.4f,
-                    center = Offset(size.width * 0.5f, size.height * 0.5f),
-                    style = stroke,
-                )
-                drawLine(
-                    color,
-                    Offset(size.width * 0.1f, size.height * 0.5f),
-                    Offset(size.width * 0.9f, size.height * 0.5f),
-                    strokeWidth = stroke.width,
-                )
-                drawOval(
-                    color = color,
-                    topLeft = Offset(size.width * 0.32f, size.height * 0.1f),
-                    size = Size(size.width * 0.36f, size.height * 0.8f),
-                    style = stroke,
-                )
-            }
-            DockTabKind.Chat -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(size.width * 0.12f, size.height * 0.14f),
-                    size = Size(size.width * 0.76f, size.height * 0.52f),
-                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-                    style = stroke,
-                )
-                val tail = Path().apply {
-                    moveTo(size.width * 0.28f, size.height * 0.66f)
-                    lineTo(size.width * 0.22f, size.height * 0.86f)
-                    lineTo(size.width * 0.44f, size.height * 0.66f)
-                }
-                drawPath(tail, color = color, style = stroke)
-            }
-        }
-    }
+            DockTabKind.Live -> Lucide.Smartphone
+            DockTabKind.Terminal -> Lucide.SquareTerminal
+            DockTabKind.Logs -> Lucide.AlignJustify
+            DockTabKind.Browser -> Lucide.Globe
+            DockTabKind.Chat -> Lucide.MessageSquare
+        },
+        TextSecondary,
+        modifier,
+    )
 }
 
 /**
@@ -808,17 +714,17 @@ internal fun ShellDockDrawer(
                             onClick = { terminalPaneCallbacks.onSplit(tab.id, leaf.id, SplitAxis.Column) },
                         )
                     }
-                    DockChromeButton(
-                        glyph = "+",
+                    DockIconChromeButton(
                         label = "Add pane tab",
                         onBleedSurface = terminalHeader || liveHeader || chatHeader,
                         onClick = { addMenuExpanded = !addMenuExpanded },
+                        icon = { LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(14.dp)) },
                     )
-                    DockChromeButton(
-                        glyph = "×",
+                    DockIconChromeButton(
                         label = if (placement == DockPlacement.Right) "Close right pane" else "Close bottom pane",
                         onBleedSurface = terminalHeader || liveHeader || chatHeader,
                         onClick = onClose,
+                        icon = { LucideIcon(Lucide.X, TextSecondary, Modifier.size(14.dp)) },
                     )
                 }
             },
@@ -867,29 +773,24 @@ internal fun ShellDockDrawer(
                     },
                     indicatorColor = accent,
                     leading = {
-                        Text(
-                            when (tab.kind) {
-                                DockTabKind.Live -> "▣"
-                                DockTabKind.Logs -> "≡"
-                                DockTabKind.Terminal -> actionIconMarker(runningAction?.icon.orEmpty())
-                                DockTabKind.Browser -> "◯"
-                                DockTabKind.Chat -> "◇"
-                            },
-                            color = if (selected) accent else accent.copy(alpha = 0.6f),
-                            fontFamily = MonoFont,
-                            fontSize = 10.sp,
-                            lineHeight = 14.sp,
-                        )
+                        when (tab.kind) {
+                            DockTabKind.Live -> LucideIcon(Lucide.Smartphone, if (selected) accent else accent.copy(alpha = 0.6f), Modifier.size(12.dp))
+                            DockTabKind.Logs -> LucideIcon(Lucide.AlignJustify, if (selected) accent else accent.copy(alpha = 0.6f), Modifier.size(12.dp))
+                            DockTabKind.Terminal -> ActionIcon(
+                                runningAction?.icon.orEmpty(),
+                                if (selected) accent else accent.copy(alpha = 0.6f),
+                                Modifier.size(12.dp),
+                            )
+                            DockTabKind.Browser -> LucideIcon(Lucide.Globe, if (selected) accent else accent.copy(alpha = 0.6f), Modifier.size(12.dp))
+                            DockTabKind.Chat -> LucideIcon(Lucide.MessageSquare, if (selected) accent else accent.copy(alpha = 0.6f), Modifier.size(12.dp))
+                        }
                     },
                     trailing = { hovered ->
-                        Text(
-                            "×",
-                            color = if (hovered) Red else Color.Transparent,
-                            fontFamily = MonoFont,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            lineHeight = 14.sp,
-                            modifier = Modifier
+                        LucideIcon(
+                            Lucide.X,
+                            if (hovered) Red else Color.Transparent,
+                            Modifier
+                                .size(14.dp)
                                 .semantics { contentDescription = "Close tab"; role = Role.Button }
                                 .clickable(onClick = {
                                     resignEmbeddedBrowserKey()
@@ -1065,30 +966,6 @@ private fun RetainedBrowserDockContent(
     }
 }
 
-@Composable
-private fun DockChromeButton(
-    glyph: String,
-    label: String,
-    onClick: () -> Unit,
-    onBleedSurface: Boolean = false,
-) {
-    DockIconChromeButton(
-        label = label,
-        onClick = onClick,
-        onBleedSurface = onBleedSurface,
-        icon = {
-            Text(
-                glyph,
-                color = TextSecondary,
-                fontFamily = MonoFont,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        },
-    )
-}
-
-/** Shared 28dp chrome for dock header icon buttons — [DockChromeButton] wraps this for glyph-only icons. */
 @Composable
 internal fun DockIconChromeButton(
     label: String,

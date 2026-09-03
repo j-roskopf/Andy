@@ -49,10 +49,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.composer_git_branch
-import app.andy.andy.generated.resources.composer_local
-import app.andy.andy.generated.resources.composer_temporary
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.GitBranchInfo
@@ -64,6 +60,8 @@ import app.andy.ui.components.AndyDropdownMenuSectionLabel
 import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.HoverTooltip
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.TextField
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.AndyColors
@@ -79,7 +77,6 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.resources.painterResource
 
 /**
  * Always-on new-chat context strip above the input frame:
@@ -188,7 +185,7 @@ private fun ComposerContinueInChip(
                     leading = { ComposerLocalIcon(TextPrimary, Modifier.size(16.dp)) },
                     trailing = {
                         if (!useWorktree) {
-                            Text("✓", color = TextSecondary, fontSize = 12.sp)
+                            LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
                         }
                     },
                 )
@@ -201,7 +198,7 @@ private fun ComposerContinueInChip(
                     leading = { ComposerGitBranchIcon(TextPrimary, Modifier.size(GitBranchIconSize)) },
                     trailing = {
                         if (useWorktree) {
-                            Text("✓", color = TextSecondary, fontSize = 12.sp)
+                            LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
                         }
                     },
                 )
@@ -701,51 +698,24 @@ private fun ComposerTemporaryLabeledToggle(
     }
 }
 
-/** User-provided monitor artwork, pre-rasterized for toolbar size (see composeResources/drawable/composer_local.png). */
 @Composable
 private fun ComposerLocalIcon(color: Color, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.composer_local),
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(Lucide.Monitor, color, modifier)
 }
 
-/** User-provided temporary-chat artwork, pre-rasterized for toolbar size. */
 @Composable
 private fun ComposerTemporaryIcon(color: Color, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.composer_temporary),
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(Lucide.MessageCircleDashed, color, modifier)
 }
 
-/** User-provided git branch artwork: 128px white silhouette, stroke-boosted to fill the canvas. */
 @Composable
 private fun ComposerGitBranchIcon(color: Color, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.composer_git_branch),
-        contentDescription = null,
-        contentScale = ContentScale.Fit,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(Lucide.GitBranch, color, modifier)
 }
 
 @Composable
 private fun ComposerClockGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = Stroke(width = size.minDimension * 0.10f, cap = StrokeCap.Round)
-        val c = Offset(size.width / 2f, size.height / 2f)
-        drawCircle(color, radius = size.minDimension * 0.38f, center = c, style = stroke)
-        drawLine(color, c, Offset(c.x, c.y - size.height * 0.22f), stroke.width, StrokeCap.Round)
-        drawLine(color, c, Offset(c.x + size.width * 0.18f, c.y + size.height * 0.08f), stroke.width, StrokeCap.Round)
-    }
+    LucideIcon(Lucide.Clock, color, modifier)
 }
 
 private val TemporaryLabeledIconSize = 16.dp

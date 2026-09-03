@@ -47,7 +47,7 @@ fun ComponentGallery(modifier: Modifier = Modifier) {
         }
         GallerySection("Status") {
             Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
-                StatusTag("working", StatusDotVariant.Info, pulsing = true)
+                StatusTag("working", StatusDotVariant.Info)
                 StatusTag("done", StatusDotVariant.Success)
                 StatusTag("blocked", StatusDotVariant.Warning)
                 StatusTag("error", StatusDotVariant.Error)

@@ -9,7 +9,12 @@ package app.andy.ui.agents
  * the PTY buffer is the transcript. Kept for unit tests and gradual removal.
  */
 import androidx.compose.animation.AnimatedVisibility
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -55,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -64,6 +71,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -84,6 +92,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.platform.LocalDensity
 import app.andy.formatDisplayTime
 import app.andy.loadImageBitmap
 import app.andy.domain.ToolCallFileContent
@@ -129,9 +138,9 @@ import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TextField
 import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
-import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
@@ -229,6 +238,12 @@ fun AgentTranscript(
     scrollMemory: TranscriptScrollMemory? = null,
     /** Increment to jump to the live edge (e.g. after the user sends a follow-up). */
     scrollToLatestRequest: Int = 0,
+    /**
+     * Exact user text from the latest send. When that row appears in [events], play a one-shot
+     * entrance on it only — not on assistant/tool rows or historical messages.
+     */
+    pendingSendEntranceText: String? = null,
+    onPendingSendEntranceConsumed: () -> Unit = {},
     autoExpandThinkingSections: Boolean = false,
     autoExpandToolSections: Boolean = false,
     collapseActivityBetweenMessages: Boolean = false,
@@ -291,6 +306,22 @@ fun AgentTranscript(
         mutableStateOf(restorePlan is TranscriptRestorePlan.StickToBottom)
     }
     var scrollInitialized by remember(taskId) { mutableStateOf(false) }
+    // One-shot entrance for the bubble matching [pendingSendEntranceText] after send.
+    var sendEntranceKey by remember(taskId) { mutableStateOf<String?>(null) }
+    val onPendingSendEntranceConsumedLatest = rememberUpdatedState(onPendingSendEntranceConsumed)
+    LaunchedEffect(pendingSendEntranceText, displayItems) {
+        val needle = pendingSendEntranceText?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return@LaunchedEffect
+        val key = displayItems.asReversed().firstNotNullOfOrNull { item ->
+            if (item !is TranscriptDisplayItem.Event) return@firstNotNullOfOrNull null
+            val event = item.event as? AgentEvent.UserMessage ?: return@firstNotNullOfOrNull null
+            if (event.text.isSilentConnectionRecoveryPrompt()) return@firstNotNullOfOrNull null
+            if (event.text.trim() != needle) return@firstNotNullOfOrNull null
+            transcriptDisplayItemKey(item)
+        } ?: return@LaunchedEffect
+        sendEntranceKey = key
+        onPendingSendEntranceConsumedLatest.value()
+    }
     var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedThinkingKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
@@ -500,8 +531,25 @@ fun AgentTranscript(
                 ) { reversedIndex ->
                     val itemIndex = displayItems.lastIndex - reversedIndex
                     val item = displayItems[itemIndex]
+                    val itemKey = transcriptDisplayItemKey(item)
+                    val isUserMessage = item is TranscriptDisplayItem.Event &&
+                        item.event is AgentEvent.UserMessage &&
+                        !item.event.text.isSilentConnectionRecoveryPrompt()
                     SelectionContainer(
-                        modifier = Modifier.testTag("transcript-row-${transcriptDisplayItemKey(item)}"),
+                        modifier = Modifier
+                            .then(
+                                if (isUserMessage) {
+                                    Modifier.userMessageSendEnter(
+                                        play = itemKey == sendEntranceKey,
+                                        onFinished = {
+                                            if (sendEntranceKey == itemKey) sendEntranceKey = null
+                                        },
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .testTag("transcript-row-$itemKey"),
                     ) {
                         when (item) {
                             is TranscriptDisplayItem.Event -> {
@@ -682,19 +730,44 @@ fun AgentTranscript(
 }
 
 /**
- * Hides the newest matching user turn while a send-flight overlay owns that bubble.
- * Match is exact on trimmed [text] so older identical prompts stay visible.
+ * One-shot entrance for the user bubble created by pressing send.
+ * Springs in from the trailing edge with a little scale pop — playful, but still
+ * lands on the real row bounds (no overlay flight).
  */
-fun suppressLatestMatchingUserMessage(
-    events: List<AgentEvent>,
-    text: String?,
-): List<AgentEvent> {
-    val needle = text?.trim()?.takeIf { it.isNotEmpty() } ?: return events
-    val index = events.indexOfLast { event ->
-        event is AgentEvent.UserMessage && event.text.trim() == needle
+@Composable
+private fun Modifier.userMessageSendEnter(
+    play: Boolean,
+    onFinished: () -> Unit,
+): Modifier {
+    val progress = remember { Animatable(1f) }
+    val slidePx = with(LocalDensity.current) { 72.dp.toPx() }
+    LaunchedEffect(play) {
+        if (!play) {
+            progress.snapTo(1f)
+            return@LaunchedEffect
+        }
+        progress.snapTo(0f)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        )
+        onFinished()
     }
-    if (index < 0) return events
-    return events.filterIndexed { i, _ -> i != index }
+    if (!play && progress.value >= 1f) return this
+    return graphicsLayer {
+        val t = progress.value
+        // Fade finishes early so the spring overshoot reads as motion, not opacity flicker.
+        alpha = (t * 1.35f).coerceIn(0f, 1f)
+        translationX = (1f - t) * slidePx
+        val scale = 0.84f + (0.16f * t)
+        scaleX = scale
+        scaleY = scale
+        // Grow from the trailing edge — matches send coming out of the composer.
+        transformOrigin = TransformOrigin(1f, 0.5f)
+    }
 }
 
 /**
@@ -1317,8 +1390,9 @@ private fun PlanEntryLine(index: Int, entry: AgentPlanEntry) {
     }
 }
 
-private val TranscriptAsideIndent = 2.dp
-private val TranscriptAsideContentIndent = 6.dp
+// Chat prose is flush left; tool/thinking asides indent past it.
+private val TranscriptAsideIndent = AndySpace.Space4
+private val TranscriptAsideContentIndent = AndySpace.Space4 + 8.dp
 
 /** Leading action verb weight for activity headlines ("Edited", "Thought", "Ran", …). */
 private val ActivityActionWeight = FontWeight.SemiBold
@@ -1571,13 +1645,10 @@ private fun ChatAttachedImage(
                 )
             }
             if (onRemove != null) {
-                Text(
-                    "×",
-                    color = TextPrimary,
-                    fontFamily = MonoFont,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    modifier = Modifier
+                LucideIcon(
+                    Lucide.X,
+                    TextPrimary,
+                    Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
                         .clip(RoundedCornerShape(AndyRadius.Control))
@@ -1585,7 +1656,8 @@ private fun ChatAttachedImage(
                         .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                         .pointerHoverIcon(PointerIcon.Hand)
                         .clickable(onClick = onRemove)
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .size(14.dp),
                 )
             }
         }

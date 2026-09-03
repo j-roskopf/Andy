@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -51,6 +52,8 @@ import app.andy.ui.agents.ComposerModelSelection
 import app.andy.ui.agents.ComposerProfileChips
 import app.andy.ui.agents.composerModelSelection
 import app.andy.ui.agents.composerModelSelectionAfterCatalogUpdate
+import app.andy.ui.agents.rememberComposerSlashHighlight
+import app.andy.ui.agents.composerOpenLinks
 import app.andy.ui.components.ChatComposerLayout
 import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.ChatSendButton
@@ -245,6 +248,10 @@ private fun SideChatStarter(
         LaunchedEffect(draft) {
             if (draftField.text != draft) draftField = TextFieldValue(draft)
         }
+        val composerHighlight = rememberComposerSlashHighlight(
+            skillNames = emptySet(),
+            commandNames = emptySet(),
+        )
         ChatComposerLayout(
             modifier = Modifier.fillMaxWidth(),
             onMentionClick = { draftField = insertTextAtCursor(draftField, "@"); draft = draftField.text },
@@ -256,6 +263,7 @@ private fun SideChatStarter(
             attachEnabled = false,
             input = {
                 Box(Modifier.fillMaxWidth()) {
+                    var draftLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                     TextField(
                         value = draftField,
                         onValueChange = {
@@ -269,6 +277,7 @@ private fun SideChatStarter(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 72.dp, max = 180.dp)
+                            .composerOpenLinks(draftField.text, draftLayout)
                             .onPreviewKeyEvent { event ->
                                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                 if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
@@ -284,6 +293,8 @@ private fun SideChatStarter(
                         ),
                         colors = fieldColors(),
                         chromeStyle = FieldChromeStyle.Borderless,
+                        visualTransformation = composerHighlight,
+                        onTextLayout = { draftLayout = it },
                         placeholder = { ComposerPlaceholderHint("Ask me anything…") },
                     )
                 }

@@ -36,6 +36,8 @@ import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 fun FoldableControlsPanel(
@@ -126,36 +128,9 @@ private fun PostureIcon(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier) {
-        val stroke = Stroke(width = size.minDimension * 0.08f, cap = StrokeCap.Round)
-        val inset = size.minDimension * 0.12f
-        when (posture) {
-            FoldablePosture.Closed -> {
-                val w = size.width * 0.42f
-                val h = size.height * 0.72f
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset((size.width - w) / 2f, (size.height - h) / 2f),
-                    size = Size(w, h),
-                    cornerRadius = CornerRadius(w * 0.18f, w * 0.18f),
-                    style = stroke,
-                )
-            }
-            FoldablePosture.Opened -> {
-                drawRoundRect(
-                    color = color,
-                    topLeft = Offset(inset, inset * 1.4f),
-                    size = Size(size.width - inset * 2f, size.height - inset * 2.8f),
-                    cornerRadius = CornerRadius(size.minDimension * 0.08f),
-                    style = stroke,
-                )
-                drawLine(
-                    color = color.copy(alpha = 0.55f),
-                    start = Offset(size.width / 2f, inset * 1.6f),
-                    end = Offset(size.width / 2f, size.height - inset * 1.6f),
-                    strokeWidth = stroke.width * 0.7f,
-                )
-            }
-        }
-    }
+    LucideIcon(
+        if (posture == FoldablePosture.Closed) Lucide.Smartphone else Lucide.Tablet,
+        color,
+        modifier,
+    )
 }

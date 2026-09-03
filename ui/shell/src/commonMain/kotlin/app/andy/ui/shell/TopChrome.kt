@@ -42,7 +42,7 @@ import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.ProjectAction
-import app.andy.ui.actions.actionIconMarker
+import app.andy.ui.actions.ActionIcon
 import app.andy.ui.components.AndyDropdownMenu
 import app.andy.ui.components.AndyDropdownMenuItem
 import app.andy.ui.components.AndyDropdownMenuSectionLabel
@@ -54,7 +54,6 @@ import app.andy.ui.components.TopNav
 import app.andy.ui.components.TopNavHeading
 import app.andy.ui.components.accentTextButtonColors
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.hardware_pop_out
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
@@ -67,6 +66,8 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.network.GlowingDot
 import org.jetbrains.compose.resources.painterResource
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 internal fun TopChrome(
@@ -344,7 +345,11 @@ private fun ActionRunnerSelector(
                 onClick = { actionMenuOpen = !actionMenuOpen },
                 modifier = Modifier.widthIn(min = 142.dp, max = 230.dp),
                 prefix = {
-                    Text(action?.let { actionIconMarker(it.icon) } ?: "—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 11.sp)
+                    if (action != null) {
+                        ActionIcon(action.icon, Rust, Modifier.size(12.dp))
+                    } else {
+                        Text("—", color = Rust, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 11.sp)
+                    }
                     Spacer(Modifier.width(AndySpace.Space2))
                 },
                 contentDescription = "Select action",
@@ -370,7 +375,7 @@ private fun ActionRunnerSelector(
                                 actionMenuOpen = false
                             },
                             leading = {
-                                Text(actionIconMarker(item.icon), color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                                ActionIcon(item.icon, Rust, Modifier.size(12.dp))
                             },
                         )
                     }
@@ -509,11 +514,11 @@ private fun DevicePopOutButton(onPopOut: () -> Unit) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(Res.drawable.hardware_pop_out),
+        LucideIcon(
+            Lucide.SquareArrowOutUpRight,
+            Cyan,
+            Modifier.size(AndyLayout.IconMd),
             contentDescription = "Pop out mirror",
-            modifier = Modifier.size(AndyLayout.IconMd),
-            colorFilter = ColorFilter.tint(Cyan),
         )
     }
 }

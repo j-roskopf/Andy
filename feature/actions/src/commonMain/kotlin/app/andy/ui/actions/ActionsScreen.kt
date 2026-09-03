@@ -95,8 +95,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.project_new_chat
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.TabBarItem
 import app.andy.ui.components.TabBarRow
 import app.andy.ui.components.AndyAlertDialog
@@ -169,18 +169,6 @@ import app.andy.ui.theme.andyTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
-
-fun actionIconMarker(icon: String): String = when (icon.trim().lowercase()) {
-    "run" -> "|>"
-    "terminal" -> "|$"
-    "test" -> "|="
-    "debug" -> "|!"
-    "build" -> "|#"
-    "server" -> "|~"
-    "deploy" -> "|^"
-    else -> "|*"
-}
-
 
 private data class EditingProject(val project: ActionProject?)
 private data class EditingAction(val projectId: String, val action: ProjectAction?)
@@ -1087,7 +1075,7 @@ private fun SearchGlyphButton(
         else -> TextSecondary.copy(alpha = 0.62f)
     }
     HeaderGlyphButton(onClick = onClick, interactionSource = interactionSource, contentDescription = "Search projects") {
-        SearchGlyph(color = tint)
+        LucideIcon(Lucide.Search, tint, Modifier.size(14.dp))
     }
 }
 
@@ -1100,7 +1088,7 @@ private fun PlusGlyphButton(onClick: () -> Unit) {
         else -> TextSecondary.copy(alpha = 0.62f)
     }
     HeaderGlyphButton(onClick = onClick, interactionSource = interactionSource, contentDescription = "New project") {
-        PlusGlyph(color = tint)
+        LucideIcon(Lucide.Plus, tint, Modifier.size(14.dp))
     }
 }
 
@@ -1128,108 +1116,15 @@ private fun HeaderGlyphButton(
 }
 
 @Composable
-private fun SearchGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(14.dp)) {
-        val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round)
-        val radius = size.minDimension * 0.28f
-        val center = Offset(size.width * 0.42f, size.height * 0.42f)
-        drawCircle(color, radius = radius, center = center, style = stroke)
-        drawLine(
-            color,
-            Offset(center.x + radius * 0.72f, center.y + radius * 0.72f),
-            Offset(size.width * 0.82f, size.height * 0.82f),
-            strokeWidth = 1.4f,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-@Composable
-private fun PlusGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(14.dp)) {
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val arm = size.minDimension * 0.24f
-        drawLine(
-            color,
-            Offset(center.x - arm, center.y),
-            Offset(center.x + arm, center.y),
-            strokeWidth = 1.5f,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color,
-            Offset(center.x, center.y - arm),
-            Offset(center.x, center.y + arm),
-            strokeWidth = 1.5f,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-@Composable
 private fun ProjectFolderGlyph(
     expanded: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val fillColor = Color.Transparent
-    val strokeColor = TextSecondary.copy(alpha = 0.78f)
-    val stroke = remember(strokeColor) {
-        Stroke(width = 1.15f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-    }
-    Canvas(modifier.size(16.dp)) {
-        val w = size.width
-        val h = size.height
-        if (!expanded) {
-            val body = Path().apply {
-                moveTo(w * 0.506f, h * 0.272f)
-                lineTo(w * 0.558f, h * 0.281f)
-                lineTo(w * 0.592f, h * 0.281f)
-                lineTo(w * 0.812f, h * 0.281f)
-                cubicTo(w * 0.891f, h * 0.281f, w * 0.906f, h * 0.323f, w * 0.906f, h * 0.375f)
-                lineTo(w * 0.906f, h * 0.758f)
-                cubicTo(w * 0.906f, h * 0.809f, w * 0.871f, h * 0.844f, w * 0.848f, h * 0.844f)
-                lineTo(w * 0.165f, h * 0.844f)
-                cubicTo(w * 0.129f, h * 0.844f, w * 0.094f, h * 0.809f, w * 0.094f, h * 0.758f)
-                lineTo(w * 0.094f, h * 0.242f)
-                cubicTo(w * 0.094f, h * 0.191f, w * 0.129f, h * 0.156f, w * 0.165f, h * 0.156f)
-                lineTo(w * 0.383f, h * 0.156f)
-                cubicTo(w * 0.411f, h * 0.156f, w * 0.438f, h * 0.166f, w * 0.457f, h * 0.191f)
-                close()
-            }
-            drawPath(body, fillColor)
-            drawPath(body, strokeColor, style = stroke)
-        } else {
-            val back = Path().apply {
-                moveTo(w * 0.094f, h * 0.313f)
-                lineTo(w * 0.165f, h * 0.188f)
-                lineTo(w * 0.383f, h * 0.188f)
-                cubicTo(w * 0.411f, h * 0.188f, w * 0.438f, h * 0.198f, w * 0.457f, h * 0.223f)
-                lineTo(w * 0.506f, h * 0.304f)
-                lineTo(w * 0.812f, h * 0.304f)
-                cubicTo(w * 0.891f, h * 0.304f, w * 0.906f, h * 0.346f, w * 0.906f, h * 0.398f)
-                lineTo(w * 0.906f, h * 0.844f)
-                lineTo(w * 0.094f, h * 0.844f)
-                close()
-            }
-            val flap = Path().apply {
-                moveTo(w * 0.094f, h * 0.313f)
-                lineTo(w * 0.906f, h * 0.313f)
-                lineTo(w * 0.906f, h * 0.844f)
-                lineTo(w * 0.094f, h * 0.844f)
-                close()
-            }
-            drawPath(back, fillColor)
-            drawPath(back, strokeColor, style = stroke)
-            drawPath(flap, strokeColor, style = stroke)
-            drawLine(
-                strokeColor,
-                Offset(w * 0.094f, h * 0.313f),
-                Offset(w * 0.906f, h * 0.313f),
-                strokeWidth = 1.15f,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
+    LucideIcon(
+        if (expanded) Lucide.FolderOpen else Lucide.Folder,
+        TextSecondary.copy(alpha = 0.78f),
+        modifier.size(16.dp),
+    )
 }
 
 private data class ProjectSidebarEntry(
@@ -1297,28 +1192,7 @@ private fun ProjectMonogram(
 
 @Composable
 private fun WorktreeBranchGlyph(modifier: Modifier = Modifier) {
-    Canvas(modifier.size(14.dp)) {
-        val stroke = Stroke(width = 1.4f, cap = StrokeCap.Round)
-        val path = Path().apply {
-            moveTo(size.width * 0.72f, size.height * 0.18f)
-            lineTo(size.width * 0.72f, size.height * 0.82f)
-            moveTo(size.width * 0.72f, size.height * 0.42f)
-            cubicTo(
-                size.width * 0.72f, size.height * 0.22f,
-                size.width * 0.28f, size.height * 0.22f,
-                size.width * 0.28f, size.height * 0.42f,
-            )
-            cubicTo(
-                size.width * 0.28f, size.height * 0.62f,
-                size.width * 0.72f, size.height * 0.62f,
-                size.width * 0.72f, size.height * 0.82f,
-            )
-        }
-        drawPath(path, TextSecondary, style = stroke)
-        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.18f))
-        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.28f, size.height * 0.42f))
-        drawCircle(TextSecondary, radius = 2.2f, center = Offset(size.width * 0.72f, size.height * 0.82f))
-    }
+    LucideIcon(Lucide.GitBranch, TextSecondary, modifier.size(14.dp))
 }
 
 @Composable
@@ -1708,84 +1582,30 @@ private fun SessionRowDeleteButton(onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        TrashGlyph(color = tint)
-    }
-}
-
-@Composable
-private fun TrashGlyph(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(12.dp)) {
-        val stroke = Stroke(width = 1.2f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val inset = size.minDimension * 0.12f
-        val left = inset
-        val right = size.width - inset
-        val top = inset + size.height * 0.12f
-        val bottom = size.height - inset
-        val lidY = top
-        val bodyTop = top + size.height * 0.14f
-        drawLine(color, Offset(left, lidY), Offset(right, lidY), strokeWidth = 1.2f, cap = StrokeCap.Round)
-        drawLine(
-            color,
-            Offset(size.width / 2f - size.width * 0.08f, lidY - size.height * 0.1f),
-            Offset(size.width / 2f + size.width * 0.08f, lidY - size.height * 0.1f),
-            strokeWidth = 1.2f,
-            cap = StrokeCap.Round,
-        )
-        drawPath(
-            Path().apply {
-                moveTo(left + size.width * 0.08f, bodyTop)
-                lineTo(left + size.width * 0.14f, bottom)
-                lineTo(right - size.width * 0.14f, bottom)
-                lineTo(right - size.width * 0.08f, bodyTop)
-                close()
-            },
-            color = color,
-            style = stroke,
-        )
-        val midX = size.width / 2f
-        drawLine(color, Offset(midX, bodyTop + size.height * 0.06f), Offset(midX, bottom - size.height * 0.06f), strokeWidth = 1f, cap = StrokeCap.Round)
+        LucideIcon(Lucide.Trash2, tint, Modifier.size(12.dp))
     }
 }
 
 /**
- * Trailing arrow for a tab that leaves the app. Drawn rather than typeset: an "↗" glyph
- * resolves through font fallback, and a fallback with a taller line box grows the tab and
- * lifts its label off the shared baseline of a bottom-aligned tab row.
+ * Trailing arrow for a tab that leaves the app. Kept at 9.dp so it does not grow the tab
+ * and lift its label off the shared baseline of a bottom-aligned tab row.
  */
 @Composable
 internal fun ExternalLinkTabIcon() {
-    Canvas(Modifier.size(9.dp)) {
-        val inset = size.minDimension * 0.1f
-        val left = inset
-        val right = size.width - inset
-        val top = inset
-        val bottom = size.height - inset
-        val stroke = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
-        drawPath(
-            Path().apply {
-                moveTo(left, bottom)
-                lineTo(right, top)
-                moveTo(left + (right - left) * 0.38f, top)
-                lineTo(right, top)
-                lineTo(right, bottom - (bottom - top) * 0.38f)
-            },
-            color = TextSecondary,
-            style = stroke,
-        )
-    }
+    LucideIcon(Lucide.ExternalLink, TextSecondary, Modifier.size(9.dp))
 }
 
 @Composable
 private fun NewProjectChatButton(onClick: () -> Unit, size: androidx.compose.ui.unit.Dp = 19.dp) {
-    Image(
-        painter = painterResource(Res.drawable.project_new_chat),
-        contentDescription = "Start new chat",
-        colorFilter = ColorFilter.tint(Cyan),
+    LucideIcon(
+        Lucide.SquarePen,
+        Cyan,
         modifier = Modifier
             .size(size)
             .semantics { role = Role.Button }
             .testTag("project-new-chat")
             .clickable(onClick = onClick),
+        contentDescription = "Start new chat",
     )
 }
 
@@ -2103,7 +1923,7 @@ private fun ProjectRunbook(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(actionIconMarker(action.icon), color = Rust, fontFamily = MonoFont)
+                                ActionIcon(action.icon, Rust, Modifier.size(14.dp))
                                 Text(action.name, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                                 if (action.source == ConfigSource.Repo) {
                                     RepoSourceBadge()
@@ -2272,7 +2092,16 @@ private fun ActionDialog(projects: List<ActionProject>, initialProjectId: String
                 LabeledField("Name", name, { name = it }, Modifier.fillMaxWidth())
                 Text("Icon", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    iconOptions.forEach { option -> FilterPill("${actionIconMarker(option)} $option", icon == option, Rust) { icon = option } }
+                    iconOptions.forEach { option ->
+                        FilterPill(
+                            option,
+                            icon == option,
+                            Rust,
+                            leadingContent = {
+                                ActionIcon(option, Rust, Modifier.size(12.dp))
+                            },
+                        ) { icon = option }
+                    }
                 }
                 LabeledField("Command", command, { command = it }, Modifier.fillMaxWidth(), singleLine = false, minHeight = 130.dp)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

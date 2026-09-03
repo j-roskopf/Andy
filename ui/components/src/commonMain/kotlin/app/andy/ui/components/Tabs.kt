@@ -339,9 +339,9 @@ private fun FolderTabIndicator(
             val fillPath = Path().apply {
                 moveTo(0f, size.height)
                 lineTo(0f, cornerPx)
-                quadraticBezierTo(0f, 0f, cornerPx, 0f)
+                quadraticTo(0f, 0f, cornerPx, 0f)
                 lineTo(w - cornerPx, 0f)
-                quadraticBezierTo(w, 0f, w, cornerPx)
+                quadraticTo(w, 0f, w, cornerPx)
                 lineTo(w, size.height)
                 close()
             }
@@ -353,9 +353,9 @@ private fun FolderTabIndicator(
         val strokePath = Path().apply {
             moveTo(inset, size.height)
             lineTo(inset, cornerPx.coerceAtLeast(inset))
-            quadraticBezierTo(inset, inset, cornerPx.coerceAtLeast(inset), inset)
+            quadraticTo(inset, inset, cornerPx.coerceAtLeast(inset), inset)
             lineTo((w - cornerPx).coerceAtMost(w - inset), inset)
-            quadraticBezierTo(w - inset, inset, w - inset, cornerPx.coerceAtLeast(inset))
+            quadraticTo(w - inset, inset, w - inset, cornerPx.coerceAtLeast(inset))
             lineTo(w - inset, size.height)
         }
         drawPath(

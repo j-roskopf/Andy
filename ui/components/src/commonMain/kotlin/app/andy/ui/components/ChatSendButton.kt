@@ -1,6 +1,5 @@
 package app.andy.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,18 +13,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.chat_stop
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.andyTokens
-import org.jetbrains.compose.resources.painterResource
 
 /** Astryx ChatSendButton — primary icon-only md button, accent when sendable. */
 @Composable
@@ -74,42 +68,9 @@ fun ChatSendButton(
     ) {
         when {
             isSending -> Spinner(spinnerSize = SpinnerSize.Sm, shade = SpinnerShade.Subtle)
-            isStopShown -> Image(
-                painter = painterResource(Res.drawable.chat_stop),
-                contentDescription = null,
-                modifier = Modifier.size(AndyLayout.IconMd),
-                colorFilter = ColorFilter.tint(iconColor),
-            )
-            else -> SendArrowIcon(color = iconColor, modifier = Modifier.size(AndyLayout.IconMd))
+            isStopShown -> LucideIcon(Lucide.Square, iconColor, Modifier.size(AndyLayout.IconMd))
+            else -> LucideIcon(Lucide.ArrowUp, iconColor, Modifier.size(AndyLayout.IconMd))
         }
-    }
-}
-
-@Composable
-private fun SendArrowIcon(
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    androidx.compose.foundation.Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-        val stemWidth = w * 0.24f
-        val stemTop = h * 0.52f
-        val stemBottom = h * 0.84f
-        val corner = stemWidth / 2f
-        drawRoundRect(
-            color = color,
-            topLeft = androidx.compose.ui.geometry.Offset((w - stemWidth) / 2f, stemTop),
-            size = androidx.compose.ui.geometry.Size(stemWidth, stemBottom - stemTop),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner, corner),
-        )
-        val headPath = androidx.compose.ui.graphics.Path().apply {
-            moveTo(w / 2f, h * 0.16f)
-            lineTo(w * 0.84f, h * 0.56f)
-            lineTo(w * 0.16f, h * 0.56f)
-            close()
-        }
-        drawPath(headPath, color)
     }
 }
 

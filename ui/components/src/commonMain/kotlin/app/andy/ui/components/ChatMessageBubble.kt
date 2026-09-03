@@ -1,6 +1,5 @@
 package app.andy.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.testTag
@@ -37,12 +35,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.markdown_copy
 import app.andy.rememberCopyText
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -52,7 +47,6 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.andyTokens
 import kotlinx.coroutines.delay
-import org.jetbrains.compose.resources.painterResource
 
 enum class ChatBubbleSender {
     User,
@@ -104,29 +98,33 @@ fun ChatMessageBubble(
     }
     // Keep content clear of the compact curve. Metadata sits outside the bubble, so bottom
     // padding stays full even when a copy/timestamp row follows.
+    // Ghost assistant turns sit flush left so tool/thinking asides can indent past them.
     val horizontalPad = AndySpace.Space4
+    val startPad = if (variant == ChatBubbleVariant.Ghost) 0.dp else horizontalPad
     val verticalPadding = when (group) {
         ChatBubbleGroup.First -> PaddingValues(
-            start = horizontalPad,
+            start = startPad,
             end = horizontalPad,
             top = AndySpace.Space3,
             bottom = AndySpace.Space2,
         )
         ChatBubbleGroup.Middle -> PaddingValues(
-            start = horizontalPad,
+            start = startPad,
             end = horizontalPad,
             top = AndySpace.Space2,
             bottom = AndySpace.Space2,
         )
         ChatBubbleGroup.Last -> PaddingValues(
-            start = horizontalPad,
+            start = startPad,
             end = horizontalPad,
             top = AndySpace.Space2,
             bottom = AndySpace.Space3,
         )
         ChatBubbleGroup.Single -> PaddingValues(
-            horizontal = horizontalPad,
-            vertical = AndySpace.Space3,
+            start = startPad,
+            end = horizontalPad,
+            top = AndySpace.Space3,
+            bottom = AndySpace.Space3,
         )
     }
     Column(
@@ -163,7 +161,7 @@ fun ChatMessageBubble(
                     Modifier
                         .align(Alignment.Start)
                         .padding(
-                            start = horizontalPad + AndySpace.Space1,
+                            start = startPad + AndySpace.Space1,
                             end = horizontalPad,
                             top = if (alignEnd) 2.dp else 0.dp,
                             bottom = AndySpace.Space1,
@@ -268,21 +266,9 @@ fun ChatMessageCopyAction(
                 contentAlignment = Alignment.Center,
             ) {
                 if (justCopied) {
-                    Text(
-                        "✓",
-                        color = Green,
-                        fontSize = 12.sp,
-                        lineHeight = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                    )
+                    LucideIcon(Lucide.Check, Green, Modifier.size(12.dp))
                 } else {
-                    Image(
-                        painter = painterResource(Res.drawable.markdown_copy),
-                        contentDescription = null,
-                        modifier = Modifier.size(12.dp),
-                        colorFilter = ColorFilter.tint(TextSecondary.copy(alpha = 0.72f)),
-                    )
+                    LucideIcon(Lucide.Copy, TextSecondary.copy(alpha = 0.72f), Modifier.size(12.dp))
                 }
             }
         }

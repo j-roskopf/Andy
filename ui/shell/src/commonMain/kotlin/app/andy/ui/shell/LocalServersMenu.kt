@@ -40,8 +40,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.local_servers_globe
-import app.andy.andy.generated.resources.local_servers_refresh
 import app.andy.service.AndyServices
 import app.andy.service.LocalServerProcess
 import app.andy.ui.network.GlowingDot
@@ -58,6 +56,8 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 /**
  * Toolbar trigger for host localhost development servers. Panel content is hosted in the
@@ -361,29 +361,15 @@ private fun LocalServersPlaceholder(
 
 @Composable
 private fun LocalServersGlobeIcon(color: Color, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.local_servers_globe),
-        contentDescription = null,
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(Lucide.Globe, color, modifier)
 }
 
 @Composable
 private fun LocalServersRefreshIcon(color: Color, modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(Res.drawable.local_servers_refresh),
-        contentDescription = "Refresh",
-        modifier = modifier,
-        colorFilter = ColorFilter.tint(color),
-    )
+    LucideIcon(Lucide.RefreshCw, color, modifier, contentDescription = "Refresh")
 }
 
 @Composable
 private fun LocalServersStopIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val stroke = Stroke(width = size.minDimension * 0.14f, cap = StrokeCap.Round)
-        drawLine(color, Offset(size.width * 0.2f, size.height * 0.2f), Offset(size.width * 0.8f, size.height * 0.8f), stroke.width, StrokeCap.Round)
-        drawLine(color, Offset(size.width * 0.8f, size.height * 0.2f), Offset(size.width * 0.2f, size.height * 0.8f), stroke.width, StrokeCap.Round)
-    }
+    LucideIcon(Lucide.X, color, modifier)
 }
