@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.desktop.service.agents.mcpUrlWithCallerTaskId
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
@@ -214,6 +215,66 @@ class McpChatStartAutonomyInheritanceTest {
     }
 
     @Test
+    fun chatStartInheritsSandboxAndParentChatFromCallerWhenOmitted() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Full) { fake, socket ->
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("advise only"),
+                    "agent" to JsonPrimitive("Codex"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                    "autonomy" to JsonPrimitive("ReadOnly"),
+                ),
+            )
+            assertFalse(isError, text)
+            val draft = fake.startCalls.single().draft
+            assertEquals(AgentAutonomy.ReadOnly, draft.autonomy)
+            assertEquals(AgentSandboxMode.ReadOnly, draft.sandboxMode)
+            assertEquals("parent-1", draft.parentChatTaskId)
+        }
+    }
+
+    @Test
+    fun chatStartExplicitSandboxWinsOverCaller() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Full) { fake, socket ->
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("tight sandbox"),
+                    "agent" to JsonPrimitive("Codex"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                    "autonomy" to JsonPrimitive("ReadOnly"),
+                    "sandboxMode" to JsonPrimitive("ReadOnly"),
+                ),
+            )
+            assertFalse(isError, text)
+            val draft = fake.startCalls.single().draft
+            assertEquals(AgentSandboxMode.ReadOnly, draft.sandboxMode)
+            assertEquals("parent-1", draft.parentChatTaskId)
+        }
+    }
+
+    @Test
+    fun chatStartExplicitParentChatWinsOverCaller() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.Full) { fake, socket ->
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("side chat"),
+                    "agent" to JsonPrimitive("Codex"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                    "parentChatTaskId" to JsonPrimitive("other-parent"),
+                ),
+            )
+            assertFalse(isError, text)
+            assertEquals("other-parent", fake.startCalls.single().draft.parentChatTaskId)
+        }
+    }
+
+    @Test
     fun chatStartDefaultsToStandardWithoutCaller() = runBlocking {
         withHarness(parentAutonomy = AgentAutonomy.Full, seedParent = false) { fake, socket ->
             val (isError, text) = callTool(
@@ -353,6 +414,7 @@ private class FakeAutonomyAgentRunService : AgentRunService by UnavailableAgentR
         projectId: String? = null,
         cwd: String? = null,
         originDir: String? = null,
+        sandboxMode: AgentSandboxMode? = null,
     ) {
         _tasks.value = _tasks.value.filterNot { it.id == id } + AgentTask(
             id = id,
@@ -362,6 +424,7 @@ private class FakeAutonomyAgentRunService : AgentRunService by UnavailableAgentR
             status = AgentStatus.Working,
             createdAtMillis = 1,
             autonomy = autonomy,
+            sandboxMode = sandboxMode,
             projectId = projectId,
             cwd = cwd,
             originDir = originDir,
@@ -379,6 +442,8 @@ private class FakeAutonomyAgentRunService : AgentRunService by UnavailableAgentR
             status = AgentStatus.Working,
             createdAtMillis = 1,
             autonomy = draft.autonomy,
+            sandboxMode = draft.sandboxMode,
+            parentChatTaskId = draft.parentChatTaskId,
             attachAndyMcp = draft.attachAndyMcp,
         )
         _tasks.value = _tasks.value + task

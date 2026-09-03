@@ -1,0 +1,16 @@
+{
+    "andy-status": {
+        "PreInvocation": [
+            {
+                "type": "command",
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" working empty"
+            }
+        ],
+        "Stop": [
+            {
+                "type": "command",
+                "command": "\"$HOME/.andy/bin/andy-status-hook.sh\" done stop fully-idle"
+            }
+        ]
+    }
+}

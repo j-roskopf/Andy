@@ -113,7 +113,10 @@ class AgentTerminalSessionLifecycleTest {
             assertTrue(manager.isInteractive(taskId))
             assertNotNull(manager.rustTerminal(taskId))
 
-            // Simulate switching chats several times: release viewer, then reopen.
+            // Simulate switching chats / destinations: releaseViewerOnly is what
+            // setChatViewing(false) does for TmuxAttachBackend. RetainedDestination keeps
+            // AgentTerminalSurface mounted, so returning must attachExisting again — otherwise
+            // the UI stays on "Waiting for terminal…".
             repeat(4) {
                 manager.releaseViewerOnly(taskId)
                 assertFalse(manager.isViewerAlive(taskId), "viewer should drop on switch $it")

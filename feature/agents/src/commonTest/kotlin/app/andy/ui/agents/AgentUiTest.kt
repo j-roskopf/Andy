@@ -190,6 +190,39 @@ class AgentUiTest {
     }
 
     @Test
+    fun oldTerminalThreadHidesComposerWhileReconnectingUntilFailure() {
+        val done = task(AgentStatus.Done)
+        assertFalse(isChatTerminalInteractive(done, terminalLive = false))
+
+        // When the terminal UI can reconnect, suppress the composer to prevent the text field from flashing
+        assertFalse(
+            showsChatFollowUpComposer(
+                interactive = isChatTerminalInteractive(done, terminalLive = false),
+                hasStagedImages = false,
+                canReconnect = true,
+            ),
+        )
+
+        // If the user has staged images, composer still appears even if reconnecting
+        assertTrue(
+            showsChatFollowUpComposer(
+                interactive = isChatTerminalInteractive(done, terminalLive = false),
+                hasStagedImages = true,
+                canReconnect = true,
+            ),
+        )
+
+        // Once reattach fails (or if reconnect is impossible), composer appears for read-only replay
+        assertTrue(
+            showsChatFollowUpComposer(
+                interactive = isChatTerminalInteractive(done, terminalLive = false),
+                hasStagedImages = false,
+                canReconnect = false,
+            ),
+        )
+    }
+
+    @Test
     fun isElapsedLiveOnlyWhileWorking() {
         assertTrue(isElapsedLive(task()))
         assertFalse(isElapsedLive(task(AgentStatus.Done)))

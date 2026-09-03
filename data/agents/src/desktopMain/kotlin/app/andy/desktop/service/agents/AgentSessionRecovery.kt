@@ -129,7 +129,7 @@ private fun AgentTask.asCompletedTurn(): AgentTask = copy(
     finishedAtMillis = finishedAtMillis ?: System.currentTimeMillis(),
 )
 
-/** Legacy status.json reader — badge authority is screen scrape; kept for MCP/debug artifacts. */
+/** Hook/title status.json reader — badge authority for Antigravity; MCP/debug for others. */
 internal fun readLatestHookStatus(artifactDir: File): AgentStatus? {
     val file = File(artifactDir, "status.json")
     if (!file.isFile) return null

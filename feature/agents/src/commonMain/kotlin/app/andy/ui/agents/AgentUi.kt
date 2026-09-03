@@ -479,15 +479,21 @@ fun isChatRelaunching(task: AgentTask): Boolean =
     task.status == null && task.startedAtMillis != null && task.finishedAtMillis == null
 
 /**
- * True when Andy's own composer belongs under the terminal: always in read-only mode
- * (it is the only way to type), and while a live CLI holds staged images that must
- * ship with a composed message rather than be typed into the PTY.
+ * True when Andy's own composer belongs under the terminal: in read-only mode (unless the
+ * terminal can reconnect to its live CLI), and while a live CLI holds staged images that
+ * must ship with a composed message rather than be typed into the PTY.
  *
  * [interactive] should track [isChatTerminalInteractive], not viewer attach state —
  * delaying on attach briefly shows the composer and steals terminal height (a layout flash).
+ * Likewise, an old terminal thread that can reconnect suppresses the composer while
+ * reattaching so the text field does not briefly flash on selection. If reconnect fails,
+ * [canReconnect] flips false and the composer appears.
  */
-fun showsChatFollowUpComposer(interactive: Boolean, hasStagedImages: Boolean): Boolean =
-    !interactive || hasStagedImages
+fun showsChatFollowUpComposer(
+    interactive: Boolean,
+    hasStagedImages: Boolean,
+    canReconnect: Boolean = false,
+): Boolean = (!interactive && !canReconnect) || hasStagedImages
 
 /** True while the card timer should keep ticking with wall clock. */
 fun isElapsedLive(task: AgentTask): Boolean =

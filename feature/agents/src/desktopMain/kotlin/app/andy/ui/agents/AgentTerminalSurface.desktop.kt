@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.LocalSuppressHeavyweightSurfaces
 import app.andy.desktop.service.DesktopWorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
@@ -80,6 +81,9 @@ actual fun AgentTerminalSurface(
     val revisionFlow = remember(agentRuns) { agentRuns?.terminalSessionsRevision ?: NoSessionsRevision }
     val sessionsRevision by revisionFlow.collectAsState()
     val effectiveSessionActive = sessionActive
+    // RetainedDestination (and modal overlays) hide this pane without disposing it. Leaving
+    // Projects/Agents clears viewing and releases the tmux viewer; coming back must reattach.
+    val suppressHeavyweight = LocalSuppressHeavyweightSurfaces.current
 
     var liveRust by remember(taskId) { mutableStateOf<RustTerminalBackend?>(null) }
     var historyReplay by remember(taskId) { mutableStateOf<RustScrollbackReplay?>(null) }
@@ -89,12 +93,7 @@ actual fun AgentTerminalSurface(
     var reconnecting by remember(taskId) { mutableStateOf(false) }
     val releaseViewer = remember(agentRuns) { agentRuns?.let { runs -> runs::releaseTerminalViewer } }
 
-    LaunchedEffect(taskId, effectiveSessionActive, sessionsRevision) {
-        if (!effectiveSessionActive) return@LaunchedEffect
-        liveRust = agentRuns?.rustTerminal(taskId)
-    }
-
-    LaunchedEffect(taskId, effectiveSessionActive) {
+    LaunchedEffect(taskId, effectiveSessionActive, sessionsRevision, suppressHeavyweight) {
         fun clearHistory() {
             historyReplay?.close()
             historyReplay = null
@@ -115,18 +114,36 @@ actual fun AgentTerminalSurface(
             }
         }
 
+        // Hidden under RetainedDestination / a modal: drop the Compose canvas so Metal/Swing
+        // hosts leave the tree, but do not release the viewer here — setChatViewing(false)
+        // already did that for navigation, and dialogs should keep a live client.
+        if (suppressHeavyweight) {
+            liveRust = null
+            reconnecting = false
+            clearHistory()
+            return@LaunchedEffect
+        }
+
         if (!effectiveSessionActive) {
             liveRust = null
             releaseViewer?.invoke(taskId)
             if (!reattachAttempted && agentRuns?.canReattachSession(taskId) == true) {
                 reattachAttempted = true
                 reconnecting = true
-                runCatching { agentRuns.reattachSession(taskId) }
-                // Don't show the (possibly stale/duplicated) transcript while we try to
-                // reconnect. If the session flips live, effectiveSessionActive recomposes
-                // true and the branch below takes over; if the attempt fails, the task
-                // rolls back to inactive and this effect re-runs with reattachAttempted
-                // already true, falling through to the transcript below.
+                val result = runCatching { agentRuns.reattachSession(taskId) }
+                if (result.isFailure) {
+                    reconnecting = false
+                    openHistoryIfAvailable()
+                    return@LaunchedEffect
+                }
+                val deadline = System.currentTimeMillis() + 10_000
+                while (System.currentTimeMillis() < deadline && !effectiveSessionActive && agentRuns.canReattachSession(taskId)) {
+                    delay(100)
+                }
+                if (!effectiveSessionActive) {
+                    reconnecting = false
+                    openHistoryIfAvailable()
+                }
                 return@LaunchedEffect
             }
             reconnecting = false

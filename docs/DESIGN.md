@@ -16,10 +16,10 @@ There are no gradients, neon fills, or decorative chrome.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| void | `#08090a` | deepest window and dark primary text |
-| carbon | `#0f1011` | dark project rail and header wells |
-| obsidian | `#161718` | dark transcript canvas and pane surface |
-| graphite | `#23252a` | dark composer, cards, and user turns |
+| background / void | `#181818` | deepest window and dark primary canvas |
+| tertiary / carbon | `#1f1f1f` | dark project rail, header wells, and context bar shape |
+| obsidian | `#181818` | dark transcript canvas and pane surface |
+| surface / graphite | `#2b2b2b` | dark composer, cards, and user turns |
 | smoke | `#383b3f` | dark selected rows and hairlines |
 | ash | `#62666d` | borders, disabled text, and muted controls |
 | fog | `#8a8f98` | tertiary text and metadata |
@@ -82,10 +82,10 @@ appearance is treated as the dark-mode rendering of the same tokens above.
 
 Dark mode uses the same restrained editorial relationships against the supplied neutral scale:
 
-- Window and deepest canvas: `#08090a` (void).
-- Project rail and header wells: `#0f1011` (carbon).
-- Transcript content: `#161718` (obsidian).
-- Composer, cards, and user turns: `#23252a` (graphite), with `#383b3f` (smoke) for
+- Window and deepest canvas: `#181818` (background / void).
+- Project rail and header wells: `#1f1f1f` (tertiary / carbon).
+- Transcript content: `#181818` (obsidian).
+- Composer, cards, and user turns: `#2b2b2b` (surface / graphite), with `#383b3f` (smoke) for
   selected rows and hairlines.
 - Primary text: `#ffffff` (paper); supporting text uses `#d0d6e0` (mist) and `#8a8f98` (fog).
 - Strong borders and disabled controls use `#62666d` (ash). No blue overlay or extra composer

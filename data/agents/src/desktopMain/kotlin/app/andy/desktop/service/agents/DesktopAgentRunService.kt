@@ -36,6 +36,7 @@ import app.andy.model.WorktreeNode
 import app.andy.model.GitBranchInfo
 import app.andy.model.WorkingTreeStatus
 import app.andy.model.fallbackTitle
+import app.andy.model.shouldAdoptProviderSessionTitle
 import app.andy.model.AgentStatus
 import app.andy.model.hasVendorCli
 import app.andy.model.isLocalModelBackend
@@ -361,7 +362,14 @@ class DesktopAgentRunService(
     }
 
     /** Observed by [app.andy.ui.agents.AgentTerminalSurface] so the terminal mounts when the PTY appears. */
-    val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
+    override val terminalSessionsRevision: StateFlow<Long> get() = terminals.sessionsRevision
+
+    private val failedReattachTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun markReattachFailed(taskId: String) {
+        failedReattachTaskIds.add(taskId)
+        terminals.scheduleSessionsRevisionBump()
+    }
 
     override val attachedTerminalTaskIds: StateFlow<Set<String>> get() = terminals.attachedTaskIds
 
@@ -1504,6 +1512,7 @@ class DesktopAgentRunService(
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
     ) {
+        failedReattachTaskIds.remove(taskId)
         var existing = currentTask(taskId) ?: return
         if (existing.userInputRequest != null) return
         val scheduledRecovery = taskId in scheduledConnectionRecoveryResumes
@@ -1677,6 +1686,7 @@ class DesktopAgentRunService(
     }
 
     override fun canReattachSession(taskId: String): Boolean {
+        if (taskId in failedReattachTaskIds) return false
         val task = currentTask(taskId) ?: return false
         if (task.userInputRequest != null) return false
         if (task.lane == AgentLaneKind.Acp) {
@@ -1706,11 +1716,14 @@ class DesktopAgentRunService(
                     }
                 }.isSuccess
                 if (started) {
+                    failedReattachTaskIds.remove(taskId)
                     acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
                     updateTask(taskId) {
                         it.copy(status = AgentStatus.Done, resumable = true, statusConfident = true, unread = false)
                     }
                     persist()
+                } else {
+                    markReattachFailed(taskId)
                 }
             }
             return
@@ -1721,17 +1734,27 @@ class DesktopAgentRunService(
             handles.remove(taskId)?.job?.cancel()
             terminals.stop(taskId)
         }
-        val taskForResume = resumeTaskForReattach(task) ?: return
-        val adapter = adapters[task.runtimeKind()] ?: return
-        runCatching {
+        val taskForResume = resumeTaskForReattach(task) ?: run {
+            markReattachFailed(taskId)
+            return
+        }
+        val adapter = adapters[task.runtimeKind()] ?: run {
+            markReattachFailed(taskId)
+            return
+        }
+        val cmd = runCatching {
             adapter.buildInteractiveResumeCommand(
-                binaryFor(task.runtimeKind()) ?: return,
+                binaryFor(task.runtimeKind()) ?: return@runCatching null,
                 taskForResume,
                 null,
                 followUp = null,
                 followUpImagePaths = emptyList(),
             )
-        }.getOrNull() ?: return
+        }.getOrNull()
+        if (cmd == null) {
+            markReattachFailed(taskId)
+            return
+        }
 
         // Keep Done + finishedAtMillis: this is view-only (no new turn). Clearing them
         // forced Working→Done on the resumed idle prompt and dinged a false "finished".
@@ -1760,6 +1783,7 @@ class DesktopAgentRunService(
             }
             val launched = withTimeoutOrNull(20_000) { terminalReady.await() } == true
             if (!launched && !terminals.isAlive(taskId)) {
+                markReattachFailed(taskId)
                 upsertTask(
                     rollbackSnapshot.copy(
                         status = AgentStatus.Done,
@@ -2376,6 +2400,7 @@ class DesktopAgentRunService(
             return
         }
         writeLaunchDiagnostics(taskId, binary, argv, projectEnv)
+        failedReattachTaskIds.remove(taskId)
         onTerminalStarted()
 
         if (agyMintLock != null) {
@@ -3382,6 +3407,7 @@ class DesktopAgentRunService(
         }
         handles.remove(taskId)
         terminals.clear(taskId)
+        failedReattachTaskIds.remove(taskId)
         acpArtifactJobs.remove(taskId)?.cancel()
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
@@ -5765,6 +5791,15 @@ class DesktopAgentRunService(
         accepted.filterIsInstance<AgentEvent.AvailableCommands>().forEach { event ->
             task?.let { recordSlashCommands(it.agent, it.worktreePath ?: it.cwd, event.commands) }
         }
+        var previousProviderTitle = eventFlows[taskId]?.value
+            ?.asReversed()
+            ?.filterIsInstance<AgentEvent.SessionInfo>()
+            ?.firstOrNull()
+            ?.title
+        accepted.filterIsInstance<AgentEvent.SessionInfo>().forEach { event ->
+            adoptProviderSessionTitleIfEnabled(taskId, event.title, previousProviderTitle)
+            previousProviderTitle = event.title.trim()
+        }
         if (isAcp) {
             accepted.forEach { event ->
                 if (event is AgentEvent.ToolCall) acpTranscriptStore.upsert(taskId, event)
@@ -5780,6 +5815,31 @@ class DesktopAgentRunService(
             if (isAcp) next else next.takeLast(MAX_TERMINAL_EVENTS_IN_MEMORY)
         }
         return accepted
+    }
+
+    private fun adoptProviderSessionTitleIfEnabled(
+        taskId: String,
+        providerTitle: String,
+        previousProviderTitle: String?,
+    ) {
+        val task = currentTask(taskId) ?: return
+        val enabled = workspaceStore.state?.value?.agentAdoptProviderSessionTitles ?: true
+        if (!shouldAdoptProviderSessionTitle(
+                enabled = enabled,
+                currentTitle = task.title,
+                prompt = task.prompt,
+                latestPrompt = task.latestPrompt,
+                providerTitle = providerTitle,
+                previousProviderTitle = previousProviderTitle,
+            )
+        ) {
+            return
+        }
+        val nextTitle = providerTitle.trim()
+        updateTask(taskId) { current ->
+            if (current.title == nextTitle) current else current.copy(title = nextTitle)
+        }
+        scope.launch { persist() }
     }
 
     private fun mergeAcpTranscriptEvent(
@@ -5933,6 +5993,18 @@ class DesktopAgentRunService(
                 markRead(taskId)
                 if (!alreadyViewing) {
                     refreshAcpTranscriptFromDisk(taskId)
+                }
+                // RetainedDestination keeps the chat pane mounted while Projects/Agents is
+                // off-screen, so leaving clears viewing and releaseViewerOnly drops the
+                // BossTerm client. Returning must reattach — the surface's attach effect
+                // alone may not restart when taskId/sessionActive keys are unchanged.
+                val task = currentTask(taskId)
+                if (task != null &&
+                    task.lane != AgentLaneKind.Acp &&
+                    !terminals.isViewerAlive(taskId) &&
+                    terminals.isAlive(taskId)
+                ) {
+                    scope.launch { attachTerminalIfNeeded(taskId) }
                 }
             }
             else -> {

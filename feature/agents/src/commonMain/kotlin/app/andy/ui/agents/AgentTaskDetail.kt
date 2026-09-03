@@ -283,6 +283,7 @@ fun AgentTaskDetail(
     val knownAgentTasks by services.agentRuns.tasks.collectAsState()
     val acpSessionLive = services.agentRuns.isLaneLive(task.id)
     val acpTask = task.lane == AgentLaneKind.Acp
+    val sessionsRevision by services.agentRuns.terminalSessionsRevision.collectAsState()
     // Live PTY can accept input directly — hide Andy's queue/follow-up field to avoid dual entry,
     // unless the user has staged images that should ship with the next composed message.
     // Gate on session interactivity only (not attachedTerminalIds): waiting on attach briefly
@@ -293,10 +294,17 @@ fun AgentTaskDetail(
         isChatTerminalInteractive(task, task.id in interactiveTerminalIds)
     }
     val sessionActive = if (acpTask) task.isActive || acpSessionLive else terminalSessionActive
+    val canReconnectTerminal = !acpTask && remember(task.id, sessionsRevision, interactiveTerminalIds) {
+        services.agentRuns.canReattachSession(task.id)
+    }
     val showFollowUpComposer = if (acpTask) {
         supportsResume
     } else {
-        supportsResume && showsChatFollowUpComposer(terminalSessionActive, followUpImagePaths.isNotEmpty())
+        supportsResume && showsChatFollowUpComposer(
+            interactive = terminalSessionActive,
+            hasStagedImages = followUpImagePaths.isNotEmpty(),
+            canReconnect = canReconnectTerminal,
+        )
     }
     val turnElapsedEnd = rememberElapsedEndMillis(task.id, task.finishedAtMillis, task)
     val showCompletedTurnChrome = showsCompletedTurnChrome(task)

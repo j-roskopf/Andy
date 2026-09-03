@@ -1199,6 +1199,12 @@ private fun AgentChatListPanel(
             onCheckedChange = { value -> update { it.copy(agentPinPriorityChats = value) } },
             description = "Working, blocked, unread, and launching chats sit in a separate section above the rest. Failed chats stay there for a day, or until you read them.",
         )
+        SettingsToggleRow(
+            label = "Use provider-generated chat titles",
+            checked = workspace.agentAdoptProviderSessionTitles,
+            onCheckedChange = { value -> update { it.copy(agentAdoptProviderSessionTitles = value) } },
+            description = "When an ACP provider sends a session title summarizing the prompt, replace Andy's truncated-prompt title in the chat list. Explicit titles stay put.",
+        )
     }
 }
 

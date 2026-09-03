@@ -138,6 +138,11 @@ class AcpPermissionBridge(
         val reject = options.filter {
             it.kind == PermissionOptionKind.REJECT_ONCE || it.kind == PermissionOptionKind.REJECT_ALWAYS
         }
+        // ReadOnly / plan mode must never auto-approve edits, even when the parent handed
+        // down a full sandbox bypass (advisors inherit network approvals but not write access).
+        if (toolCall.kind == ToolKind.EDIT && (planMode || autonomy == AgentAutonomy.ReadOnly)) {
+            return null
+        }
         return when {
             effectiveFullBypass() -> allow.firstOrNull() ?: reject.firstOrNull()
             toolCall.kind == ToolKind.READ || toolCall.kind == ToolKind.SEARCH || toolCall.kind == ToolKind.THINK ->

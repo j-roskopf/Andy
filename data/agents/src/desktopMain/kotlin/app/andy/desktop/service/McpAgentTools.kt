@@ -10,8 +10,10 @@ import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.AgentSandboxMode
 import app.andy.model.acpSupported
 import app.andy.model.defaultLane
+import app.andy.model.defaultSandboxMode
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -69,9 +71,10 @@ private val agentToolsJson = Json { encodeDefaults = true; ignoreUnknownKeys = t
  * [ProjectWorkflowService].
  *
  * @param callerTaskId When this MCP session is bound to an Andy chat (HTTP URL
- *   `?andyTaskId=` or an explicit `callerTaskId` arg), omitted `autonomy` on
- *   [chat.start] inherits that parent's autonomy so orchestrated workers match
- *   the parent's permission dial. Omitted project and directory values inherit
+ *   `?andyTaskId=` or an explicit `callerTaskId` arg), omitted `autonomy` and
+ *   `sandboxMode` on [chat.start] inherit from that parent so orchestrated
+ *   workers match the parent's permission dial. Omitted `parentChatTaskId`
+ *   defaults to the parent id. Omitted project and directory values inherit
  *   the same parent's project context as well.
  */
 fun Server.registerAgentProjectTools(
@@ -509,7 +512,11 @@ fun Server.registerAgentProjectTools(
             },
             "parentChatTaskId" to buildJsonObject {
                 put("type", "string")
-                put("description", "Optional Andy task id of the chat this side chat is opened from")
+                put(
+                    "description",
+                    "Optional Andy task id of the chat this side chat is opened from. " +
+                        "When omitted, defaults to callerTaskId / the MCP session's andyTaskId.",
+                )
             },
             "attachAndyMcp" to buildJsonObject {
                 put("type", "boolean")
@@ -548,13 +555,22 @@ fun Server.registerAgentProjectTools(
                         "otherwise Standard.",
                 )
             },
+            "sandboxMode" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "ReadOnly | WorkspaceWrite | None. When omitted, inherits the parent's " +
+                        "sandbox (or the parent's autonomy default) so Full/allow-everything " +
+                        "parents keep network approvals on ReadOnly advisors.",
+                )
+            },
             "callerTaskId" to buildJsonObject {
                 put("type", "string")
                 put(
                     "description",
-                    "Optional Andy task id of the orchestrating parent. When autonomy is " +
-                        "omitted, the child inherits that parent's autonomy. The andy CLI " +
-                        "injects ANDY_TASK_ID here automatically.",
+                    "Optional Andy task id of the orchestrating parent. When autonomy / " +
+                        "sandboxMode / parentChatTaskId are omitted, the child inherits from " +
+                        "this parent. The andy CLI injects ANDY_TASK_ID here automatically.",
                 )
             },
             "contextBundleIds" to buildJsonObject {
@@ -593,6 +609,17 @@ fun Server.registerAgentProjectTools(
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                 ?: error("unknown autonomy: $name")
         } ?: parentTask?.autonomy ?: AgentAutonomy.Standard
+        val sandboxModeName = str(args, "sandboxMode")
+        val sandboxMode = sandboxModeName?.let { name ->
+            AgentSandboxMode.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                ?: error("unknown sandboxMode: $name")
+        } ?: parentTask?.let { parent ->
+            // If the child explicitly asks for ReadOnly but omits sandboxMode, we must not
+            // inherit a permissive/unset sandbox from the parent (or you can end up with
+            // a supposedly read-only task getting `sandboxMode=None`).
+            val inherited = parent.sandboxMode ?: parent.autonomy.defaultSandboxMode()
+            if (autonomy == AgentAutonomy.ReadOnly) AgentSandboxMode.ReadOnly else inherited
+        }
         val runtime = parseLocalAgentRuntime(str(args, "runtime"))
             ?: parentTask?.takeIf { it.agent == agent }?.localRuntime
         val model = str(args, "model")?.takeIf { it.isNotBlank() }?.let { raw ->
@@ -627,9 +654,11 @@ fun Server.registerAgentProjectTools(
                 useWorktree = useWorktree,
                 existingWorktreePath = existingWorktreePath,
                 baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
-                parentChatTaskId = str(args, "parentChatTaskId")?.takeIf { it.isNotBlank() },
+                parentChatTaskId = str(args, "parentChatTaskId")?.takeIf { it.isNotBlank() }
+                    ?: parentTask?.id,
                 attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
+                sandboxMode = sandboxMode,
                 model = model,
                 lane = str(args, "lane")?.let { name ->
                     AgentLaneKind.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
@@ -1071,7 +1100,7 @@ fun Server.registerAgentProjectTools(
 
     register(
         name = "agent_status",
-        description = "Optional: report agent turn status to Andy (writes .andy/<taskId>/status.json). Andy already infers working/idle from terminal output.",
+        description = "Optional: report agent turn status to Andy (writes .andy/<taskId>/status.json). For most agents Andy infers working/idle from the terminal; Antigravity also uses this file from hooks/title agent_state.",
         properties = mapOf(
             "taskId" to buildJsonObject {
                 put("type", "string")

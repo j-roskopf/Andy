@@ -237,6 +237,56 @@ HOOK
 fi
 chmod +x "${HOOK_DEST}"
 
+# Antigravity title helper (agent_state → status.json + OSC markers).
+AGY_TITLE_DEST="${BIN_DIR}/andy-agy-title.sh"
+if download_release_asset '^andy-agy-title\\.sh$' "${TMP}/andy-agy-title.sh"; then
+  mv -f "${TMP}/andy-agy-title.sh" "${AGY_TITLE_DEST}"
+else
+  cat >"${AGY_TITLE_DEST}" <<'AGYTITLE'
+#!/bin/sh
+# Andy-managed Antigravity title — do not edit.
+payload=$(cat 2>/dev/null || true)
+
+state=$(printf '%s' "$payload" | grep -o '"agent_state"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+pending=0
+if printf '%s' "$payload" | grep -Eq '"tool_confirmation_pending"[[:space:]]*:[[:space:]]*true'; then
+  pending=1
+fi
+
+if [ "$pending" -eq 1 ]; then
+  status=blocked
+  marker=andy:blocked
+else
+  case "$state" in
+    idle)
+      status=done
+      marker=andy:idle
+      ;;
+    thinking|working|tool_use)
+      status=working
+      marker=andy:working
+      ;;
+    *)
+      status=""
+      marker=""
+      ;;
+  esac
+fi
+
+HOOK="${HOME}/.andy/bin/andy-status-hook.sh"
+if [ -x "$HOOK" ] && [ -n "$status" ]; then
+  printf '' | "$HOOK" "$status" >/dev/null 2>&1 || true
+fi
+
+if [ -n "$marker" ]; then
+  printf 'agy %s\n' "$marker"
+else
+  printf 'agy\n'
+fi
+AGYTITLE
+fi
+chmod +x "${AGY_TITLE_DEST}"
+
 # Record installed release so Andy Settings → Updates can show the local version.
 RELEASE_TAG=""
 RELEASE_HTML_URL=""

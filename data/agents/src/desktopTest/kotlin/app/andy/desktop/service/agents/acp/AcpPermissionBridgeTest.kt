@@ -234,6 +234,52 @@ class AcpPermissionBridgeTest {
     }
 
     @Test
+    fun readOnlyWithInheritedNoneSandboxAutoAllowsExecute() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val subject = bridge(
+            autonomy = AgentAutonomy.ReadOnly,
+            sandboxMode = AgentSandboxMode.None,
+            onPending = { pending = it },
+        )
+        val response = subject.request(toolCall(), options, null)
+        assertEquals(allowOnce.optionId, selectedOptionId(response))
+        assertNull(pending)
+    }
+
+    @Test
+    fun readOnlyWithInheritedNoneSandboxStillPromptsForEdit() = runBlocking {
+        var pending: PendingAcpPermission? = null
+        val cwd = File.createTempFile("acp-permission", null).parentFile!!
+        val inside = File(cwd, "src/Main.kt").apply { parentFile?.mkdirs(); writeText("fun main() {}") }
+        val subject = AcpPermissionBridge(
+            taskId = "task-1",
+            autonomy = AgentAutonomy.ReadOnly,
+            planMode = false,
+            sandboxMode = AgentSandboxMode.None,
+            confirmToolCalls = false,
+            cwd = cwd,
+            onPending = { pending = it },
+            onResolved = { _, _, _, _ -> },
+        )
+        val editCall = SessionUpdate.ToolCallUpdate(
+            toolCallId = ToolCallId("edit-1"),
+            title = "edit Main.kt",
+            kind = ToolKind.EDIT,
+            status = null,
+            content = null,
+            locations = listOf(com.agentclientprotocol.model.ToolCallLocation(inside.path)),
+            rawInput = null,
+            rawOutput = null,
+        )
+        coroutineScope {
+            val deferred = async { subject.request(editCall, options, null) }
+            while (pending == null) yield()
+            assertTrue(subject.respond(pending!!.request.id, rejectOnce.name))
+            assertEquals(rejectOnce.optionId, selectedOptionId(deferred.await()))
+        }
+    }
+
+    @Test
     fun planModePromptsForWorkspaceEdit() = runBlocking {
         var pending: PendingAcpPermission? = null
         val cwd = File.createTempFile("acp-permission", null).parentFile!!

@@ -151,6 +151,11 @@ data class WorkspaceState(
     val agentMessageDeliveryMode: AgentMessageDeliveryMode = AgentMessageDeliveryMode.Immediate,
     /** Pin working, blocked, unread, and failed chats in a separate section at the top of chat lists. */
     val agentPinPriorityChats: Boolean = false,
+    /**
+     * When true, ACP `session_info_update` titles replace Andy's prompt-derived chat title
+     * (and can refine a previously adopted provider title). Explicit titles are left alone.
+     */
+    val agentAdoptProviderSessionTitles: Boolean = true,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
     /** Project ids whose chat lists are collapsed in the Projects sidebar. */

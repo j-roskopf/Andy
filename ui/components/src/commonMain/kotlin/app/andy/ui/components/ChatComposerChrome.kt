@@ -46,6 +46,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -118,7 +119,9 @@ fun ChatComposerLayout(
     Column(modifier) {
         if (hasUpperArea) {
             ChatComposerHeaderArea(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth(0.96f)
+                    .align(Alignment.CenterHorizontally),
             ) {
                 if (contextBar != null) {
                     contextBar()
@@ -162,26 +165,36 @@ fun ChatComposerLayout(
     }
 }
 
-/**
- * Quiet strip above the input frame for context (git/temporary) and attachments.
- * No fill or shadow — a second raised panel next to the composer reads as competing chrome.
- */
+/** Fixed header area above the input frame for context (git/temporary) and attachments (images/skills). */
 @Composable
 private fun ChatComposerHeaderArea(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val shape = RoundedCornerShape(
+        topStart = AndyRadius.Sheet,
+        topEnd = AndyRadius.Sheet,
+        bottomStart = HeaderAreaBottomRadius,
+        bottomEnd = HeaderAreaBottomRadius,
+    )
     Column(
-        modifier = modifier.padding(
-            start = AndySpace.Space3,
-            end = AndySpace.Space3,
-            top = AndySpace.Space1,
-            bottom = AndySpace.Space2,
-        ),
+        modifier = modifier
+            .shadow(elevation = 1.dp, shape = shape, clip = false)
+            // Tertiary / rail / well tone — distinct from SurfacePopover (composer / chat chrome) in every mode.
+            .background(AndyColors.SidebarBg, shape)
+            .padding(
+                start = AndySpace.Space3,
+                end = AndySpace.Space3,
+                top = AndySpace.Space2,
+                bottom = AndySpace.Space2,
+            ),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         content = content,
     )
 }
+
+/** Soft bottom corners on the strip above the chat frame — just enough to read as rounded. */
+private val HeaderAreaBottomRadius: Dp = 4.dp
 
 /** Collapsible flow row for referenced files, skills, and images in the composer header area. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -555,7 +568,7 @@ private fun ChatComposerBottomBar(
     }
 }
 
-/** Model selector chip — sparkle icon + label + chevron (Astryx full-featured composer). */
+/** Model selector chip — label + chevron (Astryx full-featured composer). */
 @Composable
 fun ComposerModelChip(
     text: String,
@@ -570,12 +583,6 @@ fun ComposerModelChip(
         modifier = modifier,
         enabled = enabled,
         showBackground = false,
-        leadingContent = {
-            ComposerSparkleGlyph(
-                color = if (enabled) TextSecondary else AndyColors.TextDisabled,
-                modifier = Modifier.size(14.dp),
-            )
-        },
     )
 }
 

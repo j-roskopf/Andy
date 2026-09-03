@@ -255,6 +255,10 @@ internal fun AgentEvent.toWire(): JsonObject = buildJsonObject {
                 },
             )
         }
+        is AgentEvent.SessionInfo -> {
+            put("type", "session-info")
+            put("title", title)
+        }
         is AgentEvent.PermissionRequest -> {
             put("type", "permission")
             put("requestId", requestId)

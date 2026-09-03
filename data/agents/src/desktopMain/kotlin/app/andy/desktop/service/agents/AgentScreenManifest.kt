@@ -669,6 +669,31 @@ private val CursorScreenManifest: List<ScreenRule> = listOf(
 )
 
 private val AntigravityScreenManifest: List<ScreenRule> = listOf(
+    // Title script (andy-agy-title.sh) encodes agent_state / tool_confirmation_pending.
+    ScreenRule(
+        id = "andy_osc_title_blocked",
+        state = ScreenState.Blocked,
+        priority = 1200,
+        region = ScreenRegion.OscTitle,
+        visibleBlocker = true,
+        gate = ScreenGate(contains = listOf("andy:blocked")),
+    ),
+    ScreenRule(
+        id = "andy_osc_title_working",
+        state = ScreenState.Working,
+        priority = 1100,
+        region = ScreenRegion.OscTitle,
+        visibleWorking = true,
+        gate = ScreenGate(contains = listOf("andy:working")),
+    ),
+    ScreenRule(
+        id = "andy_osc_title_idle",
+        state = ScreenState.Idle,
+        priority = 1000,
+        region = ScreenRegion.OscTitle,
+        visibleIdle = true,
+        gate = ScreenGate(contains = listOf("andy:idle")),
+    ),
     ScreenRule(
         id = "permission_prompt",
         state = ScreenState.Blocked,

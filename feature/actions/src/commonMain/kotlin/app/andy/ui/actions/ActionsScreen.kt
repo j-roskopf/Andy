@@ -1525,6 +1525,13 @@ private fun ProjectSessionRow(
             onClick = onOpen,
             showAgentIcon = false,
             showRelativeAge = true,
+            // Blocked takes layout width (like Agents inbox) so the tag never paints over the title.
+            trailing = when {
+                task.status == AgentStatus.Blocked -> {
+                    { StatusTag("blocked", Red) }
+                }
+                else -> null
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .pointerInput(task.id) {
@@ -1588,9 +1595,9 @@ private fun SessionRowEndOverlay(
     selected: Boolean,
     onDelete: () -> Unit,
 ) {
-    val hasIdleGlyph = task.status == AgentStatus.Blocked ||
-        task.worktreePath != null ||
-        task.branchName != null
+    // Blocked is rendered via trailing (layout space). Overlay is hover chrome + worktree only.
+    val hasIdleGlyph = task.status != AgentStatus.Blocked &&
+        (task.worktreePath != null || task.branchName != null)
     if (!hovered && !hasIdleGlyph) return
 
     val scrimColor = when {
@@ -1621,11 +1628,8 @@ private fun SessionRowEndOverlay(
                 // 14.dp matches kanban chips; overlay so hover never shifts the row.
                 AgentPillIcon(task.agent, Modifier.size(14.dp))
                 SessionRowDeleteButton(onClick = onDelete)
-            } else {
-                when {
-                    task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
-                    task.worktreePath != null || task.branchName != null -> WorktreeBranchGlyph()
-                }
+            } else if (task.worktreePath != null || task.branchName != null) {
+                WorktreeBranchGlyph()
             }
         }
     }

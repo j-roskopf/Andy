@@ -415,6 +415,9 @@ class McpAgentRunClient(
                 }.orEmpty(),
                 currentModeId = obj.string("currentModeId"),
             )
+            "session-info" -> obj.string("title")?.takeIf { it.isNotBlank() }?.let {
+                AgentEvent.SessionInfo(atMillis, it)
+            }
             "commands" -> AgentEvent.AvailableCommands(atMillis, obj["commands"]?.jsonArray?.map { command ->
                 AgentSlashCommand(command.jsonObject.string("name").orEmpty(), command.jsonObject.string("description").orEmpty(), command.jsonObject.string("inputHint"))
             }.orEmpty())
@@ -814,6 +817,9 @@ class McpAgentRunClient(
 
     override fun canReattachSession(taskId: String): Boolean =
         localBridge?.canReattachSession(taskId) == true
+
+    override val terminalSessionsRevision: StateFlow<Long>
+        get() = localBridge?.terminalSessionsRevision ?: super.terminalSessionsRevision
 
     override fun isTerminalLive(taskId: String): Boolean =
         localBridge?.isTerminalLive(taskId) == true

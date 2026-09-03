@@ -78,7 +78,9 @@ private fun MutableList<String>.addAntigravityModelFlags(task: AgentTask) {
     val model = task.modelForCli() ?: return
     add("--model"); add(model)
     // agy rejects bare model ids that require an effort level, but rejects --effort on models without effort support.
-    val catalog = AgentModelCatalog.options(AgentKind.Antigravity).firstOrNull { it.id == model }
+    // Prefer the live `agy models` probe so new effort-backed slugs (e.g. gemini-3.8-flash) get --effort
+    // even before the offline fallback catalog is updated.
+    val catalog = AgentModelCatalog.option(AgentKind.Antigravity, model, AgentModelCatalog.discovered())
     val effort = task.reasoningEffort ?: catalog?.preferredEffort()
     if (effort != null && catalog?.efforts?.isNotEmpty() != false) {
         val token = catalog?.effortToken(effort) ?: effort.cliValue

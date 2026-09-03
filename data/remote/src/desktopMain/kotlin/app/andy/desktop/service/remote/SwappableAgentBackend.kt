@@ -167,6 +167,7 @@ class SwappableAgentBackend(
     ) = runs().resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance)
     override fun reattachSession(taskId: String) = runs().reattachSession(taskId)
     override fun canReattachSession(taskId: String): Boolean = runs().canReattachSession(taskId)
+    override val terminalSessionsRevision: StateFlow<Long> get() = runs().terminalSessionsRevision
     override fun isTerminalLive(taskId: String): Boolean = runs().isTerminalLive(taskId)
     override fun isLaneLive(taskId: String): Boolean = runs().isLaneLive(taskId)
     override fun sessionRootPid(taskId: String): Long? = runs().sessionRootPid(taskId)

@@ -26,10 +26,12 @@ private const val ANDY_HOOK_MARKER = "andy-status-hook"
  * - done ← turn stop / idle-complete notifications
  * - blocked ← permission / ask-user
  *
- * **Badge authority** is screen-manifest scrape only ([AgentStatusTracker] — Herdr parity).
- * Hooks do not drive Working/Done/Blocked in the UI; they write optional `status.json`
- * artifacts for MCP/debug. Merge preserves user hooks and replaces only `andy-status-hook`
- * entries per event.
+ * **Badge authority** is screen-manifest scrape for ACP/Herdr agents ([AgentStatusTracker]).
+ * Antigravity is the exception: it has no ACP, so hooks + title `agent_state` write
+ * `status.json` that *does* drive the badge (with OSC `andy:*` markers and permission
+ * scrape as backups). Other agents' hooks remain MCP/debug artifacts only.
+ *
+ * Merge preserves user hooks and replaces only Andy-managed entries.
  *
  * Screen scrape remains the fallback when hooks are absent (notably Cursor
  * approval chrome, which has no permission-wait hook).
@@ -45,7 +47,8 @@ fun installStatusSignals(
         AgentKind.Codex -> installCodexStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.OpenCode -> installOpenCodeStatusHooks(worktreeOrCwd, artifactDir)
         AgentKind.Pi -> installPiStatusHooks(worktreeOrCwd, artifactDir)
-        AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
+        AgentKind.Antigravity -> installAntigravityStatusHooks(worktreeOrCwd, artifactDir)
+        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
         AgentKind.Ollama, AgentKind.LMStudio -> Unit
     }
 }
@@ -302,6 +305,78 @@ fun installOpenCodeStatusHooks(worktreeOrCwd: File, artifactDir: File) {
 fun installPiStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     prepareStatusHooks(artifactDir)
     AndyPiExtensionInstaller.ensureInstalled()
+}
+
+private const val ANDY_AGY_HOOK_NAME = "andy-status"
+
+/**
+ * Antigravity (`agy`): project `.agents/hooks.json` + optional title.command.
+ *
+ * - working ← PreInvocation
+ * - done ← Stop when `fullyIdle: true` (gate in andy-status-hook.sh)
+ * - blocked ← title script `tool_confirmation_pending` (no PreToolUse decision hooks —
+ *   those require a permission `decision` and would alter agy's default gating)
+ *
+ * Title script ([AndyAgyTitleInstaller]) maps `agent_state` continuously and is the
+ * primary mid-turn Working/Blocked signal; hooks cover start/stop if title is unset.
+ */
+fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
+    if (shouldSkipProjectHooks(worktreeOrCwd)) return
+
+    prepareStatusHooks(artifactDir)
+    AndyAgyTitleInstaller.installTitleSettings()
+
+    val agentsDir = File(worktreeOrCwd, ".agents").absoluteFile.normalize()
+    agentsDir.mkdirs()
+
+    val workingCmd = statusHookCommand("working", respond = "empty")
+    val doneCmd = statusHookCommand("done", respond = "stop", gate = "fully-idle")
+    val andyHook = JsonObject(
+        mapOf(
+            "PreInvocation" to JsonArray(
+                listOf(
+                    JsonObject(
+                        mapOf(
+                            "type" to JsonPrimitive("command"),
+                            "command" to JsonPrimitive(workingCmd),
+                        ),
+                    ),
+                ),
+            ),
+            "Stop" to JsonArray(
+                listOf(
+                    JsonObject(
+                        mapOf(
+                            "type" to JsonPrimitive("command"),
+                            "command" to JsonPrimitive(doneCmd),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    val hooksFile = File(agentsDir, "hooks.json")
+    writeHooksIfChanged(hooksFile, mergeAntigravityHooks(hooksFile, andyHook))
+}
+
+/**
+ * Merge Andy's named hook into agy's top-level `{ "hook-name": { Event: [...] } }` file.
+ * Preserves other named hooks; replaces only [ANDY_AGY_HOOK_NAME].
+ * Returns null when [hooksFile] exists but cannot be parsed.
+ */
+internal fun mergeAntigravityHooks(hooksFile: File, andyHookBody: JsonObject): JsonObject? {
+    val existingRoot = when (val read = readExistingHooksRoot(hooksFile)) {
+        HooksFileRead.Missing -> null
+        HooksFileRead.Invalid -> return null
+        is HooksFileRead.Ok -> read.root
+    }
+    val root = mutableJsonMap(existingRoot)
+    root.keys.filter { key ->
+        key == ANDY_AGY_HOOK_NAME || key.contains(ANDY_HOOK_MARKER)
+    }.forEach { root.remove(it) }
+    root[ANDY_AGY_HOOK_NAME] = andyHookBody
+    return JsonObject(root)
 }
 
 private sealed interface HooksFileRead {

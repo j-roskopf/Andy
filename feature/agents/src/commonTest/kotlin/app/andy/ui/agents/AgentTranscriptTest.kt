@@ -1072,4 +1072,39 @@ class AgentTranscriptTest {
         )
         assertEquals("file-changes-3-batch-42", transcriptEventKey(3, event))
     }
+
+    @Test
+    fun withLinkedChildSpawnItemsInsertsAtChildCreatedTime() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 10, text = "advise me"),
+            AgentEvent.AssistantText(atMillis = 20, text = "spinning up"),
+            AgentEvent.ToolCall(
+                atMillis = 30,
+                toolName = "MCP: tool",
+                summary = "MCP: tool",
+                detail = "MCP: tool\n- **success:** true",
+            ),
+            AgentEvent.AssistantText(atMillis = 50, text = "advisor finished"),
+        )
+        val base = transcriptDisplayItems(events)
+        val child = app.andy.model.AgentTask(
+            id = "task-child00001",
+            title = "[Advisor] strategy",
+            prompt = "You ARE the advisor.",
+            agent = app.andy.model.AgentKind.Codex,
+            createdAtMillis = 35,
+            parentChatTaskId = "task-parent0001",
+        )
+        val merged = withLinkedChildSpawnItems(base, listOf(child))
+        val spawnIndex = merged.indexOfFirst { it is TranscriptDisplayItem.ChildSpawns }
+        assertTrue(spawnIndex >= 0)
+        // Inserted after the opaque MCP tool (30) and before the later assistant text (50).
+        assertTrue(spawnIndex > 0)
+        assertIs<TranscriptDisplayItem.ChildSpawns>(merged[spawnIndex])
+        assertEquals("task-child00001", (merged[spawnIndex] as TranscriptDisplayItem.ChildSpawns).tasks.single().id)
+        assertEquals(
+            "child-spawns-task-child00001",
+            transcriptDisplayItemKey(merged[spawnIndex]),
+        )
+    }
 }

@@ -24,16 +24,22 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     MCP: `chat.start` — required `prompt`, `agent` (one of ClaudeCode, Codex, Cursor,
     Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, Ollama, LMStudio). Optional: `title`, `projectId`,
-    `directory`, `model`, `autonomy` (ReadOnly | Standard | Full), `callerTaskId`,
+    `directory`, `model`, `autonomy` (ReadOnly | Standard | Full), `sandboxMode`
+    (ReadOnly | WorkspaceWrite | None), `callerTaskId`, `parentChatTaskId`,
     `useWorktree`, `existingWorktreePath`. For Ollama and LM Studio, `runtime`
     (OpenCode | Pi | Goose) and `model` are required.
 
-    **Autonomy inheritance:** when `autonomy` is omitted, Andy inherits the parent's
-    dial from `callerTaskId` or the MCP session's `andyTaskId` (wired automatically
-    when this task has Andy MCP attached). The `andy` CLI also injects
-    `ANDY_TASK_ID` as `callerTaskId`. So a Full-permission orchestrator spawns
-    Full workers without re-prompting — unless you override (e.g. verifiers must
-    set `autonomy: "ReadOnly"`). If no parent is known, default is Standard.
+    **Autonomy / sandbox inheritance:** when `autonomy` is omitted, Andy inherits the
+    parent's dial from `callerTaskId` or the MCP session's `andyTaskId` (wired
+    automatically when this task has Andy MCP attached). When `sandboxMode` is
+    omitted, Andy inherits the parent's sandbox (or that autonomy's default) so a
+    Full / allow-everything parent keeps network approvals on ReadOnly children
+    such as advisors. When `parentChatTaskId` is omitted, it defaults to the
+    parent id so spawn rows link back. The `andy` CLI also injects `ANDY_TASK_ID`
+    as `callerTaskId`. So a Full-permission orchestrator spawns Full workers
+    without re-prompting — unless you override (e.g. verifiers must set
+    `autonomy: "ReadOnly"`; omit `sandboxMode` unless you need a tighter sandbox).
+    If no parent is known, autonomy defaults to Standard and sandbox stays unset.
 
     CLI: `andy chat start --agent <Kind> [--title <t>] [--directory <path>] "<prompt>"`
     for the common case. For `autonomy`, `model`, or worktree params, use the escape
@@ -299,6 +305,14 @@ internal val ANDY_ADVISOR_SKILL: String =
 
     **User's request:** ${'$'}ARGUMENTS
 
+    ## Who this skill is for
+
+    You are the **orchestrator**. This skill launches a separate advisor chat via
+    `chat.start`. If your own prompt already says you **are** the outside advisor
+    (analysis-only briefing, no-edits suffix, recommendation ask), skip this skill
+    entirely and answer directly — do not call `chat.start`, do not re-check
+    `attachAndyMcp`, and do not invoke andy-orchestration.
+
     ## Prerequisites
 
     Read the **andy-orchestration** skill first. Before choosing a provider, read
@@ -319,7 +333,9 @@ internal val ANDY_ADVISOR_SKILL: String =
     3. **Contrast helps.** If your own provider matches what preferences would pick,
        swap to a different family on purpose — fresh perspective is the point.
     4. Use the selected role's `settings` entry for its configured model. Keep the
-       advisor `autonomy` at `ReadOnly` regardless of that setting.
+       advisor `autonomy` at `ReadOnly` regardless of that setting. Omit
+       `sandboxMode` so Andy inherits this session's approvals (Full / allow-
+       everything parents keep network access on the advisor).
     5. Confirm readiness via `chat.composer_options` before launching.
 
     ## The briefing
@@ -330,6 +346,12 @@ internal val ANDY_ADVISOR_SKILL: String =
     - What you've considered and what you've ruled out.
     - Relevant files by path (don't paste — let the agent read).
     - Explicit ask: "give me a recommendation, with reasoning."
+    - Anti-recursion (required):
+
+    ```
+    You ARE the advisor. Do NOT invoke andy-advisor, andy-orchestration, andy-handoff,
+    andy-loop, or andy-committee. Do NOT call chat.start. Answer from this briefing only.
+    ```
 
     End with the no-edits suffix:
 
@@ -356,15 +378,22 @@ internal val ANDY_ADVISOR_SKILL: String =
 
     Pass through any remaining arguments after the skill name as the skill's own
     input. The advisor — not you — runs the skill; you're still just the
-    orchestrator handing it the work.
+    orchestrator handing it the work. Still include the anti-recursion block above
+    so the advisor does not re-launch andy-advisor.
 
     ## Launch and synthesize
 
     Create the advisor via `chat.start` with:
     - `title`: `[Advisor] ` + short summary
-    - `prompt`: the briefing (including no-edits suffix)
-    - `autonomy`: `"ReadOnly"` (required — Andy enforces this)
+    - `prompt`: the briefing (including anti-recursion + no-edits suffix)
+    - `autonomy`: `"ReadOnly"` (required — blocks auto-approved edits; omit
+      `sandboxMode` so parent Full/allow-everything approvals inherit)
     - resolved `agent`
+
+    Andy shows a clickable **Created [title]** spawn row in this transcript when
+    `chat.start` succeeds — that is the link into the advisor thread. After launch,
+    say the advisor is running and rely on that row (and the returned `id`) rather
+    than a plain "check the other thread" with no link.
 
     Wait for it to finish (poll `chat.status`). Read its response. Synthesize for
     the user — the advisor's verdict + your recommendation.
