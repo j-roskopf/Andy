@@ -62,6 +62,8 @@ import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 internal fun ImportThreadFromProviderPane(
@@ -213,18 +215,7 @@ private fun ImportBackButton(onClick: () -> Unit) {
             .semantics { contentDescription = "Back" },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.size(14.dp)) {
-            val path = Path().apply {
-                moveTo(size.width * 0.62f, size.height * 0.18f)
-                lineTo(size.width * 0.28f, size.height * 0.5f)
-                lineTo(size.width * 0.62f, size.height * 0.82f)
-            }
-            drawPath(
-                path,
-                color = color,
-                style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
-        }
+        LucideIcon(Lucide.ChevronLeft, color, Modifier.size(14.dp))
     }
 }
 

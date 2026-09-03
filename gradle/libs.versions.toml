@@ -29,6 +29,7 @@ javacv = "1.5.11"
 ffmpeg = "7.1-1.5.11"
 rsyntaxtextarea = "3.6.0"
 composeNativeTray = "1.3.3"
+coil = "3.5.0"
 
 [libraries]
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
@@ -89,6 +90,8 @@ javacv = { module = "org.bytedeco:javacv", version.ref = "javacv" }
 ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "ffmpeg" }
 rsyntaxtextarea = { module = "com.fifesoft:rsyntaxtextarea", version.ref = "rsyntaxtextarea" }
 compose-native-tray = { module = "io.github.kdroidfilter:composenativetray", version.ref = "composeNativeTray" }
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-svg = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coil" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

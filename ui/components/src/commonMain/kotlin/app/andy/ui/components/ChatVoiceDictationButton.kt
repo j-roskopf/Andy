@@ -47,7 +47,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.unit.dp
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.composer_mic
 import app.andy.currentTimeMillis
 import app.andy.service.UnavailableVoiceDictationService
 import app.andy.service.VoiceDictationService
@@ -319,11 +318,11 @@ private fun BareVoiceDictationButton(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    painter = painterResource(Res.drawable.composer_mic),
+                LucideIcon(
+                    Lucide.Mic,
+                    Rust,
+                    Modifier.size(AndyLayout.IconLg),
                     contentDescription = "Stop recording",
-                    modifier = Modifier.size(AndyLayout.IconLg),
-                    colorFilter = ColorFilter.tint(Rust),
                 )
                 VoiceWaveform(
                     level = level,
@@ -347,11 +346,11 @@ private fun BareVoiceDictationButton(
                     color = TextSecondary,
                 )
             }
-            else -> Image(
-                painter = painterResource(Res.drawable.composer_mic),
+            else -> LucideIcon(
+                Lucide.Mic,
+                tint,
+                Modifier.size(AndyLayout.IconLg),
                 contentDescription = "Voice input",
-                modifier = Modifier.size(AndyLayout.IconLg),
-                colorFilter = ColorFilter.tint(tint),
             )
         }
     }
@@ -370,7 +369,7 @@ private fun VoiceDictationIndicator(
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MicIcon(color = Rust, modifier = Modifier.size(13.dp))
+            LucideIcon(Lucide.Mic, Rust, Modifier.size(13.dp))
             VoiceWaveform(
                 level = level,
                 color = Rust,
@@ -393,9 +392,10 @@ private fun VoiceDictationIndicator(
                 color = TextSecondary,
             )
         }
-        else -> MicIcon(
-            color = if (ready) TextPrimary else TextSecondary,
-            modifier = Modifier.size(15.dp),
+        else -> LucideIcon(
+            Lucide.Mic,
+            if (ready) TextPrimary else TextSecondary,
+            Modifier.size(15.dp),
         )
     }
 }
@@ -450,56 +450,6 @@ private fun VoiceWaveform(
             )
             x += barWidth * 2f
         }
-    }
-}
-
-@Composable
-private fun MicIcon(color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-
-        val capsuleWidth = w * 0.42f
-        val capsuleHeight = h * 0.56f
-        val capsuleTop = h * 0.02f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset((w - capsuleWidth) / 2f, capsuleTop),
-            size = Size(capsuleWidth, capsuleHeight),
-            cornerRadius = CornerRadius(capsuleWidth / 2f),
-        )
-
-        val standDiameter = w * 0.78f
-        val standStroke = w * 0.12f
-        val standTop = capsuleTop + capsuleHeight * 0.22f
-        drawArc(
-            color = color,
-            startAngle = 25f,
-            sweepAngle = 130f,
-            useCenter = false,
-            topLeft = Offset((w - standDiameter) / 2f, standTop),
-            size = Size(standDiameter, standDiameter),
-            style = Stroke(width = standStroke, cap = StrokeCap.Round),
-        )
-
-        val stemWidth = w * 0.1f
-        val stemTop = standTop + standDiameter * 0.64f
-        val stemBottom = h * 0.88f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset((w - stemWidth) / 2f, stemTop),
-            size = Size(stemWidth, stemBottom - stemTop),
-            cornerRadius = CornerRadius(stemWidth / 2f),
-        )
-
-        val baseWidth = w * 0.52f
-        val baseHeight = h * 0.09f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset((w - baseWidth) / 2f, h - baseHeight - h * 0.02f),
-            size = Size(baseWidth, baseHeight),
-            cornerRadius = CornerRadius(baseHeight / 2f),
-        )
     }
 }
 

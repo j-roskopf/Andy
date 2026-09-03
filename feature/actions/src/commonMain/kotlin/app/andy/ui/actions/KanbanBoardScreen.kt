@@ -93,7 +93,6 @@ import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentPillIcon
 import app.andy.ui.agents.AgentTaskComposerPane
-import app.andy.ui.agents.agentStatusColor
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyRadius
@@ -844,11 +843,6 @@ private fun KanbanChatLinkRow(
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         AgentPillIcon(chat.agent, Modifier.size(14.dp))
-        Box(
-            Modifier
-                .size(6.dp)
-                .background(agentStatusColor(chat.status), RoundedCornerShape(AndyRadius.Pill)),
-        )
         Text(
             chat.status?.name ?: "Queued",
             color = TextSecondary,
@@ -863,26 +857,20 @@ private fun KanbanChatLinkRow(
 @Composable
 private fun KanbanTagChip(tag: String) {
     val color = tagColor(tag)
-    Row(
+    Text(
+        tag,
         Modifier
             .clip(RoundedCornerShape(AndyRadius.Control))
             .background(color.copy(alpha = 0.13f), RoundedCornerShape(AndyRadius.Control))
             .padding(horizontal = 6.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
-    ) {
-        Box(Modifier.size(5.dp).background(color, RoundedCornerShape(AndyRadius.Pill)))
-        Text(
-            tag,
-            color = color,
-            fontFamily = DisplayFont,
-            fontWeight = FontWeight.Medium,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+        color = color,
+        fontFamily = DisplayFont,
+        fontWeight = FontWeight.Medium,
+        fontSize = 11.sp,
+        lineHeight = 15.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 private fun tagColor(tag: String): Color =

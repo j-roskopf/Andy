@@ -44,6 +44,8 @@ import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 internal fun EditedFilesCard(
@@ -83,7 +85,7 @@ internal fun EditedFilesCard(
                     .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(14.dp))
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(

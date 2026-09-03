@@ -93,6 +93,8 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 fun BugsScreen(
@@ -335,7 +337,13 @@ fun BugsScreen(
                     ) { Text("Delete") }
                 }
                 report.videoCaptureWarning?.let { warning ->
-                    Text("⚠ $warning", color = Rust, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LucideIcon(Lucide.TriangleAlert, Rust, Modifier.size(12.dp))
+                        Text(warning, color = Rust, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
                 if (state.status.isNotBlank()) Text(state.status, color = Rust, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {

@@ -113,35 +113,27 @@ fun StatusTag(
     label: String,
     variant: StatusDotVariant,
     modifier: Modifier = Modifier,
-    pulsing: Boolean = false,
     accentColor: Color? = null,
 ) {
     val color = accentColor ?: statusTagColor(variant)
-    Row(
-        modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    Box(
+        modifier
+            .heightIn(min = AndyLayout.ControlHeightXs)
+            .background(color.copy(alpha = 0.12f), AndyShape.Interactive)
+            .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(
-            Modifier.heightIn(min = AndyLayout.ControlHeightXs)
-                .background(color.copy(alpha = 0.12f), AndyShape.Interactive)
-                .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space1),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-        ) {
-            StatusDot(variant = variant, pulsing = pulsing)
-            Text(
-                label,
-                color = color,
-                fontFamily = DisplayFont,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            label,
+            color = color,
+            fontFamily = DisplayFont,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

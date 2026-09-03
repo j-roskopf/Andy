@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Text
@@ -195,12 +196,10 @@ fun AndyDropdownTrigger(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
-        Text(
-            if (expanded) "▴" else "▾",
-            color = TextSecondary,
-            fontFamily = DisplayFont,
-            fontSize = 10.sp,
-            modifier = Modifier.padding(start = AndySpace.Space1),
+        LucideIcon(
+            if (expanded) Lucide.ChevronUp else Lucide.ChevronDown,
+            TextSecondary,
+            Modifier.padding(start = AndySpace.Space1).size(10.dp),
         )
     }
 }

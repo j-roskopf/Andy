@@ -52,7 +52,6 @@ import app.andy.BrowserEngineStage
 import app.andy.BrowserEngineState
 import app.andy.BrowserSurface
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.browser_select_element
 import app.andy.focusEmbeddedBrowser
 import app.andy.formatBrowserElementAnnotation
 import app.andy.observeBrowserElementAnnotations
@@ -76,6 +75,8 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 /**
  * Address bar + [BrowserSurface] for one Browser dock tab. Owns the URL text field and a local
@@ -395,17 +396,14 @@ private fun BrowserSelectElementButton(
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(Res.drawable.browser_select_element),
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            colorFilter = ColorFilter.tint(
-                when {
-                    !enabled -> TextSecondary.copy(alpha = 0.4f)
-                    selected -> TextPrimary
-                    else -> TextPrimary.copy(alpha = 0.82f)
-                },
-            ),
+        LucideIcon(
+            Lucide.SquareDashedMousePointer,
+            when {
+                !enabled -> TextSecondary.copy(alpha = 0.4f)
+                selected -> TextPrimary
+                else -> TextPrimary.copy(alpha = 0.82f)
+            },
+            Modifier.size(16.dp),
         )
     }
 }

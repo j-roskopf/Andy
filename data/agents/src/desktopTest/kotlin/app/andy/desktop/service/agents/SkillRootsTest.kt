@@ -87,4 +87,18 @@ class SkillRootsTest {
             skillRootsFor(AgentKind.Pi, workspace, home),
         )
     }
+
+    @Test
+    fun antigravityIncludesPortableAgentsSkillsAfterNativeRoots() {
+        val home = File("/test/home")
+        val workspace = File("/test/workspace")
+        assertEquals(
+            listOf(
+                File(workspace, ".agents/skills"),
+                File(home, ".gemini/antigravity-cli/skills"),
+                File(home, ".agents/skills"),
+            ),
+            skillRootsFor(AgentKind.Antigravity, workspace, home),
+        )
+    }
 }

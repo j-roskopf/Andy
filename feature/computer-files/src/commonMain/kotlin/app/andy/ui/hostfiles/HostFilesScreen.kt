@@ -1,6 +1,5 @@
 package app.andy.ui.hostfiles
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,36 +51,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.HostCodeEditor
 import app.andy.ui.components.ConfirmationDialog
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.PendingConfirmation
-import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.intellij_filetype_c_dark
-import app.andy.andy.generated.resources.intellij_filetype_config_dark
-import app.andy.andy.generated.resources.intellij_filetype_cpp_dark
-import app.andy.andy.generated.resources.intellij_filetype_css_dark
-import app.andy.andy.generated.resources.intellij_filetype_csv_dark
-import app.andy.andy.generated.resources.intellij_filetype_docker_dark
-import app.andy.andy.generated.resources.intellij_filetype_gitignore
-import app.andy.andy.generated.resources.intellij_filetype_gradle_dark
-import app.andy.andy.generated.resources.intellij_filetype_groovy_dark
-import app.andy.andy.generated.resources.intellij_filetype_h_dark
-import app.andy.andy.generated.resources.intellij_filetype_html_dark
-import app.andy.andy.generated.resources.intellij_filetype_image_dark
-import app.andy.andy.generated.resources.intellij_filetype_javaScript_dark
-import app.andy.andy.generated.resources.intellij_filetype_java_dark
-import app.andy.andy.generated.resources.intellij_filetype_json_dark
-import app.andy.andy.generated.resources.intellij_filetype_kotlinScript_dark
-import app.andy.andy.generated.resources.intellij_filetype_kotlin_dark
-import app.andy.andy.generated.resources.intellij_filetype_markdown_dark
-import app.andy.andy.generated.resources.intellij_filetype_modified_dark
-import app.andy.andy.generated.resources.intellij_filetype_properties_dark
-import app.andy.andy.generated.resources.intellij_filetype_shell_dark
-import app.andy.andy.generated.resources.intellij_filetype_sql_dark
-import app.andy.andy.generated.resources.intellij_filetype_text_dark
-import app.andy.andy.generated.resources.intellij_filetype_toml_dark
-import app.andy.andy.generated.resources.intellij_filetype_unknown_dark
-import app.andy.andy.generated.resources.intellij_filetype_xml_dark
-import app.andy.andy.generated.resources.intellij_filetype_yaml_dark
-import app.andy.andy.generated.resources.intellij_node_folder_dark
 import app.andy.model.HostFileSaveResult
 import app.andy.model.HostSearchMatchKind
 import app.andy.model.HostSearchMode
@@ -111,8 +83,6 @@ import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.resources.DrawableResource
-import org.jetbrains.compose.resources.painterResource
 
 @Composable
 fun HostFilesScreen(
@@ -517,11 +487,7 @@ fun HostFilesScreen(
                                         HostFileIcon(icon)
                                         Text(hostDisplayPath(result.path, result.root), color = if (result.kind == HostSearchMatchKind.FileName) Cyan else TextPrimary, fontFamily = MonoFont, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                         if (dirtyPaths.contains(result.path)) {
-                                            Image(
-                                                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
-                                                contentDescription = "Unsaved",
-                                                modifier = Modifier.size(13.dp),
-                                            )
+                                            LucideIcon(Lucide.Circle, Cyan, Modifier.size(13.dp), contentDescription = "Unsaved")
                                         }
                                     }
                                     Text(listOfNotNull(result.kind.name.lowercase(), result.lineNumber?.let { "line $it" }, result.preview.takeIf { it.isNotBlank() }).joinToString(" · "), color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -564,11 +530,7 @@ fun HostFilesScreen(
                         HostFileIcon(hostFileIconForPath(tab.path, isDirectory = false))
                         Text(tab.path, color = if (tab.dirty) Rust else TextSecondary, fontFamily = MonoFont, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         if (tab.dirty) {
-                            Image(
-                                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
-                                contentDescription = "Unsaved",
-                                modifier = Modifier.size(14.dp),
-                            )
+                            LucideIcon(Lucide.Circle, Cyan, Modifier.size(14.dp), contentDescription = "Unsaved")
                         }
                     }
                     if (tab.message.isNotBlank()) Text(tab.message, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
@@ -604,7 +566,7 @@ fun HostFilesScreen(
         )
     }
 }
-private data class HostFileIconSpec(val resource: DrawableResource?)
+private data class HostFileIconSpec(val path: String?)
 
 @Composable
 private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boolean, dirty: Boolean, onClick: () -> Unit) {
@@ -647,11 +609,7 @@ private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boole
             modifier = Modifier.weight(1f),
         )
         if (dirty) {
-            Image(
-                painter = painterResource(Res.drawable.intellij_filetype_modified_dark),
-                contentDescription = "Unsaved",
-                modifier = Modifier.size(14.dp),
-            )
+            LucideIcon(Lucide.Circle, Cyan, Modifier.size(14.dp), contentDescription = "Unsaved")
             Spacer(Modifier.width(6.dp))
         }
         if (!entry.isDirectory) {
@@ -662,51 +620,27 @@ private fun HostTreeRowView(row: HostTreeRow, expanded: Boolean, selected: Boole
 
 @Composable
 private fun HostFileIcon(spec: HostFileIconSpec) {
-    if (spec.resource == null) {
+    if (spec.path == null) {
         Spacer(Modifier.size(18.dp))
     } else {
-        Image(
-            painter = painterResource(spec.resource),
-            contentDescription = "File type",
-            modifier = Modifier.size(18.dp),
-        )
+        LucideIcon(spec.path, TextSecondary, Modifier.size(18.dp), contentDescription = "File type")
     }
 }
 
 private fun hostFileIconForPath(path: String, isDirectory: Boolean): HostFileIconSpec {
-    if (isDirectory) return HostFileIconSpec(Res.drawable.intellij_node_folder_dark)
+    if (isDirectory) return HostFileIconSpec(Lucide.Folder)
     val name = hostFileName(path).lowercase()
     val ext = name.substringAfterLast('.', "")
     return when {
-        name == ".gitignore" -> HostFileIconSpec(Res.drawable.intellij_filetype_gitignore)
-        name == "build.gradle" || name == "settings.gradle" || name.endsWith(".gradle.kts") || name.endsWith(".gradle") -> HostFileIconSpec(Res.drawable.intellij_filetype_gradle_dark)
-        name == "dockerfile" || name == "containerfile" -> HostFileIconSpec(Res.drawable.intellij_filetype_docker_dark)
-        name == "makefile" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
-        ext == "kt" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlin_dark)
-        ext == "kts" -> HostFileIconSpec(Res.drawable.intellij_filetype_kotlinScript_dark)
-        ext == "java" -> HostFileIconSpec(Res.drawable.intellij_filetype_java_dark)
-        ext == "groovy" -> HostFileIconSpec(Res.drawable.intellij_filetype_groovy_dark)
-        ext == "json" -> HostFileIconSpec(Res.drawable.intellij_filetype_json_dark)
-        ext == "xml" -> HostFileIconSpec(Res.drawable.intellij_filetype_xml_dark)
-        ext == "html" || ext == "htm" -> HostFileIconSpec(Res.drawable.intellij_filetype_html_dark)
-        ext == "css" || ext == "scss" || ext == "sass" -> HostFileIconSpec(Res.drawable.intellij_filetype_css_dark)
-        ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
-        ext == "ts" || ext == "tsx" -> HostFileIconSpec(Res.drawable.intellij_filetype_javaScript_dark)
-        ext == "md" || ext == "markdown" -> HostFileIconSpec(Res.drawable.intellij_filetype_markdown_dark)
-        ext == "c" -> HostFileIconSpec(Res.drawable.intellij_filetype_c_dark)
-        ext == "cpp" || ext == "cc" || ext == "cxx" -> HostFileIconSpec(Res.drawable.intellij_filetype_cpp_dark)
-        ext == "h" || ext == "hpp" -> HostFileIconSpec(Res.drawable.intellij_filetype_h_dark)
-        ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "svg" -> HostFileIconSpec(Res.drawable.intellij_filetype_image_dark)
-        ext == "yml" || ext == "yaml" -> HostFileIconSpec(Res.drawable.intellij_filetype_yaml_dark)
-        ext == "toml" -> HostFileIconSpec(Res.drawable.intellij_filetype_toml_dark)
-        ext == "sh" || ext == "bash" || ext == "zsh" -> HostFileIconSpec(Res.drawable.intellij_filetype_shell_dark)
-        ext == "sql" -> HostFileIconSpec(Res.drawable.intellij_filetype_sql_dark)
-        ext == "csv" -> HostFileIconSpec(Res.drawable.intellij_filetype_csv_dark)
-        ext == "properties" -> HostFileIconSpec(Res.drawable.intellij_filetype_properties_dark)
-        ext == "conf" || ext == "cfg" || ext == "ini" -> HostFileIconSpec(Res.drawable.intellij_filetype_config_dark)
-        ext == "txt" -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
-        ext.isBlank() -> HostFileIconSpec(Res.drawable.intellij_filetype_unknown_dark)
-        else -> HostFileIconSpec(Res.drawable.intellij_filetype_text_dark)
+        name == ".gitignore" -> HostFileIconSpec(Lucide.FileX)
+        name == "dockerfile" || name == "containerfile" -> HostFileIconSpec(Lucide.Container)
+        ext == "json" -> HostFileIconSpec(Lucide.FileJson)
+        ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "svg" -> HostFileIconSpec(Lucide.FileImage)
+        ext == "md" || ext == "markdown" || ext == "txt" -> HostFileIconSpec(Lucide.FileText)
+        ext == "sh" || ext == "bash" || ext == "zsh" -> HostFileIconSpec(Lucide.FileTerminal)
+        ext == "sql" -> HostFileIconSpec(Lucide.Database)
+        ext.isBlank() -> HostFileIconSpec(Lucide.FileText)
+        else -> HostFileIconSpec(Lucide.FileCode)
     }
 }
 

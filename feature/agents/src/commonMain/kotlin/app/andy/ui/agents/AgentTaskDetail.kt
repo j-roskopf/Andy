@@ -60,9 +60,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -119,11 +117,8 @@ import app.andy.ui.components.chatComposerDrawerItemsFromPaths
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
 import app.andy.ui.components.ComposerPlaceholderHint
-import app.andy.ui.components.FlyingChatMessage
-import app.andy.ui.components.FlyingChatMessageOverlay
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.components.LocalOnOpenFileLink
-import app.andy.ui.components.flyingChatMessageTarget
 import app.andy.ui.components.onVoiceDictationShortcut
 import app.andy.ui.components.rememberVoiceDictationController
 import app.andy.service.OpenInvestigationRequest
@@ -241,34 +236,14 @@ fun AgentTaskDetail(
     )
     val voiceShortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
     var scrollToLatestRequest by remember(task.id) { mutableStateOf(0) }
+    var pendingSendEntranceText by remember(task.id) { mutableStateOf<String?>(null) }
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
-    val density = LocalDensity.current
-    var detailRootCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
-    var transcriptCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
-    var composerFieldCoordinates by remember(task.id) { mutableStateOf<LayoutCoordinates?>(null) }
-    var flyingMessage by remember(task.id) { mutableStateOf<FlyingChatMessage?>(null) }
-    var flyingMessageSeq by remember(task.id) { mutableStateOf(0L) }
     val hasStagedImages = followUpImagePaths.isNotEmpty()
     LaunchedEffect(hasStagedImages) {
         if (hasStagedImages) scrollToLatestRequest++
     }
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
-    // Real bubble/queue row stays hidden until the flight finishes so it does not
-    // pop in under the overlay mid-animation.
-    val flyingText = flyingMessage?.text
-    val visibleTranscriptEvents = remember(transcriptEvents, flyingText) {
-        suppressLatestMatchingUserMessage(transcriptEvents, flyingText)
-    }
-    val suppressedQueuedFollowUpIndex = remember(task.queuedFollowUps, flyingText) {
-        val needle = flyingText?.trim()?.takeIf { it.isNotEmpty() } ?: return@remember -1
-        task.queuedFollowUps.indexOfLast { it.text.trim() == needle }
-    }
-    val visibleQueuedFollowUpCount = if (suppressedQueuedFollowUpIndex >= 0) {
-        (task.queuedFollowUps.size - 1).coerceAtLeast(0)
-    } else {
-        task.queuedFollowUps.size
-    }
     LaunchedEffect(task.id, task.status) {
         if (task.worktreePath != null && !task.isActive) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
@@ -462,30 +437,8 @@ fun AgentTaskDetail(
                     services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
             }
         }
-        fun beginFlight(text: String) {
-            if (text.isBlank()) return
-            val root = detailRootCoordinates?.takeIf { it.isAttached } ?: return
-            val composer = composerFieldCoordinates?.takeIf { it.isAttached } ?: return
-            val start = root.localBoundingBoxOf(composer, clipBounds = false)
-            if (start.width <= 0f || start.height <= 0f) return
-            val end = flyingChatMessageTarget(
-                root = root,
-                composer = composer,
-                transcript = transcriptCoordinates?.takeIf { it.isAttached },
-                queued = willQueue,
-                density = density,
-            )
-            flyingMessageSeq += 1
-            flyingMessage = FlyingChatMessage(
-                id = flyingMessageSeq,
-                text = text,
-                start = start,
-                end = end,
-                containerRight = root.size.width.toFloat(),
-            )
-        }
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
-        if (goalCommand != null) {
+        val sentText = if (goalCommand != null) {
             services.agentRuns.updateGoal(task.id, goalCommand.goal)
             val remainder = goalCommand.remainingPrompt
             if (remainder.isBlank()) {
@@ -493,13 +446,16 @@ fun AgentTaskDetail(
                 followUpImagePaths = emptyList()
                 return
             }
-            beginFlight(remainder)
             sendOrQueue(remainder, selectedSkills.filter { remainder.referencesSkill(it) })
+            remainder
         } else {
             val trimmed = followUp.trim()
-            beginFlight(trimmed)
             sendOrQueue(trimmed, selectedSkills)
+            trimmed
         }
+        // Resume appends the user row synchronously — pass the text so the transcript can
+        // animate that row. Queued sends never hit the transcript, so skip entrance there.
+        pendingSendEntranceText = sentText.takeUnless { willQueue || it.isBlank() }
         followUpValue = TextFieldValue("")
         followUpImagePaths = emptyList()
         scrollToLatestRequest++
@@ -575,14 +531,13 @@ fun AgentTaskDetail(
     }
 
     CompositionLocalProvider(LocalOnOpenFileLink provides ::openFileLink) {
-    Box(modifier.onGloballyPositioned { detailRootCoordinates = it }) {
     pendingConfirmation?.let { confirmation ->
         ConfirmationDialog(confirmation, { pendingConfirmation = null }) {
             pendingConfirmation = null
             confirmation.onConfirm()
         }
     }
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         task.errorMessage?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
         }
@@ -690,8 +645,7 @@ fun AgentTaskDetail(
                         else -> 280.dp
                     },
                 )
-                .clipToBounds()
-                .onGloballyPositioned { transcriptCoordinates = it },
+                .clipToBounds(),
         ) {
             val terminalModifier = remember { Modifier.fillMaxSize() }
             val imagesStagedLatest = rememberUpdatedState(
@@ -708,7 +662,7 @@ fun AgentTaskDetail(
                     ?.id
                 Row(Modifier.fillMaxSize()) {
                     AgentTranscript(
-                        events = visibleTranscriptEvents,
+                        events = transcriptEvents,
                         isActive = task.isActive,
                         showThinkingIndicator = isSessionWorking(task) || isChatLaunching(task) || isChatRelaunching(task),
                         awaitingPlanConfirmation = awaitingPlanConfirmation,
@@ -720,6 +674,8 @@ fun AgentTaskDetail(
                         restoreScrollKey = task.id,
                         scrollMemory = transcriptScrollMemory,
                         scrollToLatestRequest = scrollToLatestRequest,
+                        pendingSendEntranceText = pendingSendEntranceText,
+                        onPendingSendEntranceConsumed = { pendingSendEntranceText = null },
                         autoExpandThinkingSections = workspaceState.agentTranscriptAutoExpandThinking,
                         autoExpandToolSections = workspaceState.agentTranscriptAutoExpandTools,
                         collapseActivityBetweenMessages = workspaceState.agentTranscriptCollapseActivityBlocks,
@@ -791,7 +747,7 @@ fun AgentTaskDetail(
             }
         }
 
-        if (visibleQueuedFollowUpCount > 0) {
+        if (task.queuedFollowUps.isNotEmpty()) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -802,7 +758,7 @@ fun AgentTaskDetail(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "$visibleQueuedFollowUpCount queued message${if (visibleQueuedFollowUpCount == 1) "" else "s"}",
+                        "${task.queuedFollowUps.size} queued message${if (task.queuedFollowUps.size == 1) "" else "s"}",
                         color = TextSecondary,
                         fontFamily = MonoFont,
                         fontSize = 11.sp,
@@ -819,12 +775,9 @@ fun AgentTaskDetail(
                         )
                     }
                 }
-                var visibleOrdinal = 0
                 task.queuedFollowUps.forEachIndexed { index, queuedFollowUp ->
-                    if (index == suppressedQueuedFollowUpIndex) return@forEachIndexed
-                    visibleOrdinal += 1
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("$visibleOrdinal.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                        Text("${index + 1}.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 queuedFollowUp.text.ifBlank { "images attached" },
@@ -1035,6 +988,7 @@ fun AgentTaskDetail(
                         }
                     }
                     Box(Modifier.fillMaxWidth()) {
+                        var followUpLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                         TextField(
                             followUpValue,
                             {
@@ -1046,7 +1000,7 @@ fun AgentTaskDetail(
                             maxLines = 7,
                             modifier = Modifier.fillMaxWidth()
                                 .heightIn(min = 72.dp, max = 180.dp)
-                                .onGloballyPositioned { composerFieldCoordinates = it }
+                                .composerOpenLinks(followUpValue.text, followUpLayout)
                                 .onVoiceDictationShortcut(voiceShortcut, voiceController)
                                 .onPreviewKeyEvent { event ->
                                     if (
@@ -1083,6 +1037,7 @@ fun AgentTaskDetail(
                             colors = fieldColors(),
                             chromeStyle = FieldChromeStyle.Borderless,
                             visualTransformation = slashHighlight,
+                            onTextLayout = { followUpLayout = it },
                             placeholder = {
                                 ComposerPlaceholderHint(
                                     text = when {
@@ -1325,17 +1280,6 @@ fun AgentTaskDetail(
                 )
             }
         }
-    }
-    FlyingChatMessageOverlay(
-        flight = flyingMessage,
-        onFinished = { finished ->
-            if (flyingMessage?.id == finished.id) flyingMessage = null
-        },
-        // Clip at the detail pane so exit/enter hide past the right edge.
-        modifier = Modifier
-            .matchParentSize()
-            .clipToBounds(),
-    )
     }
     }
 }

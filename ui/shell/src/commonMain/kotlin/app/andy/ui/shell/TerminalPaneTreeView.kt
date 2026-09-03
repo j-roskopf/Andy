@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.RunningAction
 import app.andy.service.AndyServices
 import app.andy.ui.actions.ProjectTerminalSurface
-import app.andy.ui.actions.actionIconMarker
+import app.andy.ui.actions.ActionIcon
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.ui.components.PaneDivider
@@ -48,6 +48,8 @@ import app.andy.ui.components.TabBarRow
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Red
 import app.andy.ui.theme.TextSecondary
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 /**
  * A leaf's own tab strip duplicates the dock strip when the workspace is a single unsplit
@@ -279,12 +281,12 @@ private fun TerminalLeafView(
                             },
                             onBleedSurface = true,
                         ) {
-                            Text("+", color = TextSecondary, fontFamily = MonoFont, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(13.dp))
                         }
                         SplitAxisIcon(axis = SplitAxis.Row, onClick = { callbacks.onSplit(topLevelTabId, leaf.id, SplitAxis.Row) })
                         SplitAxisIcon(axis = SplitAxis.Column, onClick = { callbacks.onSplit(topLevelTabId, leaf.id, SplitAxis.Column) })
                         DockIconChromeButton(label = "Close pane", onClick = { callbacks.onCloseLeaf(topLevelTabId, leaf.id) }, onBleedSurface = true) {
-                            Text("×", color = TextSecondary, fontFamily = MonoFont, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            LucideIcon(Lucide.X, TextSecondary, Modifier.size(14.dp))
                         }
                     }
                 },
@@ -310,23 +312,18 @@ private fun TerminalLeafView(
                         },
                         indicatorColor = accent,
                         leading = {
-                            Text(
-                                actionIconMarker(runningAction?.icon.orEmpty()),
-                                color = if (selected) accent else accent.copy(alpha = 0.6f),
-                                fontFamily = MonoFont,
-                                fontSize = 10.sp,
-                                lineHeight = 14.sp,
+                            ActionIcon(
+                                runningAction?.icon.orEmpty(),
+                                if (selected) accent else accent.copy(alpha = 0.6f),
+                                Modifier.size(12.dp),
                             )
                         },
                         trailing = { hovered ->
-                            Text(
-                                "×",
-                                color = if (hovered) Red else Color.Transparent,
-                                fontFamily = MonoFont,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                lineHeight = 14.sp,
-                                modifier = Modifier
+                            LucideIcon(
+                                Lucide.X,
+                                if (hovered) Red else Color.Transparent,
+                                Modifier
+                                    .size(14.dp)
                                     .semantics { contentDescription = "Close tab"; role = Role.Button }
                                     .clickable(onClick = { callbacks.onCloseTab(topLevelTabId, tab.id) }),
                             )
@@ -367,30 +364,10 @@ internal fun SplitAxisIcon(axis: SplitAxis, onClick: () -> Unit) {
         onClick = onClick,
         onBleedSurface = true,
     ) {
-        Canvas(Modifier.size(15.dp)) {
-            val stroke = Stroke(width = 1.3.dp.toPx())
-            drawRoundRect(
-                color = TextSecondary,
-                topLeft = Offset(size.width * 0.08f, size.height * 0.08f),
-                size = Size(size.width * 0.84f, size.height * 0.84f),
-                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
-                style = stroke,
-            )
-            if (axis == SplitAxis.Row) {
-                drawLine(
-                    TextSecondary,
-                    Offset(size.width * 0.5f, size.height * 0.14f),
-                    Offset(size.width * 0.5f, size.height * 0.86f),
-                    strokeWidth = stroke.width,
-                )
-            } else {
-                drawLine(
-                    TextSecondary,
-                    Offset(size.width * 0.14f, size.height * 0.5f),
-                    Offset(size.width * 0.86f, size.height * 0.5f),
-                    strokeWidth = stroke.width,
-                )
-            }
-        }
+        LucideIcon(
+            if (axis == SplitAxis.Row) Lucide.SquareSplitHorizontal else Lucide.SquareSplitVertical,
+            TextSecondary,
+            Modifier.size(15.dp),
+        )
     }
 }

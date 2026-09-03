@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import app.andy.ui.components.ConfirmationDialog
 import app.andy.ui.components.PendingConfirmation
 import app.andy.andy.generated.resources.Res
-import app.andy.andy.generated.resources.hardware_capture
 import app.andy.loadImageBitmap
 import app.andy.model.EmulatorSnapshot
 import app.andy.model.VirtualDevice
@@ -75,6 +74,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.painterResource
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 
 @Composable
 fun SnapshotsScreen(
@@ -286,12 +287,12 @@ private fun SnapshotCard(
                     contentScale = ContentScale.Fit
                 )
             } ?: run {
-                Image(
-                    painter = painterResource(Res.drawable.hardware_capture),
-                    contentDescription = "No screenshot",
-                    modifier = Modifier.size(28.dp),
-                    colorFilter = ColorFilter.tint(TextSecondary.copy(alpha = 0.4f))
-                )
+                    LucideIcon(
+                        Lucide.Camera,
+                        TextSecondary.copy(alpha = 0.4f),
+                        Modifier.size(28.dp),
+                        contentDescription = "No screenshot",
+                    )
             }
         }
 
@@ -321,19 +322,7 @@ private fun SnapshotCard(
                         .clickable { onRenameClick(snapshot) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Canvas(modifier = Modifier.size(12.dp)) {
-                        drawLine(
-                            color = TextSecondary,
-                            start = Offset(2.dp.toPx(), 10.dp.toPx()),
-                            end = Offset(10.dp.toPx(), 2.dp.toPx()),
-                            strokeWidth = 2.dp.toPx()
-                        )
-                        drawCircle(
-                            color = TextSecondary,
-                            center = Offset(10.dp.toPx(), 2.dp.toPx()),
-                            radius = 1.5.dp.toPx()
-                        )
-                    }
+                    LucideIcon(Lucide.Pencil, TextSecondary, Modifier.size(12.dp))
                 }
             }
 
@@ -421,22 +410,11 @@ private fun SaveStateCard(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(AndySpace.Space3)
             ) {
-                Canvas(modifier = Modifier.size(24.dp)) {
-                    val sizePx = size.width
-                    val strokePx = 2.dp.toPx()
-                    drawLine(
-                        color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
-                        start = Offset(0f, sizePx / 2f),
-                        end = Offset(sizePx, sizePx / 2f),
-                        strokeWidth = strokePx
-                    )
-                    drawLine(
-                        color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
-                        start = Offset(sizePx / 2f, 0f),
-                        end = Offset(sizePx / 2f, sizePx),
-                        strokeWidth = strokePx
-                    )
-                }
+                LucideIcon(
+                    Lucide.Plus,
+                    if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
+                    Modifier.size(24.dp),
+                )
                 Text(
                     text = "Save current state",
                     color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.3f),
