@@ -43,6 +43,13 @@ internal fun handleComposerAutocompleteKey(
 ): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
 
+    // Escape must work even with zero matches (debounce / no results); navigation
+    // still requires a nonempty list so Enter/Tab do not select an invalid index.
+    if ((slashOpen || mentionOpen) && event.key == Key.Escape) {
+        onDismiss()
+        return true
+    }
+
     val navigatingSlash = slashOpen && slashCount > 0
     val navigatingMention = !navigatingSlash && mentionOpen && mentionCount > 0
     if (!navigatingSlash && !navigatingMention) return false
@@ -67,10 +74,6 @@ internal fun handleComposerAutocompleteKey(
         }
         Key.Tab -> {
             select(clamped)
-            true
-        }
-        Key.Escape -> {
-            onDismiss()
             true
         }
         else -> false
