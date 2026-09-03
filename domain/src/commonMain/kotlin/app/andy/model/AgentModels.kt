@@ -1145,7 +1145,12 @@ fun isPromptDerivedAgentTitle(title: String, prompt: String, maxLen: Int = 60): 
     if (current.isBlank()) return true
     val flat = prompt.replace('\n', ' ').trim()
     if (flat.isBlank()) return false
-    return current == flat || current == truncateAgentTitle(flat, maxLen)
+    // Andy's prompt fallback titles can be either:
+    // - the full flattened prompt, or
+    // - a 60-char ellipsized version, or
+    // - a 48-char "no ellipsis" version for chat.* title fallbacks.
+    val flat48 = flat.take(48)
+    return current == flat || current == flat48 || current == truncateAgentTitle(flat, maxLen)
 }
 
 /**

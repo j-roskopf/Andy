@@ -230,7 +230,7 @@ class McpChatStartAutonomyInheritanceTest {
             assertFalse(isError, text)
             val draft = fake.startCalls.single().draft
             assertEquals(AgentAutonomy.ReadOnly, draft.autonomy)
-            assertEquals(AgentSandboxMode.None, draft.sandboxMode)
+            assertEquals(AgentSandboxMode.ReadOnly, draft.sandboxMode)
             assertEquals("parent-1", draft.parentChatTaskId)
         }
     }

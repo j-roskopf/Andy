@@ -17,6 +17,13 @@ class ProviderSessionTitleTest {
     }
 
     @Test
+    fun promptDerivedMatches48CharNoEllipsisFallback() {
+        val prompt = "x".repeat(80)
+        val title = prompt.take(48)
+        assertTrue(isPromptDerivedAgentTitle(title, prompt))
+    }
+
+    @Test
     fun adoptRespectsSettingAndProtectsExplicitTitles() {
         val prompt = "Fix the flaky screenshot test on macOS CI"
         val truncated = truncateAgentTitle(prompt)

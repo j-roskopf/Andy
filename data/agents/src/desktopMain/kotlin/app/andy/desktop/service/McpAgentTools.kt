@@ -614,7 +614,11 @@ fun Server.registerAgentProjectTools(
             AgentSandboxMode.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                 ?: error("unknown sandboxMode: $name")
         } ?: parentTask?.let { parent ->
-            parent.sandboxMode ?: parent.autonomy.defaultSandboxMode()
+            // If the child explicitly asks for ReadOnly but omits sandboxMode, we must not
+            // inherit a permissive/unset sandbox from the parent (or you can end up with
+            // a supposedly read-only task getting `sandboxMode=None`).
+            val inherited = parent.sandboxMode ?: parent.autonomy.defaultSandboxMode()
+            if (autonomy == AgentAutonomy.ReadOnly) AgentSandboxMode.ReadOnly else inherited
         }
         val runtime = parseLocalAgentRuntime(str(args, "runtime"))
             ?: parentTask?.takeIf { it.agent == agent }?.localRuntime
