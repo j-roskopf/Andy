@@ -117,6 +117,25 @@ class AgentStatusScenarioTest {
     }
 
     @Test
+    fun antigravityBootIdlePromptStaysWorkingUntilTurnArmed() = runScenario(AgentKind.Antigravity, suppressPrematureIdle = true) {
+        tracker.markUserWorking()
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Working)
+
+        osc(title = "agy andy:idle")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Working)
+
+        osc(title = "agy andy:working")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Working)
+
+        osc(title = "agy andy:idle")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Done)
+    }
+
+    @Test
     fun codexActionRequiredThenWorkingThenIdleTitle() = runScenario(AgentKind.Codex) {
         osc(title = "Action Required — allow network")
         screen("› ")

@@ -431,6 +431,23 @@ class AcpLaneTest {
     }
 
     @Test
+    fun mapperMapsSessionInfoTitleAndIgnoresBlank() {
+        val titled = AcpEventMapper.map(
+            SessionUpdate.SessionInfoUpdate(title = "Fix login flakiness", updatedAt = null, _meta = null),
+            atMillis = 20,
+        )
+        assertEquals(AgentEvent.SessionInfo(20, "Fix login flakiness"), titled)
+
+        assertEquals(
+            null,
+            AcpEventMapper.map(
+                SessionUpdate.SessionInfoUpdate(title = "  ", updatedAt = "2026-09-03T12:00:00Z", _meta = null),
+                atMillis = 21,
+            ),
+        )
+    }
+
+    @Test
     fun mapperRendersPlanUpdateV2Items() {
         val event = AcpEventMapper.map(
             SessionUpdate.PlanUpdateV2(

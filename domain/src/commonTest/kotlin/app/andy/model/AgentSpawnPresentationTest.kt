@@ -283,4 +283,79 @@ class AgentSpawnPresentationTest {
         val detail = "$padding subagent_type=explore"
         assertFalse(AgentSpawnPresentation.isAgentSpawn("shell", summary = "", detail = detail))
     }
+
+    @Test
+    fun childrenOfParentAndFromTaskLinkClickableSpawn() {
+        val parent = AgentTask(
+            id = "task-parent0001",
+            title = "Parent",
+            prompt = "orchestrate",
+            agent = AgentKind.Cursor,
+            createdAtMillis = 1,
+        )
+        val child = AgentTask(
+            id = "task-child00001",
+            title = "[Advisor] VGC strategy",
+            prompt = "You ARE the advisor.\nGive a recommendation.",
+            agent = AgentKind.Codex,
+            createdAtMillis = 2,
+            parentChatTaskId = "task-parent0001",
+        )
+        val unrelated = AgentTask(
+            id = "task-other00001",
+            title = "Other",
+            prompt = "solo",
+            agent = AgentKind.ClaudeCode,
+            createdAtMillis = 3,
+        )
+
+        assertEquals(
+            listOf(child),
+            AgentSpawnPresentation.childrenOfParent("task-parent0001", listOf(parent, child, unrelated)),
+        )
+        assertTrue(AgentSpawnPresentation.childrenOfParent(null, listOf(child)).isEmpty())
+
+        val spawn = AgentSpawnPresentation.fromTask(child)
+        assertEquals("[Advisor] VGC strategy", spawn.name)
+        assertEquals("codex", spawn.type)
+        assertEquals("You ARE the advisor.", spawn.instructions)
+        assertEquals("task-child00001", spawn.taskId)
+        assertEquals(
+            "task-child00001",
+            AgentSpawnPresentation.resolveTaskId(spawn, listOf(parent, child), excludeTaskId = parent.id),
+        )
+    }
+
+    @Test
+    fun resolvedSpawnTaskIdsSkipsChildrenAlreadyLinkedFromToolRows() {
+        val events = listOf(
+            AgentEvent.ToolCall(
+                atMillis = 1,
+                toolName = "Andy MCP · chat start",
+                summary = "prompt=Review the diff, agent=Codex, title=Huygens",
+                detail = """{"prompt":"Review the diff","agent":"Codex","title":"Huygens"}""",
+            ),
+            AgentEvent.ToolResult(
+                atMillis = 2,
+                toolName = "Andy MCP · chat start",
+                summary = """{"id":"task-deadbeef01","status":"Working"}""",
+                detail = """{"id":"task-deadbeef01","status":"Working"}""",
+                isError = false,
+            ),
+        )
+        val tasks = listOf(
+            AgentTask(
+                id = "task-deadbeef01",
+                title = "Huygens",
+                prompt = "Review the diff",
+                agent = AgentKind.Codex,
+                createdAtMillis = 2,
+                parentChatTaskId = "task-parent0001",
+            ),
+        )
+        assertEquals(
+            setOf("task-deadbeef01"),
+            AgentSpawnPresentation.resolvedSpawnTaskIds(events, tasks, excludeTaskId = "task-parent0001"),
+        )
+    }
 }

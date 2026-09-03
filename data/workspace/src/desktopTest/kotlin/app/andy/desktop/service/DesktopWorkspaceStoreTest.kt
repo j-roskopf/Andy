@@ -45,6 +45,10 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(agentPinPriorityChats = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().agentPinPriorityChats)
 
+        DesktopWorkspaceStore(file).save(saved.copy(agentAdoptProviderSessionTitles = false))
+        assertEquals(false, DesktopWorkspaceStore(file).load().agentAdoptProviderSessionTitles)
+        assertEquals(true, DesktopWorkspaceStore(createTempDirectory("andy-workspace-adopt-default").toFile().resolve("missing.properties")).load().agentAdoptProviderSessionTitles)
+
         DesktopWorkspaceStore(file).save(
             saved.copy(
                 agentTranscriptAutoExpandThinking = true,

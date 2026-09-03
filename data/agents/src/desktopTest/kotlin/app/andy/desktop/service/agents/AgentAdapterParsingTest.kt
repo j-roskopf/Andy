@@ -2,6 +2,8 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
 import app.andy.model.AgentKind
+import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentModelOption
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
@@ -477,6 +479,44 @@ class AntigravityInteractiveAdapterTest {
         )
         assertTrue("--model" in argv && "gemini-3.6-flash" in argv)
         assertTrue("--effort" in argv && "high" in argv)
+    }
+
+    @Test
+    fun modelFlagIncludesRequiredEffortForGemini38Flash() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/agy",
+            task(AgentKind.Antigravity).copy(model = "gemini-3.8-flash"),
+            mcpUrl = null,
+        )
+        assertTrue("--model" in argv && "gemini-3.8-flash" in argv)
+        assertTrue("--effort" in argv && "high" in argv)
+    }
+
+    @Test
+    fun modelFlagUsesDiscoveredEffortWhenAbsentFromStaticCatalog() {
+        val previous = AgentModelCatalog.discovered()
+        try {
+            AgentModelCatalog.publishDiscovered(
+                mapOf(
+                    AgentKind.Antigravity to listOf(
+                        AgentModelOption(
+                            "gemini-9.9-flash",
+                            "Gemini 9.9 Flash",
+                            listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High),
+                        ),
+                    ),
+                ),
+            )
+            val argv = adapter.buildInteractiveCommand(
+                "/bin/agy",
+                task(AgentKind.Antigravity).copy(model = "gemini-9.9-flash"),
+                mcpUrl = null,
+            )
+            assertTrue("--model" in argv && "gemini-9.9-flash" in argv)
+            assertTrue("--effort" in argv && "high" in argv)
+        } finally {
+            AgentModelCatalog.publishDiscovered(previous)
+        }
     }
 
     @Test

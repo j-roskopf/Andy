@@ -595,11 +595,7 @@ class AgentTerminalManager(
         _interactiveTaskIds.value = ownedTaskIds.filterTo(mutableSetOf()) { id -> isAlive(id) }
     }
 
-    /**
-     * Prefer Main so Compose terminal surfaces recompose immediately; fall back to Default
-     * in headless desktopTest where [Dispatchers.Main] is not installed.
-     */
-    private fun scheduleSessionsRevisionBump() {
+    internal fun scheduleSessionsRevisionBump() {
         val dispatcher = runCatching { Dispatchers.Main.immediate }.getOrElse { Dispatchers.Default }
         scope.launch(dispatcher) { bumpSessionsRevision() }
     }
@@ -834,8 +830,8 @@ class AgentTerminalManager(
             // Quiet reattach must not publish Working: the resumed TUI settles at an idle
             // prompt, scrape goes Done, and attention would ding as if the turn just finished.
             when {
-                argvHasEmbeddedPrompt(argv) -> tracker.markUserWorking()
                 quietResume -> Unit
+                argvHasEmbeddedPrompt(argv) -> tracker.markUserWorking()
                 else -> onStatusSnapshot(AgentStatusSnapshot(AgentStatus.Working, confident = false))
             }
             handle

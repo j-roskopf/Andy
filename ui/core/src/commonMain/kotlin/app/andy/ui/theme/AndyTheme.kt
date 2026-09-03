@@ -82,10 +82,14 @@ enum class AndySurfaceMode(val id: String, val label: String) {
 
 /** Named color tokens supplied for the Andy light and dark visual systems. */
 object AndyPalette {
-    val Void = Color(0xFF08090A)
-    val Carbon = Color(0xFF0F1011)
-    val Obsidian = Color(0xFF161718)
-    val Graphite = Color(0xFF23252A)
+    val Background = Color(0xFF181818)
+    val Tertiary = Color(0xFF1F1F1F)
+    val Surface = Color(0xFF2B2B2B)
+
+    val Void = Background
+    val Carbon = Tertiary
+    val Obsidian = Background
+    val Graphite = Surface
     val Smoke = Color(0xFF383B3F)
     val Ash = Color(0xFF62666D)
     val Fog = Color(0xFF8A8F98)
@@ -167,6 +171,10 @@ data class AndyTonalPalette(
     val textTertiary: Color,
     val textDisabled: Color,
 ) {
+    val background: Color get() = windowBg
+    val surface: Color get() = surfacePopover
+    val tertiary: Color get() = sidebarBg
+
     companion object {
         fun from(tint: Color, surfaceMode: AndySurfaceMode): AndyTonalPalette = when (surfaceMode) {
             AndySurfaceMode.Light -> light()
@@ -412,6 +420,9 @@ object AndyColors {
     val SurfaceSelected get() = state.tonalPalette.surfaceSelected
     val SurfaceRaised get() = state.tonalPalette.surfaceRaised
     val SurfacePopover get() = state.tonalPalette.surfacePopover
+    val Background get() = state.tonalPalette.windowBg
+    val Surface get() = state.tonalPalette.surfacePopover
+    val Tertiary get() = state.tonalPalette.sidebarBg
     val BorderEmphasized get() = state.tonalPalette.borderEmphasized
     val TextPrimaryToken get() = state.tonalPalette.textPrimary
     val TextSecondaryToken get() = state.tonalPalette.textSecondary
@@ -542,6 +553,9 @@ val MonoFont = FontFamily.Monospace
 val Ink get() = AndyColors.WindowBg
 val Panel get() = AndyColors.PaneBg
 val PanelSoft get() = AndyColors.SurfaceRaised
+val Background get() = AndyColors.Background
+val Surface get() = AndyColors.Surface
+val Tertiary get() = AndyColors.Tertiary
 /** Emphasized chrome for inputs, toggles, and focused controls. */
 val Border get() = AndyColors.BorderEmphasized
 /** Quiet hairlines for pane/rail/card dividers and structural borders. */
@@ -573,11 +587,11 @@ fun AndyTheme(
             onSecondary = AndyPalette.Void,
             secondaryContainer = tokens.successSubtle,
             onSecondaryContainer = tokens.success,
-            tertiary = palette.textSecondary,
+            tertiary = palette.sidebarBg,
             onTertiary = palette.textPrimary,
             background = palette.windowBg,
             onBackground = palette.textPrimary,
-            surface = palette.paneBg,
+            surface = palette.surfacePopover,
             onSurface = palette.textPrimary,
             surfaceVariant = palette.surfaceRaised,
             onSurfaceVariant = palette.textSecondary,
@@ -603,11 +617,11 @@ fun AndyTheme(
             onSecondary = AndyPalette.Void,
             secondaryContainer = tokens.successSubtle,
             onSecondaryContainer = tokens.success,
-            tertiary = palette.textSecondary,
+            tertiary = palette.sidebarBg,
             onTertiary = palette.textPrimary,
             background = palette.windowBg,
             onBackground = palette.textPrimary,
-            surface = palette.paneBg,
+            surface = palette.surfacePopover,
             onSurface = palette.textPrimary,
             surfaceVariant = palette.surfaceRaised,
             onSurfaceVariant = palette.textSecondary,

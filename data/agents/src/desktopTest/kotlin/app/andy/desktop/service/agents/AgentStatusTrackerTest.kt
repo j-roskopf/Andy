@@ -1228,6 +1228,17 @@ class AgentStatusTrackerTest {
     }
 
     @Test
+    fun agyTitleScriptContentMatchesRepoScript() {
+        val repoScript = File("scripts/andy-agy-title.sh")
+        if (!repoScript.isFile) return
+        assertEquals(
+            repoScript.readText().replace("\r\n", "\n"),
+            AndyAgyTitleInstaller.scriptContent,
+            "Keep AndyAgyTitleInstaller.scriptContent in sync with scripts/andy-agy-title.sh",
+        )
+    }
+
+    @Test
     fun statusHookScriptNoOpsWithoutActiveTask() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
@@ -1377,10 +1388,388 @@ class AgentStatusTrackerTest {
             assertFalse(File(home, ".codex/hooks.json").exists())
             installStatusSignals(AgentKind.ClaudeCode, home, artifacts)
             assertFalse(File(home, ".claude/settings.json").exists())
+            installStatusSignals(AgentKind.Antigravity, home, artifacts)
+            assertFalse(File(home, ".agents/hooks.json").exists())
         } finally {
             System.setProperty("user.home", previousHome)
             home.deleteRecursively()
         }
+    }
+
+    @Test
+    fun installAntigravityStatusHooksWritesNamedHookAndTitleSettings() {
+        val home = File.createTempFile("andy-home-agy", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val cwd = File(home, "project").also { it.mkdirs() }
+            val artifacts = File(cwd, ".andy/task-agy").also { it.mkdirs() }
+            installAntigravityStatusHooks(cwd, artifacts)
+
+            val hooksFile = File(cwd, ".agents/hooks.json")
+            assertTrue(hooksFile.isFile)
+            val text = hooksFile.readText()
+            assertTrue("andy-status" in text)
+            assertTrue("PreInvocation" in text)
+            assertTrue("fully-idle" in text)
+            assertTrue("\$HOME/.andy/bin/andy-status-hook.sh" in text)
+            assertTrue(AndyStatusHookInstaller.scriptFile(home).canExecute())
+            assertTrue(AndyAgyTitleInstaller.scriptFile(home).canExecute())
+            assertEquals("task-agy", File(cwd, ".andy/active-task").readText().trim())
+
+            val settings = AndyAgyTitleInstaller.settingsFile(home)
+            assertTrue(settings.isFile)
+            val settingsText = settings.readText()
+            assertTrue(AndyAgyTitleInstaller.MARKER in settingsText)
+            assertTrue("andy-agy-title.sh" in settingsText)
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun installAntigravityStatusHooksPreservesUserNamedHooksAndCustomTitle() {
+        val home = File.createTempFile("andy-home-agy-merge", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val cwd = File(home, "project").also { it.mkdirs() }
+            val agentsDir = File(cwd, ".agents").also { it.mkdirs() }
+            File(agentsDir, "hooks.json").writeText(
+                """
+                {
+                  "user-linter": {
+                    "PostToolUse": [
+                      { "type": "command", "command": "echo lint" }
+                    ]
+                  }
+                }
+                """.trimIndent(),
+            )
+            val settingsDir = File(home, ".gemini/antigravity-cli").also { it.mkdirs() }
+            File(settingsDir, "settings.json").writeText(
+                """
+                {
+                  "title": {
+                    "command": "/custom/title.sh",
+                    "enabled": true
+                  }
+                }
+                """.trimIndent(),
+            )
+            val artifacts = File(cwd, ".andy/task-agy").also { it.mkdirs() }
+            installAntigravityStatusHooks(cwd, artifacts)
+
+            val hooks = kotlinx.serialization.json.Json.parseToJsonElement(
+                File(agentsDir, "hooks.json").readText(),
+            ).jsonObject
+            assertTrue(hooks.containsKey("user-linter"))
+            assertTrue(hooks.containsKey("andy-status"))
+            val settingsText = File(settingsDir, "settings.json").readText()
+            assertTrue("/custom/title.sh" in settingsText)
+            assertFalse(AndyAgyTitleInstaller.MARKER in settingsText)
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun antigravityOscTitleMarkersDriveWorkingIdleBlocked() {
+        val working = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(screen = "thinking…\n", oscTitle = "agy andy:working"),
+        )
+        assertEquals(ScreenState.Working, working.state)
+        assertTrue(working.visibleWorking)
+
+        val idle = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(screen = ">\n", oscTitle = "agy andy:idle"),
+        )
+        assertEquals(ScreenState.Idle, idle.state)
+        assertTrue(idle.visibleIdle)
+
+        val blocked = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(screen = ">\n", oscTitle = "agy andy:blocked"),
+        )
+        assertEquals(ScreenState.Blocked, blocked.state)
+        assertTrue(blocked.visibleBlocker)
+    }
+
+    @Test
+    fun antigravityStatusJsonAuthorsBadgeWithOscBackup() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-agy-status", null).also {
+                it.delete()
+                it.mkdirs()
+            }
+            val session = FakeTerminalSession()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-agy-status",
+                agent = AgentKind.Antigravity,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = {},
+            )
+            tracker.start()
+            tracker.markUserWorking()
+
+            File(artifactDir, "status.json").writeText("""{"status":"working","at":1}""" + "\n")
+            tracker.awaitStatus(AgentStatus.Working)
+
+            File(artifactDir, "status.json").appendText("""{"status":"blocked","at":2}""" + "\n")
+            tracker.awaitStatus(AgentStatus.Blocked)
+
+            File(artifactDir, "status.json").appendText("""{"status":"done","at":3}""" + "\n")
+            session.setOsc("agy andy:idle")
+            session.emitBuffer("Antigravity agent ready\n> ")
+            tracker.awaitStatus(AgentStatus.Done)
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun antigravityTitleScriptMapsAgentState() {
+        val home = File.createTempFile("andy-agy-title-home", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val artifacts = File(project, ".andy/task-title").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            installGenericStatusHookScript(artifacts)
+            AndyAgyTitleInstaller.ensureInstalled(home)
+            val script = AndyAgyTitleInstaller.scriptFile(home)
+            val env = mapOf(
+                AndyStatusHookInstaller.TASK_ID_ENV to "task-title",
+                AndyStatusHookInstaller.PROJECT_ROOT_ENV to project.absolutePath,
+            )
+
+            val (_, workingOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"thinking","tool_confirmation_pending":false}""",
+                env = env,
+            )
+            assertEquals("agy andy:working", workingOut)
+            assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"working\""))
+
+            val (_, idleOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"idle","tool_confirmation_pending":false}""",
+                env = env,
+            )
+            assertEquals("agy andy:idle", idleOut)
+            assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"done\""))
+
+            val (_, blockedOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"working","tool_confirmation_pending":true}""",
+                env = env,
+            )
+            assertEquals("agy andy:blocked", blockedOut)
+            assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"blocked\""))
+
+            File(artifacts, "status.json").delete()
+            val (_, emptyOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = "",
+                env = env,
+            )
+            assertEquals("agy", emptyOut)
+            assertFalse(File(artifacts, "status.json").exists())
+
+            val (_, uninitializedOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"tool_confirmation_pending":false}""",
+                env = env,
+            )
+            assertEquals("agy", uninitializedOut)
+            assertFalse(File(artifacts, "status.json").exists())
+
+            val (_, initializingOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"initializing","tool_confirmation_pending":false}""",
+                env = env,
+            )
+            assertEquals("agy", initializingOut)
+            assertFalse(File(artifacts, "status.json").exists())
+
+            val (_, unknownStateOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"ready","tool_confirmation_pending":false}""",
+                env = env,
+            )
+            assertEquals("agy", unknownStateOut)
+            assertFalse(File(artifacts, "status.json").exists())
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun quietResumeWithInitializingAntigravityTitleScriptNeverPublishesWorking() = runBlocking {
+        // When reopening an old agy session, agy boots with agent_state="initializing"
+        // before settling at an idle prompt. The tracker seeded with Done must not publish
+        // Working during this transition, otherwise attention would ding a false finish and shift
+        // the task to priority.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-status-agy-quiet-init", null).also {
+                it.delete()
+                it.mkdirs()
+            }
+            val session = FakeTerminalSession()
+            val emitted = mutableListOf<AgentStatusSnapshot>()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-agy-quiet-init",
+                agent = AgentKind.Antigravity,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = { emitted += it },
+                initialSnapshot = AgentStatusSnapshot(AgentStatus.Done, confident = true),
+                suppressPrematureIdle = false,
+            )
+            tracker.start()
+
+            // Boot: title script outputs "agy" with no marker for "initializing",
+            // and does not write to status.json.
+            session.setOsc("agy")
+            session.emitBuffer("Antigravity agent initializing...\n")
+            kotlinx.coroutines.delay(200)
+
+            // Idle prompt: agy transitions to idle, title becomes "agy andy:idle",
+            // and title script writes status.json with done.
+            session.setOsc("agy andy:idle")
+            File(artifactDir, "status.json").writeText("""{"status":"done","at":123}""" + "\n")
+            session.emitBuffer("Antigravity agent ready\n> ")
+            kotlinx.coroutines.delay(500)
+
+            assertEquals(AgentStatus.Done, tracker.status.value.status)
+            assertTrue(tracker.status.value.confident)
+            assertFalse(
+                emitted.any { it.status == AgentStatus.Working },
+                "quiet Antigravity resume during boot/initialization must never publish Working; saw $emitted",
+            )
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun antigravityBootPrematureIdleSuppressedUntilTurnArmed() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-status-agy-boot", null).also { it.delete(); it.mkdirs() }
+            val session = FakeTerminalSession()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-agy-boot",
+                agent = AgentKind.Antigravity,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = {},
+                suppressPrematureIdle = true,
+            )
+            tracker.start()
+            tracker.markUserWorking()
+            assertEquals(AgentStatus.Working, tracker.status.value.status)
+
+            // Boot title / hook writes done before agy begins the turn.
+            File(artifactDir, "status.json").writeText(
+                """{"status":"done","at":1}""" + "\n",
+            )
+            session.setOsc("agy andy:idle")
+            delay(300)
+            assertEquals(
+                AgentStatus.Working,
+                tracker.status.value.status,
+                "boot idle must be suppressed while turn is unarmed",
+            )
+            assertFalse(tracker.status.value.confident)
+
+            // Agy begins thinking — arms the turn.
+            File(artifactDir, "status.json").writeText(
+                """{"status":"working","at":2}""" + "\n",
+            )
+            session.setOsc("agy andy:working")
+            withTimeout(10_000) {
+                while (!tracker.status.value.confident) delay(20)
+            }
+            assertEquals(AgentStatus.Working, tracker.status.value.status)
+            assertTrue(tracker.status.value.confident)
+
+            // Agy finishes turn — now transitions to Done.
+            File(artifactDir, "status.json").writeText(
+                """{"status":"done","at":3}""" + "\n",
+            )
+            session.setOsc("agy andy:idle")
+            tracker.awaitStatus(AgentStatus.Done)
+            assertTrue(tracker.status.value.confident)
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun combineHookAndScrapePrefersBlockedAndWorkingOverDone() {
+        assertEquals(
+            AgentStatus.Blocked,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Working,
+                scrapeHint = AgentStatus.Done,
+                scrapeBlocked = true,
+                scrapeWorking = false,
+            ),
+        )
+        assertEquals(
+            AgentStatus.Working,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Done,
+                scrapeHint = AgentStatus.Working,
+                scrapeBlocked = false,
+                scrapeWorking = true,
+            ),
+        )
+        assertEquals(
+            AgentStatus.Done,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Done,
+                scrapeHint = AgentStatus.Done,
+                scrapeBlocked = false,
+                scrapeWorking = false,
+            ),
+        )
+        assertEquals(
+            AgentStatus.Working,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.ClaudeCode,
+                hookStatus = AgentStatus.Done,
+                scrapeHint = AgentStatus.Working,
+                scrapeBlocked = false,
+                scrapeWorking = true,
+            ),
+            "non-agy agents ignore hook status",
+        )
     }
 }
 
@@ -1433,6 +1822,29 @@ private fun runStatusHook(
     return code to out
 }
 
+private fun runAgyTitleScript(
+    script: File,
+    project: File,
+    stdin: String,
+    env: Map<String, String> = emptyMap(),
+): Pair<Int, String> {
+    val proc = ProcessBuilder("sh", script.absolutePath)
+        .directory(project)
+        .apply {
+            environment()["HOME"] = System.getProperty("user.home")
+            environment().remove(AndyStatusHookInstaller.TASK_ID_ENV)
+            environment().remove(AndyStatusHookInstaller.PROJECT_ROOT_ENV)
+            environment().putAll(env)
+        }
+        .redirectErrorStream(true)
+        .start()
+    proc.outputStream.bufferedWriter().use { writer -> writer.write(stdin) }
+    val out = proc.inputStream.bufferedReader().readText().trim()
+    val code = proc.waitFor()
+    assertEquals(0, code, "agy title script exit code out=$out")
+    return code to out
+}
+
 /** Poll [condition] to true within a generous timeout; fail with [message] otherwise. */
 private suspend fun awaitUntil(
     message: String,
@@ -1456,8 +1868,10 @@ private class FakeTerminalSession : TerminalSession {
 
     private val snapshots = MutableSharedFlow<String>(extraBufferCapacity = 8, replay = 1)
     override val bufferSnapshots: SharedFlow<String> = snapshots
-    override val windowTitle: StateFlow<String> = MutableStateFlow("")
-    override val oscProgress: StateFlow<String> = MutableStateFlow("")
+    private val title = MutableStateFlow("")
+    private val progress = MutableStateFlow("")
+    override val windowTitle: StateFlow<String> = title
+    override val oscProgress: StateFlow<String> = progress
 
     @Volatile var screenBuffer: String = ""
 
@@ -1470,5 +1884,10 @@ private class FakeTerminalSession : TerminalSession {
     suspend fun emitBuffer(text: String) {
         screenBuffer = text
         snapshots.emit(text)
+    }
+
+    fun setOsc(titleValue: String, progressValue: String = "") {
+        title.value = titleValue
+        progress.value = progressValue
     }
 }

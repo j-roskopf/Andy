@@ -24,16 +24,21 @@ data class AgentStatusSnapshot(
 /**
  * Herdr-parity status tracker for Claude / Cursor / Codex / Antigravity.
  *
- * Status authority is the screen manifest only (see https://herdr.dev/docs/agents/):
- * those agents are session-identity integrations in Herdr, not lifecycle authorities.
- * Incomplete vendor hooks must not author the badge — they miss permission-after /
- * interrupts and can fire spurious working after Stop.
+ * Status authority is the screen manifest for ACP/Herdr agents (see
+ * https://herdr.dev/docs/agents/): those agents are session-identity integrations
+ * in Herdr, not lifecycle authorities. Incomplete vendor hooks must not author the
+ * badge — they miss permission-after / interrupts and can fire spurious working after Stop.
+ *
+ * Antigravity has no ACP. For it, structured `status.json` from hooks + the title
+ * `agent_state` script *is* badge authority, with OSC `andy:*` markers and permission
+ * scrape as backups.
  *
  * Policy:
  * - per-agent screen manifests for blocked / working / idle (regions + OSC)
+ * - Antigravity: prefer latest `status.json` when present
  * - known agent + no match → idle/Done (idle fallback)
  * - Working→plain-idle requires pending confirmation (Herdr-style)
- * - user send ([markUserWorking]) bumps Working; scrape owns the rest
+ * - user send ([markUserWorking]) bumps Working; scrape owns the rest (except agy hooks)
  * - boot splash / idle prompt before the first turn is armed stays Working (no
  *   confident Done — mirrors [AgentTerminalManager.awaitExit] arming)
  * - process exit / phaseFinished force Done/Error
@@ -159,7 +164,7 @@ class AgentStatusTracker(
      */
     fun markUserWorking() {
         if (closed.get()) return
-        turnArmed = true
+        turnArmed = false
         latch = null
         scrape.clearPendingIdle()
         emit(AgentStatusSnapshot(AgentStatus.Working, confident = true))
@@ -209,15 +214,29 @@ class AgentStatusTracker(
             latch = null
         }
 
-        val scrapeHint = scrape.badgeHint() ?: return
+        val hookStatus = if (usesStructuredStatusAuthority(agent)) {
+            readLatestHookStatus(artifactDir)
+        } else {
+            null
+        }
+        val scrapeHint = scrape.badgeHint()
+        val publishedStatus = combineHookAndScrapeStatus(
+            agent = agent,
+            hookStatus = hookStatus,
+            scrapeHint = scrapeHint,
+            scrapeBlocked = scrape.isCurrentlyBlocked(),
+            scrapeWorking = scrape.showsWorkingIndicator(),
+        ) ?: return
         // Soft idle stays Done (Herdr idle fallback). Do not invent Working — that trapped
         // Codex/Claude at Working forever when the prompt had placeholder text and no OSC
         // idle title under tmux. Boot uses markUserWorking / launch Working instead.
-        val publishedStatus = scrapeHint
         val scrapeConfident = when (publishedStatus) {
-            AgentStatus.Blocked -> scrape.isCurrentlyBlocked()
-            AgentStatus.Done -> scrape.isDoneConfident()
-            AgentStatus.Working -> scrape.showsWorkingIndicator()
+            AgentStatus.Blocked -> scrape.isCurrentlyBlocked() || hookStatus == AgentStatus.Blocked
+            AgentStatus.Done -> when {
+                hookStatus == AgentStatus.Done -> true
+                else -> scrape.isDoneConfident()
+            }
+            AgentStatus.Working -> scrape.showsWorkingIndicator() || hookStatus == AgentStatus.Working
             else -> false
         }
         maybeArmTurn(publishedStatus, scrapeConfident)
@@ -237,18 +256,36 @@ class AgentStatusTracker(
         if (turnArmed) return
         when (publishedStatus) {
             AgentStatus.Blocked -> if (scrapeConfident) turnArmed = true
-            AgentStatus.Working -> if (scrape.showsWorkingIndicator()) turnArmed = true
+            AgentStatus.Working -> when {
+                scrape.showsWorkingIndicator() -> turnArmed = true
+                // Antigravity hooks/title can author Working without OSC chrome yet.
+                usesStructuredStatusAuthority(agent) && scrapeConfident -> turnArmed = true
+            }
             else -> Unit
         }
     }
 
     private fun latchHolds(latch: AgentStatusSnapshot): Boolean = when (latch.status) {
-        AgentStatus.Blocked -> scrape.isCurrentlyBlocked()
+        AgentStatus.Blocked -> {
+            scrape.isCurrentlyBlocked() ||
+                (usesStructuredStatusAuthority(agent) && readLatestHookStatus(artifactDir) == AgentStatus.Blocked)
+        }
         AgentStatus.Done, AgentStatus.Error -> {
             if (scrape.isCurrentlyBlocked()) return false
-            !scrape.showsWorkingIndicator()
+            if (scrape.showsWorkingIndicator()) return false
+            if (usesStructuredStatusAuthority(agent)) {
+                when (readLatestHookStatus(artifactDir)) {
+                    AgentStatus.Working, AgentStatus.Blocked -> return false
+                    else -> Unit
+                }
+            }
+            true
         }
-        AgentStatus.Working -> scrape.showsWorkingIndicator() || scrape.hasPendingIdle()
+        AgentStatus.Working -> {
+            scrape.showsWorkingIndicator() ||
+                scrape.hasPendingIdle() ||
+                (usesStructuredStatusAuthority(agent) && readLatestHookStatus(artifactDir) == AgentStatus.Working)
+        }
     }
 
     private fun emit(snapshot: AgentStatusSnapshot) {
@@ -262,6 +299,34 @@ class AgentStatusTracker(
         private const val STATUS_POLL_MS = 500L
         private const val PENDING_IDLE_POLL_MS = 100L
         private const val BACKGROUND_STATUS_POLL_MS = 3_000L
+    }
+}
+
+/** Agents where hooks/title `status.json` authors the badge (no ACP). */
+internal fun usesStructuredStatusAuthority(agent: AgentKind): Boolean =
+    agent == AgentKind.Antigravity
+
+/**
+ * Merge structured hook/title status with screen scrape.
+ * Blocked/Working from either source win over Done; scrape permission chrome can
+ * elevate to Blocked even when hooks only reported Working.
+ */
+internal fun combineHookAndScrapeStatus(
+    agent: AgentKind,
+    hookStatus: AgentStatus?,
+    scrapeHint: AgentStatus?,
+    scrapeBlocked: Boolean,
+    scrapeWorking: Boolean,
+): AgentStatus? {
+    if (!usesStructuredStatusAuthority(agent) || hookStatus == null) {
+        return scrapeHint
+    }
+    return when {
+        scrapeBlocked || hookStatus == AgentStatus.Blocked -> AgentStatus.Blocked
+        scrapeWorking || hookStatus == AgentStatus.Working -> AgentStatus.Working
+        hookStatus == AgentStatus.Error -> AgentStatus.Error
+        hookStatus == AgentStatus.Done -> AgentStatus.Done
+        else -> scrapeHint ?: hookStatus
     }
 }
 

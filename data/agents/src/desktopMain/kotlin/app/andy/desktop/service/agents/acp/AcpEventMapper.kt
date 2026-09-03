@@ -78,7 +78,10 @@ object AcpEventMapper {
             mapSlashCommands(update),
         )
         is SessionUpdate.UsageUpdate -> AgentEvent.ContextUsage(atMillis, update.used, update.size)
-        is SessionUpdate.SessionInfoUpdate -> AgentEvent.Raw(atMillis, "session: ${update.title}")
+        is SessionUpdate.SessionInfoUpdate -> {
+            val title = update.title?.trim().orEmpty()
+            if (title.isEmpty()) null else AgentEvent.SessionInfo(atMillis, title)
+        }
         is SessionUpdate.ConfigOptionUpdate -> AgentEvent.Raw(atMillis, "config options updated: ${update.configOptions}")
         is SessionUpdate.PlanUpdateV2 -> planUpdateFromVariant(update.plan, atMillis)
         is SessionUpdate.UnknownSessionUpdate -> AgentEvent.Raw(atMillis, update.toString())

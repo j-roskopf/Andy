@@ -169,6 +169,46 @@ object AgentSpawnPresentation {
         return null
     }
 
+    /**
+     * Chats launched from [parentTaskId] via `chat.start` (parentChatTaskId).
+     * Used when providers collapse MCP tool names to opaque labels like "MCP: tool"
+     * so transcript spawn detection cannot recover the child id.
+     */
+    fun childrenOfParent(parentTaskId: String?, candidates: List<AgentTask>): List<AgentTask> {
+        val parent = parentTaskId?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return candidates
+            .filter { it.parentChatTaskId == parent && it.id != parent }
+            .sortedBy { it.createdAtMillis }
+    }
+
+    /** Build a spawn row directly from a child [AgentTask] (always clickable via [Spawn.taskId]). */
+    fun fromTask(task: AgentTask): Spawn {
+        val title = task.title.trim()
+        val firstPromptLine = task.prompt.lineSequence().firstOrNull()?.trim().orEmpty()
+        return Spawn(
+            name = title.ifBlank { firstPromptLine }.ifBlank { "agent" },
+            type = task.agent.cliName,
+            instructions = firstPromptLine,
+            taskId = task.id,
+        )
+    }
+
+    /**
+     * Task ids already represented by tool-call spawn rows in [events], so parentChatTaskId
+     * fallback rows can skip duplicates when the provider preserved chat.start metadata.
+     */
+    fun resolvedSpawnTaskIds(
+        events: List<AgentEvent>,
+        candidates: List<AgentTask>,
+        excludeTaskId: String? = null,
+    ): Set<String> = spawnSources(events).mapNotNull { source ->
+        resolveTaskId(
+            parse(source.toolName, source.summary, source.detail),
+            candidates,
+            excludeTaskId = excludeTaskId,
+        )
+    }.toSet()
+
     private fun resolveName(toolName: String?, fields: Map<String, String>, type: String?): String {
         fields.firstOf("name", "agentName", "agent_name")
             ?.takeIf { it.isNotBlank() && !isAgentSpawnTool(it) }

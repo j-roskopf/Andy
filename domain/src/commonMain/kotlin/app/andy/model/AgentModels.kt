@@ -283,6 +283,7 @@ object AgentModelCatalog {
             AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
         AgentKind.Antigravity -> listOf(
+            AgentModelOption("gemini-3.8-flash", "Gemini 3.8 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.7-flash", "Gemini 3.7 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.6-flash", "Gemini 3.6 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.5-flash", "Gemini 3.5 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
@@ -414,6 +415,7 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
 
 /** Map legacy Antigravity display names and full effort slugs to the base id Andy stores. */
 internal fun antigravityModelBaseId(selected: String): String = when (selected) {
+    "Gemini 3.8 Flash", "gemini-3.8-flash" -> "gemini-3.8-flash"
     "Gemini 3.7 Flash", "gemini-3.7-flash" -> "gemini-3.7-flash"
     "Gemini 3.6 Flash", "gemini-3.6-flash" -> "gemini-3.6-flash"
     "Gemini 3.5 Flash", "gemini-3.5-flash" -> "gemini-3.5-flash"
@@ -1131,6 +1133,43 @@ fun AgentTaskDraft.fallbackTitle(): String = when {
     else -> ""
 }
 
+/** Truncates a single-line title the same way chat creation does for prompt fallbacks. */
+fun truncateAgentTitle(text: String, maxLen: Int = 60): String {
+    val flat = text.replace('\n', ' ').trim()
+    return if (flat.length <= maxLen) flat else flat.take(maxLen - 1) + "…"
+}
+
+/** True when [title] matches Andy's auto title derived from [prompt] (blank or truncated). */
+fun isPromptDerivedAgentTitle(title: String, prompt: String, maxLen: Int = 60): Boolean {
+    val current = title.trim()
+    if (current.isBlank()) return true
+    val flat = prompt.replace('\n', ' ').trim()
+    if (flat.isBlank()) return false
+    return current == flat || current == truncateAgentTitle(flat, maxLen)
+}
+
+/**
+ * Whether a provider session title should replace the Andy chat title.
+ * Protects explicit titles (workflow/advisor/user-set) while allowing prompt fallbacks
+ * and refinements of a previously adopted provider title.
+ */
+fun shouldAdoptProviderSessionTitle(
+    enabled: Boolean,
+    currentTitle: String,
+    prompt: String,
+    latestPrompt: String?,
+    providerTitle: String,
+    previousProviderTitle: String? = null,
+): Boolean {
+    if (!enabled) return false
+    val next = providerTitle.trim()
+    if (next.isBlank() || next == currentTitle.trim()) return false
+    if (isPromptDerivedAgentTitle(currentTitle, prompt)) return true
+    if (!latestPrompt.isNullOrBlank() && isPromptDerivedAgentTitle(currentTitle, latestPrompt)) return true
+    val previous = previousProviderTitle?.trim().orEmpty()
+    return previous.isNotBlank() && currentTitle.trim() == previous
+}
+
 private fun promptWithPlanModeHint(text: String, planMode: Boolean, grilling: Boolean = false): String = when {
     !planMode -> text
     grilling -> {
@@ -1343,6 +1382,12 @@ sealed interface AgentEvent {
         val modes: List<AgentSessionMode>,
         val currentModeId: String?,
     ) : AgentEvent
+    /**
+     * Provider-generated session metadata from ACP `session_info_update` (typically a short
+     * title summarizing the prompt). Hidden from the transcript; may rename the chat when
+     * [app.andy.model.WorkspaceState.agentAdoptProviderSessionTitles] is on.
+     */
+    data class SessionInfo(override val atMillis: Long, val title: String) : AgentEvent
     data class PermissionRequest(
         override val atMillis: Long,
         val requestId: String,
@@ -1545,6 +1590,7 @@ private fun AgentEvent.isStreamCoalesceTransparent(): Boolean = when (this) {
     is AgentEvent.Raw,
     is AgentEvent.AvailableCommands,
     is AgentEvent.AvailableModes,
+    is AgentEvent.SessionInfo,
     is AgentEvent.ContextUsage,
     -> true
     else -> false
@@ -1580,7 +1626,10 @@ fun coalesceAcpTranscriptEvents(events: List<AgentEvent>): List<AgentEvent> =
  */
 fun planTextFromAcpTranscript(events: List<AgentEvent>): String? {
     val display = coalesceAcpTranscriptEvents(events).filterNot { event ->
-        event is AgentEvent.AvailableCommands || event is AgentEvent.AvailableModes || event is AgentEvent.Raw
+        event is AgentEvent.AvailableCommands ||
+            event is AgentEvent.AvailableModes ||
+            event is AgentEvent.SessionInfo ||
+            event is AgentEvent.Raw
     }
     display.filterIsInstance<AgentEvent.PlanUpdate>()
         .mapNotNull { it.markdown?.trim()?.takeIf(String::isNotBlank) }

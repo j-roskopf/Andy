@@ -531,6 +531,7 @@ interface ActionRunService {
 /** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
 private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 private val NoLocalModelBackends: StateFlow<Map<AgentKind, Boolean>> = MutableStateFlow(emptyMap())
+private val DefaultTerminalSessionsRevision: StateFlow<Long> = MutableStateFlow(0L)
 
 interface AgentRunService {
     val tasks: StateFlow<List<AgentTask>>
@@ -612,6 +613,8 @@ interface AgentRunService {
     val interactiveTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
     /** Chats whose embedded terminal widget is currently mounted in the UI. */
     val attachedTerminalTaskIds: StateFlow<Set<String>> get() = NoInteractiveTerminals
+    /** Observed revision of active/attached terminal sessions, bumped on lifecycle changes. */
+    val terminalSessionsRevision: StateFlow<Long> get() = DefaultTerminalSessionsRevision
     /**
      * True while the embedded chat for [taskId] is on screen *and* the app window is
      * foreground. A chat left open behind another app is not being watched, so it still

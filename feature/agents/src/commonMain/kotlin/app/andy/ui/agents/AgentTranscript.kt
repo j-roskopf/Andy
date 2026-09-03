@@ -244,13 +244,28 @@ fun AgentTranscript(
     val compositionCounter = LocalTranscriptCompositionCounter.current
     SideEffect { compositionCounter?.let { it.rootRestarts++ } }
     val scope = rememberCoroutineScope()
-    val displayItems = remember(events, collapseActivityBetweenMessages, autoExpandThinkingSections, isActive) {
-        transcriptDisplayItems(
+    val displayItems = remember(
+        events,
+        collapseActivityBetweenMessages,
+        autoExpandThinkingSections,
+        isActive,
+        knownTasks,
+        currentTaskId,
+    ) {
+        val base = transcriptDisplayItems(
             events,
             collapseActivityBetweenMessages = collapseActivityBetweenMessages,
             keepThinkingOnTimeline = autoExpandThinkingSections,
             hideOpenTurnFileChanges = isActive,
         )
+        val alreadyLinked = AgentSpawnPresentation.resolvedSpawnTaskIds(
+            events,
+            knownTasks,
+            excludeTaskId = currentTaskId,
+        )
+        val children = AgentSpawnPresentation.childrenOfParent(currentTaskId, knownTasks)
+            .filter { it.id !in alreadyLinked }
+        withLinkedChildSpawnItems(base, children)
     }
     val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths, originalSkills)
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
@@ -479,6 +494,7 @@ fun AgentTranscript(
                         when (displayItems[displayItems.lastIndex - reversedIndex]) {
                             is TranscriptDisplayItem.Event -> "event"
                             is TranscriptDisplayItem.ToolCalls -> "tool-group"
+                            is TranscriptDisplayItem.ChildSpawns -> "child-spawns"
                         }
                     },
                 ) { reversedIndex ->
@@ -573,6 +589,11 @@ fun AgentTranscript(
                                     ) { expandedThinkingKeys = it }
                                 },
                                 onToolFileOpen = onToolFileOpen,
+                                knownTasks = knownTasks,
+                                currentTaskId = currentTaskId,
+                            )
+                            is TranscriptDisplayItem.ChildSpawns -> LinkedChildChatsBlock(
+                                children = item.tasks,
                                 knownTasks = knownTasks,
                                 currentTaskId = currentTaskId,
                             )
@@ -740,7 +761,10 @@ fun transcriptDisplayEvents(
     val coalesced = coalesceAcpTranscriptEvents(events)
     val displayable = coalesced.mapNotNull { event ->
         when {
-            event is AgentEvent.AvailableCommands || event is AgentEvent.Raw -> null
+            event is AgentEvent.AvailableCommands ||
+                event is AgentEvent.AvailableModes ||
+                event is AgentEvent.SessionInfo ||
+                event is AgentEvent.Raw -> null
             event is AgentEvent.FileChanges && event.undone -> null
             event is AgentEvent.FileChanges && event.snapshot.summary.files.isEmpty() -> null
             event is AgentEvent.AssistantText -> {
@@ -874,6 +898,11 @@ fun mergeConsecutiveFileChanges(changes: List<AgentEvent.FileChanges>): AgentEve
 sealed class TranscriptDisplayItem {
     data class Event(val index: Int, val event: AgentEvent) : TranscriptDisplayItem()
     data class ToolCalls(val startIndex: Int, val events: List<AgentEvent>) : TranscriptDisplayItem()
+    /**
+     * Child Andy chats linked by [AgentTask.parentChatTaskId] when the provider's
+     * transcript hid the chat.start tool payload (e.g. Cursor's opaque "MCP: tool").
+     */
+    data class ChildSpawns(val tasks: List<AgentTask>) : TranscriptDisplayItem()
 }
 
 fun transcriptActivityExpanded(
@@ -925,6 +954,37 @@ fun transcriptDisplayItems(
         }
     }
     return items
+}
+
+/**
+ * Inserts [TranscriptDisplayItem.ChildSpawns] for parent→child chats that tool-call spawn
+ * detection missed. Places the block at the earliest child [AgentTask.createdAtMillis].
+ */
+fun withLinkedChildSpawnItems(
+    items: List<TranscriptDisplayItem>,
+    childTasks: List<AgentTask>,
+): List<TranscriptDisplayItem> {
+    if (childTasks.isEmpty()) return items
+    val insertAt = childTasks.minOf { it.createdAtMillis }
+    val block = TranscriptDisplayItem.ChildSpawns(childTasks)
+    val result = mutableListOf<TranscriptDisplayItem>()
+    var inserted = false
+    for (item in items) {
+        val itemAt = transcriptDisplayItemAtMillis(item)
+        if (!inserted && itemAt != null && itemAt > insertAt) {
+            result += block
+            inserted = true
+        }
+        result += item
+    }
+    if (!inserted) result += block
+    return result
+}
+
+fun transcriptDisplayItemAtMillis(item: TranscriptDisplayItem): Long? = when (item) {
+    is TranscriptDisplayItem.Event -> item.event.atMillis.takeIf { it > 0L }
+    is TranscriptDisplayItem.ToolCalls -> item.events.firstOrNull()?.atMillis?.takeIf { it > 0L }
+    is TranscriptDisplayItem.ChildSpawns -> item.tasks.minOfOrNull { it.createdAtMillis }?.takeIf { it > 0L }
 }
 
 fun AgentEvent.isTranscriptActivityEvent(): Boolean =
@@ -1146,6 +1206,8 @@ private fun TranscriptEvent(
         is AgentEvent.AvailableCommands -> Unit
         // Mode metadata powers the mode picker in the composer header; not conversation content.
         is AgentEvent.AvailableModes -> Unit
+        // Provider session titles rename the chat (when enabled); not transcript content.
+        is AgentEvent.SessionInfo -> Unit
         is AgentEvent.PermissionRequest -> {
             if (event.requestId != activePermissionRequestId) {
                 Column(
@@ -1853,6 +1915,32 @@ private fun SpawningAgentsBlock(
                     currentTaskId = currentTaskId,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Always-visible clickable rows for child chats linked by parentChatTaskId.
+ * Used when Cursor (and similar) collapse MCP tool calls to opaque "MCP: tool" events
+ * so [AgentSpawnPresentation.isAgentSpawn] never fires for chat.start.
+ */
+@Composable
+private fun LinkedChildChatsBlock(
+    children: List<AgentTask>,
+    knownTasks: List<AgentTask>,
+    currentTaskId: String?,
+) {
+    if (children.isEmpty()) return
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        children.forEach { child ->
+            SpawnedAgentLine(
+                spawn = AgentSpawnPresentation.fromTask(child),
+                knownTasks = knownTasks,
+                currentTaskId = currentTaskId,
+            )
         }
     }
 }
@@ -2634,6 +2722,8 @@ fun transcriptDisplayItemKey(item: TranscriptDisplayItem): String = when (item) 
         val first = item.events.firstOrNull()
         "tool-group-${item.startIndex}-${first?.atMillis ?: 0}"
     }
+    is TranscriptDisplayItem.ChildSpawns ->
+        "child-spawns-${item.tasks.joinToString("-") { it.id }}"
 }
 
 fun transcriptEventKey(index: Int, event: AgentEvent): String = when (event) {

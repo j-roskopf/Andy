@@ -220,6 +220,7 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
     is AgentEvent.ModeChanged -> TranscriptEvent("mode", atMillis, modeId = modeId)
     is AgentEvent.AvailableCommands -> TranscriptEvent("commands", atMillis, commands = commands.map { TranscriptCommand(it.name, it.description, it.inputHint) })
     is AgentEvent.AvailableModes -> TranscriptEvent("modes", atMillis, modes = modes.map { TranscriptMode(it.id, it.name, it.description) }, currentModeId = currentModeId.orEmpty())
+    is AgentEvent.SessionInfo -> TranscriptEvent("session-info", atMillis, text = title)
     is AgentEvent.PermissionRequest -> TranscriptEvent("permission", atMillis, requestId = requestId, toolName = toolName, question = question, options = options.map { TranscriptOption(it.label, it.description) })
     is AgentEvent.PermissionResolved -> TranscriptEvent("permission-resolved", atMillis, requestId = requestId, optionId = optionId, allowed = allowed, note = note.orEmpty())
     is AgentEvent.FileChanges -> TranscriptEvent(
@@ -278,6 +279,7 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "mode" -> AgentEvent.ModeChanged(atMillis, modeId)
     "commands" -> AgentEvent.AvailableCommands(atMillis, commands.map { AgentSlashCommand(it.name, it.description, it.inputHint) })
     "modes" -> AgentEvent.AvailableModes(atMillis, modes.map { app.andy.model.AgentSessionMode(it.id, it.name, it.description) }, currentModeId.takeIf { it.isNotBlank() })
+    "session-info" -> text.takeIf { it.isNotBlank() }?.let { AgentEvent.SessionInfo(atMillis, it) }
     "permission" -> AgentEvent.PermissionRequest(atMillis, requestId, toolName, question, options.map { app.andy.model.AgentUserInputOption(it.label, it.description) })
     "permission-resolved" -> AgentEvent.PermissionResolved(atMillis, requestId, optionId, allowed, note.takeIf { it.isNotBlank() })
     "file-changes" -> {

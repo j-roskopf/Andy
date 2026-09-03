@@ -292,8 +292,8 @@ class ProviderModelParsingTest {
 
     @Test
     fun catalogResolvesLegacyAntigravityDisplayNames() {
-        val option = AgentModelCatalog.option(AgentKind.Antigravity, "Gemini 3.6 Flash")
-        assertEquals("gemini-3.6-flash", option?.id)
+        assertEquals("gemini-3.6-flash", AgentModelCatalog.option(AgentKind.Antigravity, "Gemini 3.6 Flash")?.id)
+        assertEquals("gemini-3.8-flash", AgentModelCatalog.option(AgentKind.Antigravity, "Gemini 3.8 Flash")?.id)
     }
 
     @Test
