@@ -69,6 +69,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -138,11 +139,11 @@ import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceRail
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
+import app.andy.ui.agents.AgentPillIcon
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
-import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.agents.ChatFollowUpDraftMemory
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
@@ -1517,13 +1518,7 @@ private fun ProjectSessionRow(
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
-    val interactionSource = remember(task.id) { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .hoverable(interactionSource),
-    ) {
+    Box(Modifier.fillMaxWidth()) {
         ChatSessionSidebarRow(
             task = task,
             selected = selected,
@@ -1545,30 +1540,13 @@ private fun ProjectSessionRow(
                         }
                     }
                 },
-            trailing = {
-                // Keep idle glyphs and the hover delete control in-layout so the row width
-                // does not jump when the pointer enters (alpha swap only).
-                Box(contentAlignment = Alignment.CenterEnd) {
-                    Row(
-                        Modifier.alpha(if (hovered) 0f else 1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
-                    ) {
-                        when {
-                            task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
-                            task.worktreePath != null || task.branchName != null -> WorktreeBranchGlyph()
-                            else -> Spacer(Modifier.size(20.dp))
-                        }
-                    }
-                    Box(Modifier.alpha(if (hovered) 1f else 0f)) {
-                        // Keep hit-testing off while invisible so the idle glyphs stay clickable.
-                        if (hovered) {
-                            SessionRowDeleteButton(onClick = onDelete)
-                        } else {
-                            Spacer(Modifier.size(20.dp))
-                        }
-                    }
-                }
+            endOverlay = { hovered ->
+                SessionRowEndOverlay(
+                    task = task,
+                    hovered = hovered,
+                    selected = selected,
+                    onDelete = onDelete,
+                )
             },
         )
         DropdownMenu(
@@ -1599,6 +1577,56 @@ private fun ProjectSessionRow(
                     onDelete()
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun SessionRowEndOverlay(
+    task: AgentTask,
+    hovered: Boolean,
+    selected: Boolean,
+    onDelete: () -> Unit,
+) {
+    val hasIdleGlyph = task.status == AgentStatus.Blocked ||
+        task.worktreePath != null ||
+        task.branchName != null
+    if (!hovered && !hasIdleGlyph) return
+
+    val scrimColor = when {
+        selected -> AndyColors.SurfaceSelected
+        hovered -> AndyColors.SurfaceHover
+        else -> Color.Transparent
+    }
+    // Fade the title out, then a solid gap, then icons — so glyphs never sit against the provider mark.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .width(16.dp)
+                .height(20.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Color.Transparent, scrimColor),
+                    ),
+                ),
+        )
+        Row(
+            Modifier
+                .background(scrimColor)
+                .padding(start = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+        ) {
+            if (hovered) {
+                // 14.dp matches kanban chips; overlay so hover never shifts the row.
+                AgentPillIcon(task.agent, Modifier.size(14.dp))
+                SessionRowDeleteButton(onClick = onDelete)
+            } else {
+                when {
+                    task.status == AgentStatus.Blocked -> StatusTag("blocked", Red)
+                    task.worktreePath != null || task.branchName != null -> WorktreeBranchGlyph()
+                }
+            }
         }
     }
 }

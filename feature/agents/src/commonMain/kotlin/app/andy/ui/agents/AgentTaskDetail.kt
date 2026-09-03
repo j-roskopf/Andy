@@ -40,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -205,6 +206,7 @@ fun AgentTaskDetail(
         mutableStateOf(followUpDraftMemory?.get(task.id)?.text ?: TextFieldValue(""))
     }
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
+    var autocompleteHighlight by remember(task.id) { mutableIntStateOf(0) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
     var toolSidePane by remember(task.id) { mutableStateOf<AgentToolSidePaneState?>(null) }
@@ -252,6 +254,21 @@ fun AgentTaskDetail(
         if (hasStagedImages) scrollToLatestRequest++
     }
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
+    // Real bubble/queue row stays hidden until the flight finishes so it does not
+    // pop in under the overlay mid-animation.
+    val flyingText = flyingMessage?.text
+    val visibleTranscriptEvents = remember(transcriptEvents, flyingText) {
+        suppressLatestMatchingUserMessage(transcriptEvents, flyingText)
+    }
+    val suppressedQueuedFollowUpIndex = remember(task.queuedFollowUps, flyingText) {
+        val needle = flyingText?.trim()?.takeIf { it.isNotEmpty() } ?: return@remember -1
+        task.queuedFollowUps.indexOfLast { it.text.trim() == needle }
+    }
+    val visibleQueuedFollowUpCount = if (suppressedQueuedFollowUpIndex >= 0) {
+        (task.queuedFollowUps.size - 1).coerceAtLeast(0)
+    } else {
+        task.queuedFollowUps.size
+    }
     LaunchedEffect(task.id, task.status) {
         if (task.worktreePath != null && !task.isActive) {
             diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
@@ -356,6 +373,8 @@ fun AgentTaskDetail(
                 skill.description.contains(command.query, ignoreCase = true)
         }.take(8)
     }.orEmpty()
+    val slashMenuOpen = slashCommand != null && !skillMenuDismissed
+    val slashMenuCount = matchingCommands.size + matchingSkills.size
     val fileMention = if (slashCommand == null && services.capabilities.hostAutomation) {
         findComposerFileMention(followUp)
     } else {
@@ -366,6 +385,10 @@ fun AgentTaskDetail(
         hostFiles = services.hostFiles,
         roots = listOfNotNull(skillDirectory),
     )
+    val mentionMenuOpen = fileMention != null && !skillMenuDismissed
+    LaunchedEffect(slashCommand?.query, slashMenuCount, fileMention?.query, mentionResults.size) {
+        autocompleteHighlight = 0
+    }
     val selectedSkills = remember(followUp, availableSkills) {
         availableSkills.filter { skill -> followUp.referencesSkill(skill) }
     }
@@ -405,6 +428,19 @@ fun AgentTaskDetail(
         skillMenuDismissed = true
     }
 
+    fun selectSlashAt(index: Int) {
+        val commandCount = matchingCommands.size
+        if (index < commandCount) {
+            selectCommand(matchingCommands[index])
+        } else {
+            matchingSkills.getOrNull(index - commandCount)?.let(::selectSkill)
+        }
+    }
+
+    fun selectMentionAt(index: Int) {
+        mentionResults.getOrNull(index)?.let(::selectFileMention)
+    }
+
     fun submitFollowUp() {
         if (!supportsResume || !canSendFollowUp) return
         val willQueue = task.isActive || (queueMode && task.queuedFollowUps.isNotEmpty())
@@ -437,6 +473,7 @@ fun AgentTaskDetail(
                 text = text,
                 start = start,
                 end = end,
+                containerRight = root.size.width.toFloat(),
             )
         }
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
@@ -663,7 +700,7 @@ fun AgentTaskDetail(
                     ?.id
                 Row(Modifier.fillMaxSize()) {
                     AgentTranscript(
-                        events = transcriptEvents,
+                        events = visibleTranscriptEvents,
                         isActive = task.isActive,
                         showThinkingIndicator = isSessionWorking(task) || isChatLaunching(task) || isChatRelaunching(task),
                         awaitingPlanConfirmation = awaitingPlanConfirmation,
@@ -746,7 +783,7 @@ fun AgentTaskDetail(
             }
         }
 
-        if (task.queuedFollowUps.isNotEmpty()) {
+        if (visibleQueuedFollowUpCount > 0) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -757,7 +794,7 @@ fun AgentTaskDetail(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "${task.queuedFollowUps.size} queued message${if (task.queuedFollowUps.size == 1) "" else "s"}",
+                        "$visibleQueuedFollowUpCount queued message${if (visibleQueuedFollowUpCount == 1) "" else "s"}",
                         color = TextSecondary,
                         fontFamily = MonoFont,
                         fontSize = 11.sp,
@@ -774,9 +811,12 @@ fun AgentTaskDetail(
                         )
                     }
                 }
+                var visibleOrdinal = 0
                 task.queuedFollowUps.forEachIndexed { index, queuedFollowUp ->
+                    if (index == suppressedQueuedFollowUpIndex) return@forEachIndexed
+                    visibleOrdinal += 1
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("${index + 1}.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+                        Text("$visibleOrdinal.", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
                                 queuedFollowUp.text.ifBlank { "images attached" },
@@ -1001,15 +1041,23 @@ fun AgentTaskDetail(
                                 .onGloballyPositioned { composerFieldCoordinates = it }
                                 .onVoiceDictationShortcut(voiceShortcut, voiceController)
                                 .onPreviewKeyEvent { event ->
+                                    if (
+                                        handleComposerAutocompleteKey(
+                                            event = event,
+                                            slashOpen = slashMenuOpen,
+                                            slashCount = slashMenuCount,
+                                            mentionOpen = mentionMenuOpen,
+                                            mentionCount = mentionResults.size,
+                                            highlight = autocompleteHighlight,
+                                            onHighlightChange = { autocompleteHighlight = it },
+                                            onSelectSlash = ::selectSlashAt,
+                                            onSelectMention = ::selectMentionAt,
+                                            onDismiss = { skillMenuDismissed = true },
+                                        )
+                                    ) {
+                                        return@onPreviewKeyEvent true
+                                    }
                                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                    if (event.key == Key.Tab && (matchingCommands.isNotEmpty() || matchingSkills.isNotEmpty())) {
-                                        matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(matchingSkills.first())
-                                        return@onPreviewKeyEvent true
-                                    }
-                                    if (event.key == Key.Tab && mentionResults.isNotEmpty()) {
-                                        selectFileMention(mentionResults.first())
-                                        return@onPreviewKeyEvent true
-                                    }
                                     if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
                                     if (event.isShiftPressed) return@onPreviewKeyEvent false
                                     if (canSendFollowUp) submitFollowUp()
@@ -1040,7 +1088,7 @@ fun AgentTaskDetail(
                             },
                         )
                         DropdownMenu(
-                            expanded = slashCommand != null && !skillMenuDismissed,
+                            expanded = slashMenuOpen,
                             onDismissRequest = { skillMenuDismissed = true },
                             modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
                             properties = PopupProperties(focusable = false),
@@ -1056,33 +1104,34 @@ fun AgentTaskDetail(
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                             )
-                            matchingCommands.forEach { command ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                            Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    },
+                            matchingCommands.forEachIndexed { index, command ->
+                                ComposerAutocompleteMenuItem(
+                                    selected = index == autocompleteHighlight,
                                     onClick = { selectCommand(command) },
-                                )
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                        Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
                             }
-                            matchingSkills.forEach { skill ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                            Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                            skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                                Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                            }
-                                        }
-                                    },
+                            matchingSkills.forEachIndexed { skillIndex, skill ->
+                                val index = matchingCommands.size + skillIndex
+                                ComposerAutocompleteMenuItem(
+                                    selected = index == autocompleteHighlight,
                                     onClick = { selectSkill(skill) },
-                                )
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                        skill.description.takeIf { it.isNotBlank() }?.let { description ->
+                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
                             }
                         }
                         DropdownMenu(
-                            expanded = fileMention != null && !skillMenuDismissed,
+                            expanded = mentionMenuOpen,
                             onDismissRequest = { skillMenuDismissed = true },
                             modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
                             properties = PopupProperties(focusable = false),
@@ -1098,13 +1147,13 @@ fun AgentTaskDetail(
                                 fontSize = 10.sp,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                             )
-                            mentionResults.forEach { result ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                    },
+                            mentionResults.forEachIndexed { index, result ->
+                                ComposerAutocompleteMenuItem(
+                                    selected = index == autocompleteHighlight,
                                     onClick = { selectFileMention(result) },
-                                )
+                                ) {
+                                    Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                }
                             }
                         }
                     }
@@ -1274,6 +1323,10 @@ fun AgentTaskDetail(
         onFinished = { finished ->
             if (flyingMessage?.id == finished.id) flyingMessage = null
         },
+        // Clip at the detail pane so exit/enter hide past the right edge.
+        modifier = Modifier
+            .matchParentSize()
+            .clipToBounds(),
     )
     }
     }

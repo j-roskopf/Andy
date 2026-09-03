@@ -266,6 +266,13 @@ fun ChatSessionSidebarRow(
     showAgentIcon: Boolean = true,
     showRelativeAge: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    /**
+     * Drawn over the trailing edge of the title/age without taking layout width.
+     * Receives the row's hovered state so callers can swap idle/hover chrome
+     * without a second hoverable (which would fight this row's background).
+     * Suppressed while the session is working so the activity indicator stays clear.
+     */
+    endOverlay: (@Composable (hovered: Boolean) -> Unit)? = null,
 ) {
     val working = isSessionWorking(task) || isChatLaunching(task) || isChatRelaunching(task)
     val prompt = remember(task.prompt, task.title) {
@@ -288,7 +295,8 @@ fun ChatSessionSidebarRow(
             delay(30_000)
         }
     }
-    Row(
+    val contentPaddingVertical = if (showRelativeAge) 7.dp else 5.dp
+    Box(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(AndyRadius.Row))
@@ -298,67 +306,90 @@ fun ChatSessionSidebarRow(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
-            )
-            .padding(horizontal = 10.dp, vertical = if (showRelativeAge) 7.dp else 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ),
     ) {
-        if (showAgentIcon) {
-            Avatar(
-                size = AvatarSize.Xsm,
-                name = task.agent.label,
-            ) {
-                Image(
-                    painter = painterResource(agentIconResource(task.agent)),
-                    contentDescription = task.agent.label,
-                    modifier = Modifier.fillMaxSize(),
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = contentPaddingVertical),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (showAgentIcon) {
+                Avatar(
+                    size = AvatarSize.Xsm,
+                    name = task.agent.label,
+                ) {
+                    Image(
+                        painter = painterResource(agentIconResource(task.agent)),
+                        contentDescription = task.agent.label,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            // Marked in every rail, not just the Agents Temporary section — a project chat list
+            // shows temporary chats inline, and closing one is unrecoverable.
+            if (task.temporary) {
+                Text(
+                    "temp",
+                    color = Yellow,
+                    fontFamily = MonoFont,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
-        }
-        // Marked in every rail, not just the Agents Temporary section — a project chat list
-        // shows temporary chats inline, and closing one is unrecoverable.
-        if (task.temporary) {
             Text(
-                "temp",
-                color = Yellow,
-                fontFamily = MonoFont,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-        Text(
-            prompt,
-            color = when {
-                selected || task.unread -> TextPrimary
-                else -> TextSecondary
-            },
-            fontFamily = DisplayFont,
-            fontWeight = when {
-                task.unread && !selected -> FontWeight.Medium
-                selected -> FontWeight.Medium
-                else -> FontWeight.Normal
-            },
-            fontSize = 13.sp,
-            lineHeight = 16.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (showRelativeAge) {
-            Text(
-                formatChatAge(task.lastActivityMillis(), nowMillis),
-                color = TextSecondary.copy(alpha = 0.76f),
+                prompt,
+                color = when {
+                    selected || task.unread -> TextPrimary
+                    else -> TextSecondary
+                },
                 fontFamily = DisplayFont,
-                fontSize = 12.sp,
+                fontWeight = when {
+                    task.unread && !selected -> FontWeight.Medium
+                    selected -> FontWeight.Medium
+                    else -> FontWeight.Normal
+                },
+                fontSize = 13.sp,
                 lineHeight = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            if (showRelativeAge) {
+                Text(
+                    formatChatAge(task.lastActivityMillis(), nowMillis),
+                    color = TextSecondary.copy(alpha = 0.76f),
+                    fontFamily = DisplayFont,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                )
+            }
+            when {
+                working -> ProjectActivityIndicator(12.dp)
+                trailing != null -> trailing()
+            }
+            if (task.unread && !selected) {
+                UnreadDot()
+            }
         }
-        when {
-            working -> ProjectActivityIndicator(12.dp)
-            trailing != null -> trailing()
-        }
-        if (task.unread && !selected) {
-            UnreadDot()
+        if (endOverlay != null && !working) {
+            // matchParentSize so overlay chrome cannot widen/tall-en the row on hover.
+            Box(Modifier.matchParentSize()) {
+                val endPad = if (task.unread && !selected) {
+                    // Keep the unread dot clear: row end pad + gap + dot.
+                    10.dp + 8.dp + 6.dp
+                } else {
+                    10.dp
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = endPad),
+                ) {
+                    endOverlay(hovered)
+                }
+            }
         }
     }
 }

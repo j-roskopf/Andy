@@ -24,6 +24,22 @@ import kotlin.test.assertTrue
 
 class AgentTranscriptTest {
     @Test
+    fun suppressLatestMatchingUserMessageHidesOnlyNewestMatch() {
+        val events = listOf(
+            AgentEvent.UserMessage(atMillis = 1, text = "hello"),
+            AgentEvent.AssistantText(atMillis = 2, text = "hi"),
+            AgentEvent.UserMessage(atMillis = 3, text = "hello"),
+        )
+        val suppressed = suppressLatestMatchingUserMessage(events, "hello")
+        assertEquals(2, suppressed.size)
+        assertIs<AgentEvent.UserMessage>(suppressed[0])
+        assertEquals("hello", (suppressed[0] as AgentEvent.UserMessage).text)
+        assertIs<AgentEvent.AssistantText>(suppressed[1])
+        assertEquals(events, suppressLatestMatchingUserMessage(events, null))
+        assertEquals(events, suppressLatestMatchingUserMessage(events, "missing"))
+    }
+
+    @Test
     fun chatBubbleSenderIgnoresSilentRecoveryPrompts() {
         assertEquals(null, AgentEvent.UserMessage(atMillis = 1, text = CONNECTION_STALL_RETRY_PROMPT).chatBubbleSenderOrNull())
         assertEquals(ChatBubbleSender.User, AgentEvent.UserMessage(atMillis = 1, text = "hello").chatBubbleSenderOrNull())

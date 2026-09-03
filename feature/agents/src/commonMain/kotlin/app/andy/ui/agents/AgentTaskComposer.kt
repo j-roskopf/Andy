@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -655,6 +656,19 @@ private class AgentTaskComposerForm(
         state.promptValue = insertFileMention(state.prompt, mention, result)
         state.skillMenuDismissed = true
     }
+
+    fun selectSlashAt(index: Int) {
+        val commandCount = matchingCommands.size
+        if (index < commandCount) {
+            selectCommand(matchingCommands[index])
+        } else {
+            matchingSkills.getOrNull(index - commandCount)?.let(::selectSkill)
+        }
+    }
+
+    fun selectMentionAt(index: Int) {
+        mentionResults.getOrNull(index)?.let(::selectFileMention)
+    }
 }
 
 @Composable
@@ -711,6 +725,7 @@ private fun AgentChatComposer(
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
+    var refreshingProviders by remember { mutableStateOf(false) }
     var voiceError by remember { mutableStateOf<String?>(null) }
     val canSubmit = form.canSubmit
     val hasAvailableProvider = form.hasAvailableProvider
@@ -728,6 +743,19 @@ private fun AgentChatComposer(
     fun selectSkill(skill: AgentSkill) = form.selectSkill(skill)
     fun selectCommand(command: AgentNativeSlashCommand) = form.selectCommand(command)
     fun selectFileMention(result: HostSearchResult) = form.selectFileMention(result)
+
+    val slashMenuOpen = form.slashCommand != null && !state.skillMenuDismissed
+    val slashMenuCount = form.matchingCommands.size + form.matchingSkills.size
+    val mentionMenuOpen = form.fileMention != null && !state.skillMenuDismissed
+    var autocompleteHighlight by remember { mutableIntStateOf(0) }
+    LaunchedEffect(
+        form.slashCommand?.query,
+        slashMenuCount,
+        form.fileMention?.query,
+        form.mentionResults.size,
+    ) {
+        autocompleteHighlight = 0
+    }
 
     var permissionsMenuExpanded by remember { mutableStateOf(false) }
     val drawerItems = chatComposerDrawerItemsFromPaths(
@@ -847,15 +875,23 @@ private fun AgentChatComposer(
                             .heightIn(min = 72.dp, max = 180.dp)
                             .onVoiceDictationShortcut(voiceShortcut, voiceController)
                             .onPreviewKeyEvent { event ->
+                                if (
+                                    handleComposerAutocompleteKey(
+                                        event = event,
+                                        slashOpen = slashMenuOpen,
+                                        slashCount = slashMenuCount,
+                                        mentionOpen = mentionMenuOpen,
+                                        mentionCount = form.mentionResults.size,
+                                        highlight = autocompleteHighlight,
+                                        onHighlightChange = { autocompleteHighlight = it },
+                                        onSelectSlash = form::selectSlashAt,
+                                        onSelectMention = form::selectMentionAt,
+                                        onDismiss = { state.skillMenuDismissed = true },
+                                    )
+                                ) {
+                                    return@onPreviewKeyEvent true
+                                }
                                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                if (event.key == Key.Tab && (form.matchingCommands.isNotEmpty() || form.matchingSkills.isNotEmpty())) {
-                                    form.matchingCommands.firstOrNull()?.let(::selectCommand) ?: selectSkill(form.matchingSkills.first())
-                                    return@onPreviewKeyEvent true
-                                }
-                                if (event.key == Key.Tab && form.mentionResults.isNotEmpty()) {
-                                    selectFileMention(form.mentionResults.first())
-                                    return@onPreviewKeyEvent true
-                                }
                                 if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
                                 if (event.isShiftPressed) return@onPreviewKeyEvent false
                                 if (canSubmit) onSubmit()
@@ -888,7 +924,7 @@ private fun AgentChatComposer(
                         },
                     )
                     DropdownMenu(
-                        expanded = form.slashCommand != null && !state.skillMenuDismissed,
+                        expanded = slashMenuOpen,
                         onDismissRequest = { state.skillMenuDismissed = true },
                         modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
                         properties = PopupProperties(focusable = false),
@@ -904,33 +940,34 @@ private fun AgentChatComposer(
                             fontSize = 10.sp,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         )
-                        form.matchingCommands.forEach { command ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                        Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
-                                    }
-                                },
+                        form.matchingCommands.forEachIndexed { index, command ->
+                            ComposerAutocompleteMenuItem(
+                                selected = index == autocompleteHighlight,
                                 onClick = { selectCommand(command) },
-                            )
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
+                                    Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                }
+                            }
                         }
-                        form.matchingSkills.forEach { skill ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                        skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
-                                        }
-                                    }
-                                },
+                        form.matchingSkills.forEachIndexed { skillIndex, skill ->
+                            val index = form.matchingCommands.size + skillIndex
+                            ComposerAutocompleteMenuItem(
+                                selected = index == autocompleteHighlight,
                                 onClick = { selectSkill(skill) },
-                            )
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                                    skill.description.takeIf { it.isNotBlank() }?.let { description ->
+                                        Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2)
+                                    }
+                                }
+                            }
                         }
                     }
                     DropdownMenu(
-                        expanded = form.fileMention != null && !state.skillMenuDismissed,
+                        expanded = mentionMenuOpen,
                         onDismissRequest = { state.skillMenuDismissed = true },
                         modifier = Modifier.widthIn(min = 300.dp, max = 460.dp),
                         properties = PopupProperties(focusable = false),
@@ -946,13 +983,13 @@ private fun AgentChatComposer(
                             fontSize = 10.sp,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                         )
-                        form.mentionResults.forEach { result ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                },
+                        form.mentionResults.forEachIndexed { index, result ->
+                            ComposerAutocompleteMenuItem(
+                                selected = index == autocompleteHighlight,
                                 onClick = { selectFileMention(result) },
-                            )
+                            ) {
+                                Text(result.relativePath(), color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -1010,6 +1047,28 @@ private fun AgentChatComposer(
                                     },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (refreshingProviders) "refreshing providers…" else "refresh providers",
+                                        color = TextSecondary,
+                                        fontFamily = MonoFont,
+                                        fontSize = 12.sp,
+                                    )
+                                },
+                                enabled = !refreshingProviders,
+                                onClick = {
+                                    agentMenuExpanded = false
+                                    form.scope.launch {
+                                        refreshingProviders = true
+                                        try {
+                                            form.services.agentRuns.refreshCliStatuses()
+                                        } finally {
+                                            refreshingProviders = false
+                                        }
+                                    }
+                                },
+                            )
                         }
                     }
                     Box {

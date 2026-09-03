@@ -46,7 +46,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -88,9 +87,8 @@ data class ChatComposerDrawerItem(
  * Layout mirrors [astryx ChatComposer](https://astryx.atmeta.com/components/ChatComposer):
  * attachment drawer above, @ / attach + context progress on top, model + settings below the input.
  *
- * [contextBar] renders in a fixed strip above the input frame (no overlap offset) so the text
- * field stays anchored when switching between new and existing chats. The attachment drawer
- * only appears for [drawerItems].
+ * [contextBar] and attachment chips sit chrome-less above the input frame (no second panel fill)
+ * so the text field stays the only raised surface when switching between new and existing chats.
  */
 @Composable
 fun ChatComposerLayout(
@@ -120,9 +118,7 @@ fun ChatComposerLayout(
     Column(modifier) {
         if (hasUpperArea) {
             ChatComposerHeaderArea(
-                modifier = Modifier
-                    .fillMaxWidth(0.96f)
-                    .align(Alignment.CenterHorizontally),
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 if (contextBar != null) {
                     contextBar()
@@ -166,36 +162,26 @@ fun ChatComposerLayout(
     }
 }
 
-/** Fixed header area above the input frame for context (git/temporary) and attachments (images/skills). */
+/**
+ * Quiet strip above the input frame for context (git/temporary) and attachments.
+ * No fill or shadow — a second raised panel next to the composer reads as competing chrome.
+ */
 @Composable
 private fun ChatComposerHeaderArea(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(
-        topStart = AndyRadius.Sheet,
-        topEnd = AndyRadius.Sheet,
-        bottomStart = HeaderAreaBottomRadius,
-        bottomEnd = HeaderAreaBottomRadius,
-    )
     Column(
-        modifier = modifier
-            .shadow(elevation = 1.dp, shape = shape, clip = false)
-            // Rail/well tone — distinct from SurfacePopover (composer / chat chrome) in every mode.
-            .background(AndyColors.SidebarBg, shape)
-            .padding(
-                start = AndySpace.Space3,
-                end = AndySpace.Space3,
-                top = AndySpace.Space2,
-                bottom = AndySpace.Space2,
-            ),
+        modifier = modifier.padding(
+            start = AndySpace.Space3,
+            end = AndySpace.Space3,
+            top = AndySpace.Space1,
+            bottom = AndySpace.Space2,
+        ),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         content = content,
     )
 }
-
-/** Soft bottom corners on the strip above the chat frame — just enough to read as rounded. */
-private val HeaderAreaBottomRadius: Dp = 4.dp
 
 /** Collapsible flow row for referenced files, skills, and images in the composer header area. */
 @OptIn(ExperimentalLayoutApi::class)

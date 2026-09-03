@@ -661,6 +661,22 @@ fun AgentTranscript(
 }
 
 /**
+ * Hides the newest matching user turn while a send-flight overlay owns that bubble.
+ * Match is exact on trimmed [text] so older identical prompts stay visible.
+ */
+fun suppressLatestMatchingUserMessage(
+    events: List<AgentEvent>,
+    text: String?,
+): List<AgentEvent> {
+    val needle = text?.trim()?.takeIf { it.isNotEmpty() } ?: return events
+    val index = events.indexOfLast { event ->
+        event is AgentEvent.UserMessage && event.text.trim() == needle
+    }
+    if (index < 0) return events
+    return events.filterIndexed { i, _ -> i != index }
+}
+
+/**
  * ACP records the user turn in the transcript, while terminal tasks still need the task prompt
  * fallback. Do not render both representations when a recorded user turn is already present.
  */

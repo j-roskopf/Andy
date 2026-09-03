@@ -1050,11 +1050,40 @@ private enum class OrchestrationMenu {
 @Composable
 private fun AgentExecutionPreferencesPanel(services: AndyServices) {
     val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
+    val scope = rememberCoroutineScope()
+    var refreshingProviders by remember { mutableStateOf(false) }
 
     SettingsGroup(
         title = "Chat interface",
         description = "Choose how new chats start for each provider. ACP is the default wherever the provider supports it. Lifecycle hooks are used for status tracking when supported; other providers rely on prompt detection.",
         ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Rediscover installed provider CLIs without quitting Andy.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        refreshingProviders = true
+                        try {
+                            services.agentRuns.refreshCliStatuses()
+                        } finally {
+                            refreshingProviders = false
+                        }
+                    }
+                },
+                enabled = !refreshingProviders,
+            ) {
+                Text(if (refreshingProviders) "refreshing…" else "refresh providers", fontSize = 11.sp)
+            }
+        }
         AgentKind.entries.filter { it.hasVendorCli }.forEach { agent ->
             val selectedLane = providerDefaults[agent]?.lane ?: agent.defaultLane()
             Row(
@@ -1862,7 +1891,7 @@ private fun RuntimeBundlePanel(
                 val label = when {
                     installing -> "Installing…"
                     !cliInstalled -> "Install from latest"
-                    snapshot?.updateAvailable == true -> "Update from latest"
+                    snapshot.updateAvailable == true -> "Update from latest"
                     else -> "Reinstall from latest"
                 }
                 Text(label)
