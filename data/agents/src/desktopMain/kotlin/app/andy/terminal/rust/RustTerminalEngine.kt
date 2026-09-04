@@ -1,16 +1,27 @@
 package app.andy.terminal.rust
 
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
+
 /**
  * JVM handle around the Rust `alacritty_terminal` engine.
  *
  * Andy feeds PTY chunks and polls grid state on its own redraw cadence — there is
  * no per-character redraw callback from native code.
+ *
+ * Every native call goes through [withHandle], so a closed engine degrades to no-ops
+ * instead of throwing: Compose keeps dispatching pointer and paint work at a backend
+ * for a frame or two after a chat swap has closed it, and the PTY read loop can be
+ * mid-call on another thread when [close] lands.
  */
 class RustTerminalEngine(
     columns: Int,
     rows: Int,
 ) : AutoCloseable {
+    @Volatile
     private var handle: Long = nativeCreate(columns, rows)
+    private val lifecycle = ReentrantReadWriteLock()
     private var columns: Int = columns.coerceAtLeast(1)
     private var rows: Int = rows.coerceAtLeast(1)
 
@@ -25,108 +36,68 @@ class RustTerminalEngine(
         check(handle != 0L) { "nativeCreate returned null handle" }
     }
 
-    fun advance(bytes: ByteArray) {
-        checkOpen()
-        nativeAdvance(handle, bytes)
+    val isClosed: Boolean
+        get() = handle == 0L
+
+    fun advance(bytes: ByteArray) = withHandle(Unit) { h ->
+        nativeAdvance(h, bytes)
     }
 
     fun advance(text: String) = advance(text.toByteArray(Charsets.UTF_8))
 
-    fun resize(columns: Int, rows: Int) {
-        checkOpen()
+    fun resize(columns: Int, rows: Int) = withHandle(Unit) { h ->
         val cols = columns.coerceAtLeast(1)
         val r = rows.coerceAtLeast(1)
-        nativeResize(handle, cols, r)
+        nativeResize(h, cols, r)
         this.columns = cols
         this.rows = r
         ensureBuffers(cols * r)
     }
 
     fun setPalette(paletteArgb: IntArray) {
-        checkOpen()
         require(paletteArgb.size >= 19) { "palette must be [fg,bg,cursor,ansi0..15]" }
-        check(nativeSetPalette(handle, paletteArgb) == 0) { "nativeSetPalette failed" }
+        withHandle(Unit) { h ->
+            check(nativeSetPalette(h, paletteArgb) == 0) { "nativeSetPalette failed" }
+        }
     }
 
-    fun isAltScreen(): Boolean {
-        checkOpen()
-        return nativeIsAltScreen(handle)
-    }
+    fun isAltScreen(): Boolean = withHandle(false) { h -> nativeIsAltScreen(h) }
 
-    fun syncBufferedBytes(): Int {
-        checkOpen()
-        return nativeSyncBufferedBytes(handle)
-    }
+    fun syncBufferedBytes(): Int = withHandle(0) { h -> nativeSyncBufferedBytes(h) }
 
-    fun stopSync() {
-        checkOpen()
-        nativeStopSync(handle)
-    }
+    fun stopSync() = withHandle(Unit) { h -> nativeStopSync(h) }
 
-    fun scrollDisplay(delta: Int) {
-        checkOpen()
-        nativeScrollDisplay(handle, delta)
-    }
+    fun scrollDisplay(delta: Int) = withHandle(Unit) { h -> nativeScrollDisplay(h, delta) }
 
-    fun scrollToBottom() {
-        checkOpen()
-        nativeScrollToBottom(handle)
-    }
+    fun scrollToBottom() = withHandle(Unit) { h -> nativeScrollToBottom(h) }
 
-    fun mouseFlags(): Int {
-        checkOpen()
-        return nativeMouseFlags(handle)
-    }
+    fun mouseFlags(): Int = withHandle(0) { h -> nativeMouseFlags(h) }
 
-    fun bracketedPasteEnabled(): Boolean {
-        checkOpen()
-        return nativeBracketedPasteEnabled(handle)
-    }
+    fun bracketedPasteEnabled(): Boolean = withHandle(false) { h -> nativeBracketedPasteEnabled(h) }
 
-    fun displayOffset(): Int {
-        checkOpen()
-        return nativeDisplayOffset(handle)
-    }
+    fun displayOffset(): Int = withHandle(0) { h -> nativeDisplayOffset(h) }
 
-    fun viewportText(): String {
-        checkOpen()
-        return nativeViewportText(handle)
-    }
+    fun viewportText(): String = withHandle("") { h -> nativeViewportText(h) }
 
-    fun gridChars(): String {
-        checkOpen()
-        return nativeGridChars(handle)
-    }
+    fun gridChars(): String = withHandle("") { h -> nativeGridChars(h) }
 
-    fun cursorRow(): Int {
-        checkOpen()
-        return nativeCursorRow(handle)
-    }
+    fun cursorRow(): Int = withHandle(0) { h -> nativeCursorRow(h) }
 
-    fun cursorCol(): Int {
-        checkOpen()
-        return nativeCursorCol(handle)
-    }
+    fun cursorCol(): Int = withHandle(0) { h -> nativeCursorCol(h) }
 
     fun columns(): Int = columns
 
     fun rows(): Int = rows
 
-    fun cellBold(row: Int, col: Int): Boolean {
-        checkOpen()
-        return nativeCellBold(handle, row, col)
-    }
+    fun cellBold(row: Int, col: Int): Boolean = withHandle(false) { h -> nativeCellBold(h, row, col) }
 
-    fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String {
-        checkOpen()
-        return nativeExtractText(handle, startLine, startCol, endLine, endCol)
-    }
+    fun extractText(startLine: Int, startCol: Int, endLine: Int, endCol: Int): String =
+        withHandle("") { h -> nativeExtractText(h, startLine, startCol, endLine, endCol) }
 
-    fun fillFrame(into: RustTerminalFrame): Boolean {
-        checkOpen()
+    fun fillFrame(into: RustTerminalFrame): Boolean = withHandle(false) { h ->
         ensureBuffers(columns * rows)
-        val rc = nativeFillSnapshot(handle, codePoints, fgArgb, bgArgb, attrs, meta)
-        if (rc != 0) return false
+        val rc = nativeFillSnapshot(h, codePoints, fgArgb, bgArgb, attrs, meta)
+        if (rc != 0) return@withHandle false
         into.columns = meta[0]
         into.rows = meta[1]
         into.cursorRow = meta[2]
@@ -139,13 +110,15 @@ class RustTerminalEngine(
         into.fgArgb = fgArgb
         into.bgArgb = bgArgb
         into.attrs = attrs
-        return true
+        true
     }
 
     override fun close() {
-        if (handle != 0L) {
-            nativeDestroy(handle)
-            handle = 0L
+        lifecycle.write {
+            if (handle != 0L) {
+                nativeDestroy(handle)
+                handle = 0L
+            }
         }
     }
 
@@ -158,8 +131,14 @@ class RustTerminalEngine(
         }
     }
 
-    private fun checkOpen() {
-        check(handle != 0L) { "RustTerminalEngine is closed" }
+    /**
+     * Runs [body] with the native handle pinned open, or returns [fallback] once the engine
+     * is closed. The read lock is what keeps [close] from freeing the terminal underneath an
+     * in-flight native call on another thread.
+     */
+    private inline fun <T> withHandle(fallback: T, body: (Long) -> T): T = lifecycle.read {
+        val h = handle
+        if (h == 0L) fallback else body(h)
     }
 
     private companion object {

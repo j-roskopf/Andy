@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +31,7 @@ import app.andy.isToggleableInSidebar
 import app.andy.model.DeviceConnectionState
 import app.andy.service.AndyServices
 import app.andy.service.IosTargetRegistry
+import app.andy.service.MirrorEngine
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.TargetCapabilities
 import app.andy.ui.actions.ActionsScreen
@@ -94,11 +96,18 @@ internal fun AndyShell(
     onPopOutMirror: (String?, String?) -> Unit,
     onPopOutDevice: (String, String) -> Unit,
     poppedOutTargetIds: Set<String> = emptySet(),
+    liveMirrorHold: (String) -> Unit = {},
+    liveMirrorRelease: (String) -> Unit = {},
+    liveMirrorFor: (String) -> MirrorEngine? = { null },
     contentTopPadding: androidx.compose.ui.unit.Dp,
     initialProjectTaskId: String?,
     initialProjectTab: String?,
 ) {
     val state = rememberShellState(services)
+    SideEffect {
+        state.onLiveMirrorHold = liveMirrorHold
+        state.onLiveMirrorRelease = liveMirrorRelease
+    }
     val capabilities = services.capabilities
     // OS notification deep links and in-app contextual launches share one open-chat request.
     val effectiveOpenAgentTask = requestedOpenAgentTask ?: state.pendingAgentTaskOpen
@@ -275,6 +284,15 @@ internal fun AndyShell(
         val knownProjectIds = remember(state.actionsConfig.projects) {
             state.actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
         }
+        val dockLayoutMenu = DockLayoutMenu(
+            layouts = state.savedLayouts,
+            canSave = state.canSaveDockLayout,
+            atLimit = state.savedLayoutLimitReached,
+            defaultName = state::defaultDockLayoutName,
+            onSave = state::saveDockLayout,
+            onLoad = state::loadDockLayout,
+            onDelete = state::deleteDockLayout,
+        )
         Row(Modifier.fillMaxSize()) {
             Sidebar(
                 current = state.destination,
@@ -283,10 +301,11 @@ internal fun AndyShell(
                 iosSelectionActive = state.isIosSelection,
                 iosCapabilities = state.targetCapabilities,
                 // Project chats are owned by Actions. Keep their unread state out of
-                // the standalone Agent destination.
+                // the standalone Agent destination. Spec/Build/Review completions also
+                // count — they surface under Projects rather than the Agents list.
                 hasUnreadAgentTasks = agentTasks.any { !it.archived && it.unread && it.projectId == null },
                 hasUnreadProjectAgentTasks = agentTasks.any { task ->
-                    !task.archived && task.unread && task.workflowTaskId == null &&
+                    !task.archived && task.unread &&
                         task.projectId != null && task.projectId in knownProjectIds
                 },
                 hasActiveProjectAgentTasks = agentTasks.any { task ->
@@ -324,6 +343,7 @@ internal fun AndyShell(
                     devices = state.devices,
                     iosTargets = state.iosTargets,
                     selectedIosTarget = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid },
+                    dockLayoutMenu = dockLayoutMenu,
                     deviceLabels = state.workspaceState.deviceLabels,
                     onSelectDevice = { state.selectDevice(it) },
                     onSelectIosTarget = { state.selectIosTarget(it) },
@@ -388,8 +408,23 @@ internal fun AndyShell(
                         }
                     },
                 )
-                val liveDockActive = state.destination != AndyDestination.Live &&
-                    state.activeTargetId !in poppedOutTargetIds
+                val liveDockPaused: (String?) -> Boolean = { targetId ->
+                    when {
+                        targetId == null -> false
+                        targetId in poppedOutTargetIds -> true
+                        state.destination == AndyDestination.Live && state.activeTargetId == targetId -> true
+                        else -> false
+                    }
+                }
+                val liveDockPauseMessage: (String?) -> String = { targetId ->
+                    when {
+                        targetId != null && targetId in poppedOutTargetIds ->
+                            "Live view pauses while this device is popped out"
+                        state.destination == AndyDestination.Live && state.activeTargetId == targetId ->
+                            "Live view pauses while the main Live tab shows this device"
+                        else -> "Live view pauses while another tab is open"
+                    }
+                }
                 var rightDockPaneWidth by remember(state.workspaceState.rightDockPaneWidth) {
                     mutableStateOf(state.workspaceState.rightDockPaneWidth)
                 }
@@ -547,6 +582,8 @@ internal fun AndyShell(
                             autoBugCaptureEnabled = state.workspaceState.autoBugCaptureEnabled,
                             foldableHingeAngle = state.foldableHingeAngle,
                             onFoldableHingeAngleChange = state::updateFoldableHingeAngle,
+                            androidAutoSerial = state.androidAutoSerial,
+                            onAndroidAutoSerialChange = state::updateAndroidAutoSerial,
                         )
                         AndyDestination.Apps -> AppsScreen(
                             services,
@@ -676,7 +713,6 @@ internal fun AndyShell(
                         serial = state.activeTargetId,
                         device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                         targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
-                        liveActive = liveDockActive,
                         logcat = services.logcat,
                         appsService = services.apps,
                         selectedPackage = state.workspaceState.selectedPackage,
@@ -698,6 +734,29 @@ internal fun AndyShell(
                             onWeightsChanged = { tabId, splitId, weights -> state.updateSplitWeights(DockPlacement.Right, tabId, splitId, weights) },
                             onAddPaneKind = { kind -> state.openDockKind(DockPlacement.Right, kind, newTerminal = true) },
                         ),
+                        livePaneCallbacks = LivePaneCallbacks(
+                            onSelectTarget = { tabId, leafId, targetId ->
+                                state.setLiveTabTarget(tabId, targetId, leafId)
+                            },
+                            onFocusLeaf = { tabId, leafId ->
+                                state.focusLiveLeaf(DockPlacement.Right, tabId, leafId)
+                            },
+                            onSplit = { tabId, leafId, axis ->
+                                state.splitLiveLeaf(DockPlacement.Right, tabId, leafId, axis)
+                            },
+                            onCloseLeaf = { tabId, leafId ->
+                                state.closeLiveLeaf(DockPlacement.Right, tabId, leafId)
+                            },
+                            onWeightsChanged = { tabId, splitId, weights ->
+                                state.updateLiveSplitWeights(DockPlacement.Right, tabId, splitId, weights)
+                            },
+                        ),
+                        devices = state.devices,
+                        iosTargets = state.iosTargets,
+                        deviceLabels = state.workspaceState.deviceLabels,
+                        liveMirrorFor = liveMirrorFor,
+                        liveTabPaused = liveDockPaused,
+                        liveTabPauseMessage = liveDockPauseMessage,
                         browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
                         onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
@@ -712,6 +771,7 @@ internal fun AndyShell(
                         viewedAgentTaskId = state.viewedAgentTaskId,
                         modifier = Modifier.width(rightDockPaneWidth.dp).fillMaxHeight(),
                         terminalThemeId = state.workspaceState.terminalThemeId,
+                        layoutMenu = dockLayoutMenu,
                     )
                 }
                 }
@@ -728,7 +788,6 @@ internal fun AndyShell(
                         serial = state.activeTargetId,
                         device = state.devices.firstOrNull { it.serial == state.selectedSerial },
                         targetDisplayName = state.iosTargets.firstOrNull { it.udid == state.selectedIosUdid }?.displayName,
-                        liveActive = liveDockActive,
                         logcat = services.logcat,
                         appsService = services.apps,
                         selectedPackage = state.workspaceState.selectedPackage,
@@ -750,6 +809,29 @@ internal fun AndyShell(
                             onWeightsChanged = { tabId, splitId, weights -> state.updateSplitWeights(DockPlacement.Bottom, tabId, splitId, weights) },
                             onAddPaneKind = { kind -> state.openDockKind(DockPlacement.Bottom, kind, newTerminal = true) },
                         ),
+                        livePaneCallbacks = LivePaneCallbacks(
+                            onSelectTarget = { tabId, leafId, targetId ->
+                                state.setLiveTabTarget(tabId, targetId, leafId)
+                            },
+                            onFocusLeaf = { tabId, leafId ->
+                                state.focusLiveLeaf(DockPlacement.Bottom, tabId, leafId)
+                            },
+                            onSplit = { tabId, leafId, axis ->
+                                state.splitLiveLeaf(DockPlacement.Bottom, tabId, leafId, axis)
+                            },
+                            onCloseLeaf = { tabId, leafId ->
+                                state.closeLiveLeaf(DockPlacement.Bottom, tabId, leafId)
+                            },
+                            onWeightsChanged = { tabId, splitId, weights ->
+                                state.updateLiveSplitWeights(DockPlacement.Bottom, tabId, splitId, weights)
+                            },
+                        ),
+                        devices = state.devices,
+                        iosTargets = state.iosTargets,
+                        deviceLabels = state.workspaceState.deviceLabels,
+                        liveMirrorFor = liveMirrorFor,
+                        liveTabPaused = liveDockPaused,
+                        liveTabPauseMessage = liveDockPauseMessage,
                         browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
                         onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
@@ -764,6 +846,7 @@ internal fun AndyShell(
                         viewedAgentTaskId = state.viewedAgentTaskId,
                         modifier = Modifier.fillMaxWidth().height(bottomDockPaneHeight.dp),
                         terminalThemeId = state.workspaceState.terminalThemeId,
+                        layoutMenu = dockLayoutMenu,
                     )
                 }
                 }

@@ -51,6 +51,33 @@ class DeviceSelectionTest {
     }
 
     @Test
+    fun keepsPinnedAndroidSelectionWhileOffline() {
+        val result = reconcileDeviceSelection(
+            previousOnlineAndroidSerials = setOf("A"),
+            devices = emptyList(),
+            iosTargets = emptyList(),
+            selectedSerial = "A",
+            selectedIosUdid = null,
+            pinnedAndroidSerial = "A",
+        )
+        assertEquals("A", result.selectedSerial)
+        assertNull(result.selectedIosUdid)
+    }
+
+    @Test
+    fun ignoresPinWhenItDoesNotMatchSelection() {
+        val result = reconcileDeviceSelection(
+            previousOnlineAndroidSerials = setOf("A", "B"),
+            devices = listOf(online("B")),
+            iosTargets = emptyList(),
+            selectedSerial = "A",
+            selectedIosUdid = null,
+            pinnedAndroidSerial = "B",
+        )
+        assertEquals("B", result.selectedSerial)
+    }
+
+    @Test
     fun autoSelectsWhenPluggingIntoEmptySlate() {
         val result = reconcileDeviceSelection(
             previousOnlineAndroidSerials = emptySet(),

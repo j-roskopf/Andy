@@ -74,7 +74,8 @@ static GpuPresenter presenters[ANDY_MAX_PRESENTERS];
 static pthread_mutex_t hub_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t render_lock = PTHREAD_MUTEX_INITIALIZER;
 static int64_t next_id = 1;
-static int64_t ios_decoder_id = ANDY_HUB_INVALID_ID;
+static int64_t ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+static int64_t ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
 
 static uint64_t andy_now_ns(void) {
     struct timespec ts;
@@ -347,7 +348,8 @@ void andy_hub_destroy_decoder(int64_t decoder_id) {
             destroy_presenter_locked(&presenters[i]);
         }
     }
-    if (ios_decoder_id == decoder_id) ios_decoder_id = ANDY_HUB_INVALID_ID;
+    if (ios_device_decoder_id == decoder_id) ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+    if (ios_sim_decoder_id == decoder_id) ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
     pthread_mutex_lock(&decoder->decoder_lock);
     destroy_decoder_locked(decoder);
     pthread_mutex_unlock(&decoder->decoder_lock);
@@ -795,18 +797,27 @@ float andy_hub_p95_transport_to_present_millis(int64_t decoder_id) {
     return value;
 }
 
-void andy_hub_set_ios_decoder(int64_t decoder_id) {
-    ios_decoder_id = decoder_id;
+void andy_hub_set_ios_decoder(int64_t decoder_id, bool simulator) {
+    if (simulator) {
+        ios_sim_decoder_id = decoder_id;
+    } else {
+        ios_device_decoder_id = decoder_id;
+    }
 }
 
 void andy_hub_clear_ios_decoder(int64_t decoder_id) {
     pthread_mutex_lock(&hub_lock);
-    if (ios_decoder_id == decoder_id) ios_decoder_id = ANDY_HUB_INVALID_ID;
+    if (ios_device_decoder_id == decoder_id) ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+    if (ios_sim_decoder_id == decoder_id) ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
     pthread_mutex_unlock(&hub_lock);
 }
 
-int64_t andy_hub_ios_decoder(void) {
-    return ios_decoder_id;
+int64_t andy_hub_ios_device_decoder(void) {
+    return ios_device_decoder_id;
+}
+
+int64_t andy_hub_ios_sim_decoder(void) {
+    return ios_sim_decoder_id;
 }
 
 int andy_hub_window_desktop(int parent_window_number) {

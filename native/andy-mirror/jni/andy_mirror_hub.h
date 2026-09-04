@@ -68,11 +68,16 @@ float andy_hub_p95_input_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_packet_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_transport_to_present_millis(int64_t decoder_id);
 
-/** Binds iOS capture callbacks to [decoder_id]. ANDY_HUB_INVALID_ID disables hub routing. */
-void andy_hub_set_ios_decoder(int64_t decoder_id);
-/** Clears the iOS routing slot only if it currently points at [decoder_id]. */
+/**
+ * Binds an iOS capture source to [decoder_id]. Physical devices and simulators own
+ * independent slots so both can mirror at once (Live split panes / pop-outs).
+ * ANDY_HUB_INVALID_ID disables that source's hub routing.
+ */
+void andy_hub_set_ios_decoder(int64_t decoder_id, bool simulator);
+/** Clears whichever iOS routing slot currently points at [decoder_id]. */
 void andy_hub_clear_ios_decoder(int64_t decoder_id);
-int64_t andy_hub_ios_decoder(void);
+int64_t andy_hub_ios_device_decoder(void);
+int64_t andy_hub_ios_sim_decoder(void);
 
 #ifdef __cplusplus
 }

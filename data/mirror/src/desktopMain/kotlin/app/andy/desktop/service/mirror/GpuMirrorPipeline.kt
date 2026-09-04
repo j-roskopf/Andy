@@ -58,13 +58,13 @@ class GpuMirrorPipeline private constructor(
     fun copyLatestFrameArgb(): MirrorFrame? =
         if (closed) null else GpuMirrorJni.copyLatestFrameArgb(decoderId)
 
-    fun bindIosCapture() {
-        if (!closed) GpuMirrorJni.bindIosDecoder(decoderId)
+    fun bindIosCapture(simulator: Boolean) {
+        if (!closed) GpuMirrorJni.bindIosDecoder(decoderId, simulator)
     }
 
     fun unbindIosCapture() {
-        // Only release the global iOS routing slot if *this* decoder still owns it. Closing an
-        // unrelated (e.g. Android) pipeline must not blank a live iOS mirror bound to another decoder.
+        // Only release an iOS routing slot if *this* decoder still owns it. Closing an
+        // unrelated (e.g. Android) pipeline must not blank a live iOS mirror bound elsewhere.
         GpuMirrorJni.clearIosDecoder(decoderId)
     }
 

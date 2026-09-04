@@ -130,16 +130,17 @@ JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeIsHardwareReady)(JNIEnv *env, jc
     return andy_hub_is_hardware_ready((int64_t) decoder_id) ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeSetIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id) {
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeSetIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id,
+                                                            jboolean simulator) {
     (void) env;
     (void) clazz;
-    andy_hub_set_ios_decoder((int64_t) decoder_id);
+    andy_hub_set_ios_decoder((int64_t) decoder_id, simulator == JNI_TRUE);
 }
 
-JNIEXPORT jlong JNICALL GPU_JNI_METHOD(nativeIosDecoder)(JNIEnv *env, jclass clazz) {
+JNIEXPORT jlong JNICALL GPU_JNI_METHOD(nativeIosDecoder)(JNIEnv *env, jclass clazz, jboolean simulator) {
     (void) env;
     (void) clazz;
-    return (jlong) andy_hub_ios_decoder();
+    return (jlong) (simulator == JNI_TRUE ? andy_hub_ios_sim_decoder() : andy_hub_ios_device_decoder());
 }
 
 JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeClearIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id) {

@@ -54,9 +54,10 @@ float andy_hub_p95_input_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_packet_to_present_millis(int64_t decoder_id);
 float andy_hub_p95_transport_to_present_millis(int64_t decoder_id);
 
-void andy_hub_set_ios_decoder(int64_t decoder_id);
+void andy_hub_set_ios_decoder(int64_t decoder_id, bool simulator);
 void andy_hub_clear_ios_decoder(int64_t decoder_id);
-int64_t andy_hub_ios_decoder(void);
+int64_t andy_hub_ios_device_decoder(void);
+int64_t andy_hub_ios_sim_decoder(void);
 
 int andy_hub_window_desktop(int parent_window_number);
 void andy_hub_refresh_all_presenters(void);

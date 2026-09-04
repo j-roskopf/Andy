@@ -1131,8 +1131,7 @@ class DesktopAgentRunService(
             isStageBusy(build) || isStageBusy(review) || isStageBusy(verification) -> return "Wait for the current workflow run to finish before reviewing."
             workflowBudgetReached(build) -> return "The workflow's reported-cost guardrail has been reached."
         }
-        startReviewAttempt(buildTaskId, manualRecovery = true)
-        return null
+        return startReviewAttempt(buildTaskId, manualRecovery = true)
     }
 
     override suspend fun deleteTask(taskId: String, cascade: Boolean) {
@@ -4646,48 +4645,54 @@ class DesktopAgentRunService(
         reconcileWorkflowRun(run.id)
     }
 
-    private suspend fun startReviewAttempt(buildTaskId: String, manualRecovery: Boolean = false) {
-        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build } ?: return
-        val review = build.linkedReviewTaskId?.let(::projectTask) ?: return
+    private suspend fun startReviewAttempt(buildTaskId: String, manualRecovery: Boolean = false): String? {
+        val build = projectTask(buildTaskId)?.takeIf { it.kind == ProjectTaskKind.Build }
+            ?: return "This Build workflow is no longer available."
+        val review = build.linkedReviewTaskId?.let(::projectTask)
+            ?: return "Enable a Review gate before starting a review."
         val verification = build.linkedVerificationTaskId?.let(::projectTask)
-        if (
-            !build.reviewEnabled ||
-            build.paused ||
-            (!manualRecovery && build.state == ProjectTaskState.Completed) ||
-            isStageBusy(build) ||
-            isStageBusy(review) ||
-            isStageBusy(verification)
-        ) {
-            return
+        if (!build.reviewEnabled) return "Enable a Review gate before starting a review."
+        if (!manualRecovery && build.paused) return null
+        if (!manualRecovery && build.state == ProjectTaskState.Completed) return null
+        if (isStageBusy(build) || isStageBusy(review) || isStageBusy(verification)) {
+            return "Wait for the current workflow run to finish before reviewing."
         }
-        if (reviewFailureCount(build, review) >= effectiveMaxReviewFailures(build)) {
+        if (!manualRecovery && reviewFailureCount(build, review) >= effectiveMaxReviewFailures(build)) {
             setPairAttention(build, reviewLimitReachedMessage(build))
             persist()
-            return
+            return reviewLimitReachedMessage(build)
         }
         if (workflowBudgetReached(build)) {
             setPairAttention(build, "reported workflow cost reached the configured budget")
             persist()
-            return
+            return "The workflow's reported-cost guardrail has been reached."
         }
         val buildRun = latestCompletedBuildRun(build)
         if (buildRun == null) {
             setPairAttention(build, "the latest build did not complete successfully")
             persist()
-            return
+            return "The latest build did not complete successfully."
         }
         if (build.worktreePath != null && !File(build.worktreePath).isDirectory) {
             setPairAttention(build, "the retained workflow worktree is missing")
             persist()
-            return
+            return "The retained workflow workspace is missing."
         }
-        val project = _projects.value[build.projectId] ?: return
+        val project = _projects.value[build.projectId] ?: return "This Project is no longer available."
         val scratchpad = project.scratchpad.takeIf { review.includeScratchpad && it.isNotBlank() }
         val runId = newAgentTaskId()
         val prompt = reviewPrompt(build, buildRun, scratchpad, runId, manualRecovery)
         val attempt = review.attempts.count { it.stage == ProjectWorkflowStage.Review } + 1
         val directory = projectDirectory(build.projectId)
-        updateProjectTask(build.id) { it.copy(state = ProjectTaskState.Waiting, reviewReopenedCompleted = false, lastError = null, updatedAtMillis = System.currentTimeMillis()) }
+        updateProjectTask(build.id) {
+            it.copy(
+                state = ProjectTaskState.Waiting,
+                paused = false,
+                reviewReopenedCompleted = false,
+                lastError = null,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
         updateProjectTask(review.id) { it.copy(state = ProjectTaskState.Queued, lastError = null) }
         verification?.let { item -> updateProjectTask(item.id) { it.copy(state = ProjectTaskState.Waiting) } }
         persist()
@@ -4720,6 +4725,7 @@ class DesktopAgentRunService(
         )
         persist()
         reconcileWorkflowRun(run.id)
+        return null
     }
 
     private suspend fun completeBuildWithoutVerification(buildTaskId: String) {

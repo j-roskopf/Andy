@@ -569,6 +569,11 @@ class DesktopDhuService(
             "Unlock the phone, accept any Android Auto prompts, unplug/replug USB, close any other " +
                 "desktop-head-unit, then Retry. Andy waits for the Automotive Link handshake before marking DHU ready."
 
+        internal const val AuthFailureRemediation =
+            "On the phone: open Android Auto → tap Version about 10× to enable developer mode → " +
+                "enable Unknown sources → accept any Android Auto / USB prompts when DHU connects. " +
+                "Confirm date & time are automatic, then Retry."
+
         internal fun isLinkReady(lines: List<String>): Boolean {
             val blob = lines.takeLast(60).joinToString("\n")
             if (isLinkBroken(lines)) return false
@@ -584,11 +589,20 @@ class DesktopDhuService(
                 blob.contains("Out of sync with phone", ignoreCase = true) ||
                 blob.contains("Unrecoverable error -251", ignoreCase = true) ||
                 blob.contains("Google Automotive Link error -251", ignoreCase = true) ||
-                blob.contains("Stream is broken", ignoreCase = true)
+                blob.contains("Stream is broken", ignoreCase = true) ||
+                blob.contains("auth failure", ignoreCase = true) ||
+                blob.contains("authentication failure", ignoreCase = true) ||
+                blob.contains("BAD_SIGNATURE", ignoreCase = true) ||
+                blob.contains("Unrecoverable error -3", ignoreCase = true)
         }
 
         internal fun interpretDhuExit(lines: List<String>, fallback: String): String {
             val blob = lines.takeLast(30).joinToString("\n")
+            val authFail =
+                blob.contains("auth failure", ignoreCase = true) ||
+                    blob.contains("authentication failure", ignoreCase = true) ||
+                    blob.contains("BAD_SIGNATURE", ignoreCase = true) ||
+                    blob.contains("Unrecoverable error -3", ignoreCase = true)
             val framingFail = isLinkBroken(lines) && (
                 blob.contains("Framing Error", ignoreCase = true) ||
                     blob.contains("-251", ignoreCase = true) ||
@@ -601,6 +615,14 @@ class DesktopDhuService(
                     blob.contains("Head Unit Server", ignoreCase = true) ||
                     blob.contains("Failed to start Google Automotive Link", ignoreCase = true)
             return when {
+                authFail -> buildString {
+                    append("DHU TLS auth failed (phone rejected the head-unit certificate). ")
+                    append(AuthFailureRemediation)
+                    if (blob.isNotBlank()) {
+                        append("\n\n")
+                        append(blob)
+                    }
+                }
                 framingFail -> buildString {
                     append("DHU USB/video link broke (framing / GAL -251). ")
                     append(FramingErrorRemediation)

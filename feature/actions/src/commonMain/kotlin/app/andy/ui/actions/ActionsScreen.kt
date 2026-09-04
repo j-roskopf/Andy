@@ -145,8 +145,12 @@ import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
 import app.andy.ui.agents.ChatFollowUpDraftMemory
+import app.andy.ui.agents.ProjectActivityIndicator
 import app.andy.ui.agents.TranscriptScrollMemory
 import app.andy.ui.agents.UnreadDot
+import app.andy.ui.agents.isChatLaunching
+import app.andy.ui.agents.isChatRelaunching
+import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.RetainedDestination
 import app.andy.ui.theme.AndyColors
@@ -177,6 +181,11 @@ private data class SpecEditorSeed(val title: String, val brief: String)
 
 private val ProjectChatSort =
     compareByDescending<AgentTask> { it.createdAtMillis }
+
+/** Spec/Build/Review agent turns that should light project + Tasks-tab activity chrome. */
+private fun isWorkflowAgentBusy(task: AgentTask): Boolean =
+    task.workflowTaskId != null &&
+        (isSessionWorking(task) || isChatLaunching(task) || isChatRelaunching(task))
 
 private enum class ProjectCanvas(val label: String) {
     Chat("Chat"),
@@ -353,10 +362,36 @@ private fun ProjectCockpit(
     }
 
     val searchActive = false
+    // Project chats and Spec/Build/Review stage completions both light the project row.
+    // Workflow runs are not listed under Chat, so their unread also drives the Tasks tab.
     val unreadProjectIds = remember(agentTasks, config.projects) {
         val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
         agentTasks.mapNotNullTo(mutableSetOf()) { task ->
-            task.projectId?.takeIf { task.unread && !task.archived && task.workflowTaskId == null && it in validProjectIds }
+            task.projectId?.takeIf { task.unread && !task.archived && it in validProjectIds }
+        }
+    }
+    val unreadWorkflowProjectIds = remember(agentTasks, config.projects) {
+        val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
+        agentTasks.mapNotNullTo(mutableSetOf()) { task ->
+            task.projectId?.takeIf {
+                task.unread && !task.archived && task.workflowTaskId != null && it in validProjectIds
+            }
+        }
+    }
+    // Spec/Build/Review runs are not listed as project chats, so surface their
+    // activity on the project row and Tasks tab instead.
+    val activeWorkflowProjectIds = remember(agentTasks, workflowProjects, config.projects) {
+        val validProjectIds = config.projects.mapTo(mutableSetOf()) { it.id }
+        buildSet {
+            agentTasks.forEach { task ->
+                val projectId = task.projectId ?: return@forEach
+                if (projectId in validProjectIds && isWorkflowAgentBusy(task)) add(projectId)
+            }
+            workflowProjects.forEach { (projectId, workflow) ->
+                if (projectId in validProjectIds && workflow.tasks.any { it.isInFlight }) {
+                    add(projectId)
+                }
+            }
         }
     }
     val projectChatLists = remember(agentTasks) {
@@ -409,6 +444,11 @@ private fun ProjectCockpit(
             .filter { it.projectId == item.id && !it.archived }
             .sortedByDescending { it.createdAtMillis }
     }.orEmpty()
+    val unreadWorkflowTaskIds = remember(projectTasks) {
+        projectTasks.mapNotNullTo(mutableSetOf()) { task ->
+            task.workflowTaskId?.takeIf { task.unread }
+        }
+    }
     val selectedProjectTask = project?.let { item ->
         agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == item.id }
     }
@@ -435,6 +475,29 @@ private fun ProjectCockpit(
     LaunchedEffect(loadedProjectWorkflow?.tasks, selectedWorkflowTaskId) {
         if (selectedWorkflowTaskId != null && loadedProjectWorkflow != null && loadedProjectWorkflow.tasks.none { it.id == selectedWorkflowTaskId }) {
             selectedWorkflowTaskId = null
+        }
+    }
+    // Selecting a workflow task clears stage-completion unread the same way opening a
+    // chat clears chat unread. Spec plan viewing also calls markRead; this covers Build /
+    // Review / Verification and any leftover Spec attempts.
+    val selectedWorkflowUnreadRunIds = remember(
+        active,
+        canvas,
+        selectedWorkflowTaskId,
+        loadedProjectWorkflow?.tasks,
+        projectTasks,
+    ) {
+        if (!active || canvas != ProjectCanvas.Tasks) return@remember emptyList()
+        val workflowTaskId = selectedWorkflowTaskId ?: return@remember emptyList()
+        val workflowTask = loadedProjectWorkflow?.tasks?.firstOrNull { it.id == workflowTaskId }
+            ?: return@remember emptyList()
+        workflowTask.attempts.mapNotNull { attempt ->
+            projectTasks.firstOrNull { it.id == attempt.runId && it.unread }?.id
+        }
+    }
+    LaunchedEffect(selectedWorkflowUnreadRunIds) {
+        selectedWorkflowUnreadRunIds.forEach { runId ->
+            services.agentRuns.markRead(runId)
         }
     }
 
@@ -506,6 +569,7 @@ private fun ProjectCockpit(
                                 project = item,
                                 selected = item.id == selectedProjectId,
                                 hasUnread = item.id in unreadProjectIds,
+                                hasActiveWorkflow = item.id in activeWorkflowProjectIds,
                                 sessions = visibleSessions,
                                 pinPriority = pinPriority && visibleSessions.any { it.isPriorityChat() },
                                 selectedSessionId = selectedTaskId,
@@ -596,6 +660,8 @@ private fun ProjectCockpit(
                             tasksNeedAttention = projectTasks.any { task ->
                                 task.workflowTaskId != null && task.status == AgentStatus.Blocked
                             },
+                            tasksWorking = current.id in activeWorkflowProjectIds,
+                            tasksUnread = current.id in unreadWorkflowProjectIds,
                             onCanvasChange = {
                                 canvas = it
                                 if (it != ProjectCanvas.Tasks) selectedWorkflowTaskId = null
@@ -654,6 +720,11 @@ private fun ProjectCockpit(
                                     ProjectWorkflowList(
                                         workflow = workflow,
                                         selectedTaskId = selectedWorkflowTaskId,
+                                        unreadWorkflowTaskIds = unreadWorkflowTaskIds,
+                                        collapsedTaskIds = workspaceState.collapsedWorkflowTaskIds,
+                                        onCollapsedTaskIdsChange = { ids ->
+                                            onUpdateWorkspace { it.copy(collapsedWorkflowTaskIds = ids) }
+                                        },
                                         onSelectTask = { selectedWorkflowTaskId = it },
                                         onNewSpec = {
                                             ensureWorkflowProjectLoaded()
@@ -1218,6 +1289,7 @@ private fun ProjectSessionGroup(
     project: ActionProject,
     selected: Boolean,
     hasUnread: Boolean,
+    hasActiveWorkflow: Boolean,
     sessions: List<AgentTask>,
     pinPriority: Boolean,
     selectedSessionId: String?,
@@ -1286,6 +1358,7 @@ private fun ProjectSessionGroup(
                     }
                     NewProjectChatButton(onClick = onNewChat, size = 15.dp)
                 }
+                if (hasActiveWorkflow) ProjectActivityIndicator(12.dp)
                 if (hasUnread) UnreadDot()
             }
         }
@@ -1514,6 +1587,8 @@ private fun ProjectChatToolbar(
     project: ActionProject,
     canvas: ProjectCanvas,
     tasksNeedAttention: Boolean,
+    tasksWorking: Boolean,
+    tasksUnread: Boolean,
     onCanvasChange: (ProjectCanvas) -> Unit,
     tabTrailing: (@Composable () -> Unit)? = null,
 ) {
@@ -1529,18 +1604,35 @@ private fun ProjectChatToolbar(
         trailing = tabTrailing,
     ) {
         ProjectCanvas.entries.forEach { item ->
+            val showTasksBadge = item == ProjectCanvas.Tasks &&
+                (tasksNeedAttention || tasksWorking || tasksUnread)
             TabBarItem(
                 label = item.label,
                 selected = item == canvas,
                 onClick = { onCanvasChange(item) },
-                trailing = if (item == ProjectCanvas.Tasks && tasksNeedAttention) {
+                trailing = if (showTasksBadge) {
                     {
-                        Box(
-                            Modifier
-                                .size(6.dp)
-                                .background(Red, CircleShape)
-                                .semantics { contentDescription = "Task waiting for input" },
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                        ) {
+                            if (tasksNeedAttention) {
+                                Box(
+                                    Modifier
+                                        .size(6.dp)
+                                        .background(Red, CircleShape)
+                                        .semantics { contentDescription = "Task waiting for input" },
+                                )
+                            }
+                            if (tasksWorking) {
+                                ProjectActivityIndicator(12.dp)
+                            }
+                            if (tasksUnread) {
+                                UnreadDot(
+                                    Modifier.semantics { contentDescription = "Unread completed stage" },
+                                )
+                            }
+                        }
                     }
                 } else {
                     null

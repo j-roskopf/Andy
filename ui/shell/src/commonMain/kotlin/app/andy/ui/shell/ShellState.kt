@@ -9,9 +9,11 @@ import androidx.compose.runtime.setValue
 import app.andy.BrowserNavCommand
 import app.andy.AndyDestination
 import app.andy.closeEmbeddedBrowser
+import app.andy.currentTimeMillis
 import app.andy.showsSideChat
 import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
+import app.andy.model.SavedDockLayout
 import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
@@ -24,6 +26,7 @@ import app.andy.model.RunningAction
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
+import app.andy.service.DhuSessionPhase
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OpenInvestigationRequest
 import app.andy.service.TargetCapabilities
@@ -56,6 +59,13 @@ internal class ShellState(
         private set
     /** Shared Live/Controls hinge angle for foldable emulator previews (degrees, 0–180). */
     var foldableHingeAngle by mutableStateOf(180f)
+        private set
+    /**
+     * Android Auto DHU intent, owned here rather than by Live. Live leaves composition on every
+     * navigation, so a Live-scoped intent took the head unit down whenever the user visited
+     * another tab. Cleared by the AA toggle or an intentional switch to another target.
+     */
+    var androidAutoSerial by mutableStateOf<String?>(null)
         private set
     val activeTargetId: String?
         get() = selectedIosUdid ?: selectedSerial
@@ -171,7 +181,10 @@ internal class ShellState(
     fun selectDevice(serial: String?) {
         if (selectedSerial != serial) foldableHingeAngle = 180f
         selectedSerial = serial
-        if (serial != null) selectedIosUdid = null
+        if (serial != null) {
+            selectedIosUdid = null
+            clearAndroidAutoForTargetSwitch(serial)
+        }
         persistSelectedTarget()
     }
 
@@ -179,8 +192,30 @@ internal class ShellState(
         selectedIosUdid = udid
         if (udid != null) {
             selectedSerial = null
+            clearAndroidAutoForTargetSwitch(udid)
         }
         persistSelectedTarget()
+    }
+
+    /**
+     * Sets (or clears) the Android Auto intent. Stopping runs on the shell scope so navigating
+     * away mid-teardown can't cancel it; starting is driven by Live once the mirror is up.
+     */
+    fun updateAndroidAutoSerial(serial: String?) {
+        if (androidAutoSerial == serial) return
+        androidAutoSerial = serial
+        if (serial == null) {
+            scope.launch { services.dhu.stop() }
+        }
+    }
+
+    /**
+     * Drops DHU when the user moves to a *different* target. Transient offline flicker during USB
+     * accessory renegotiation never routes through here, so an in-flight session survives it.
+     */
+    private fun clearAndroidAutoForTargetSwitch(targetId: String) {
+        val current = androidAutoSerial ?: return
+        if (targetId != current) updateAndroidAutoSerial(null)
     }
 
     fun updateFoldableHingeAngle(angle: Float) {
@@ -317,7 +352,7 @@ internal class ShellState(
 
     fun openDockKind(placement: DockPlacement, kind: DockTabKind, newTerminal: Boolean = false) {
         when (kind) {
-            DockTabKind.Live -> docks = docks.withLiveExclusive(placement)
+            DockTabKind.Live -> if (newTerminal) openNewLiveTab(placement) else openOrFocusLive(placement)
             DockTabKind.Logs -> docks = docks.update(placement) { it.withTab(DockTab.logs()) }
             DockTabKind.Terminal -> if (newTerminal) openNewTerminalTab(placement) else openOrFocusTerminal(placement)
             DockTabKind.Browser -> {
@@ -338,6 +373,174 @@ internal class ShellState(
                 openSideChat(placement, forceNew = newTerminal)
             }
         }
+    }
+
+    /** Focus an existing Live tab in [placement], or open one seeded with the global target. */
+    fun openOrFocusLive(placement: DockPlacement) {
+        val pane = docks.pane(placement)
+        val existing = pane.activeTab?.takeIf { it.kind == DockTabKind.Live }
+            ?: pane.tabs.lastOrNull { it.kind == DockTabKind.Live }
+        if (existing != null) {
+            docks = docks.update(placement) { it.selectTab(existing.id) }
+            return
+        }
+        openNewLiveTab(placement)
+    }
+
+    fun openNewLiveTab(
+        placement: DockPlacement = DockPlacement.Right,
+        seedWithActiveTarget: Boolean = true,
+    ) {
+        val targetId = activeTargetId.takeIf { seedWithActiveTarget }
+        val title = targetId?.let { liveTabTitle(it) }
+        val tab = DockTab.live(
+            id = nextPaneId("live"),
+            leafId = nextPaneId("live-leaf"),
+            targetId = targetId,
+            title = title,
+        )
+        syncLiveMirrorHolds(before = null, after = tab.liveTree)
+        docks = docks.update(placement) { it.withTab(tab) }
+    }
+
+    /** Bind [targetId] to a Live leaf without changing the global device selection. */
+    fun setLiveTabTarget(tabId: String, targetId: String?, leafId: String? = null) {
+        val placement = liveTabPlacement(tabId) ?: return
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
+        if (tab.kind != DockTabKind.Live) return
+        val tree = tab.liveTree ?: return
+        val resolvedLeafId = leafId
+            ?: tab.focusedLiveLeafId?.takeIf { tree.findLeaf(it) != null }
+            ?: tree.firstLeafId()
+        val leaf = tree.findLeaf(resolvedLeafId) ?: return
+        if (leaf.targetId == targetId) return
+        val title = targetId?.let { liveTabTitle(it) }
+        val nextTree = tree.mapLeaf(resolvedLeafId) { it.copy(targetId = targetId, title = title) }
+        syncLiveMirrorHolds(before = tree, after = nextTree)
+        updateLiveTree(placement, tabId) { nextTree }
+        focusLiveLeaf(placement, tabId, resolvedLeafId)
+    }
+
+    fun focusLiveLeaf(placement: DockPlacement, tabId: String, leafId: String) {
+        docks = docks.update(placement) { pane ->
+            pane.copy(
+                tabs = pane.tabs.map { tab ->
+                    if (tab.id != tabId || tab.kind != DockTabKind.Live) {
+                        tab
+                    } else {
+                        val leaf = tab.liveTree?.findLeaf(leafId)
+                        tab.copy(
+                            focusedLiveLeafId = leafId,
+                            targetId = leaf?.targetId,
+                            title = leaf?.title,
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    /**
+     * Visually splits the focused Live leaf into two panes (row or column). The new pane
+     * starts unbound so the user picks a device. Distinct from [openNewLiveTab], which adds
+     * another top-level dock tab.
+     */
+    fun splitLiveLeaf(placement: DockPlacement, tabId: String, leafId: String, axis: SplitAxis) {
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
+        val tree = tab.liveTree ?: return
+        if (tree.findLeaf(leafId) == null) return
+        val newLeafId = nextPaneId("live-leaf")
+        val newLeaf = LivePaneNode.Leaf(id = newLeafId)
+        val nextTree = tree.split(leafId, nextPaneId("live-split"), axis, newLeaf)
+        updateLiveTree(placement, tabId) { nextTree }
+        focusLiveLeaf(placement, tabId, newLeafId)
+    }
+
+    fun closeLiveLeaf(placement: DockPlacement, tabId: String, leafId: String) {
+        val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
+        val tree = tab.liveTree ?: return
+        val nextTree = tree.closeLeaf(leafId)
+        syncLiveMirrorHolds(before = tree, after = nextTree)
+        if (nextTree == null) {
+            docks = docks.update(placement) { it.closeTab(tabId) }
+            return
+        }
+        updateLiveTree(placement, tabId) { nextTree }
+        val focusId = tab.focusedLiveLeafId?.takeIf { nextTree.findLeaf(it) != null }
+            ?: nextTree.firstLeafId()
+        focusLiveLeaf(placement, tabId, focusId)
+    }
+
+    fun updateLiveSplitWeights(placement: DockPlacement, tabId: String, splitId: String, weights: List<Float>) {
+        updateLiveTree(placement, tabId) { it.updateWeights(splitId, weights) }
+    }
+
+    private fun liveTabPlacement(tabId: String): DockPlacement? = when {
+        docks.right.tabs.any { it.id == tabId } -> DockPlacement.Right
+        docks.bottom.tabs.any { it.id == tabId } -> DockPlacement.Bottom
+        else -> null
+    }
+
+    private fun updateLiveTree(
+        placement: DockPlacement,
+        tabId: String,
+        transform: (LivePaneNode) -> LivePaneNode?,
+    ) {
+        docks = docks.update(placement) { pane ->
+            val tab = pane.tabs.firstOrNull { it.id == tabId } ?: return@update pane
+            val tree = tab.liveTree ?: return@update pane
+            when (val next = transform(tree)) {
+                null -> pane.closeTab(tabId)
+                else -> {
+                    val focusId = tab.focusedLiveLeafId?.takeIf { next.findLeaf(it) != null }
+                        ?: next.firstLeafId()
+                    val focused = next.findLeaf(focusId)
+                    pane.copy(
+                        tabs = pane.tabs.map {
+                            if (it.id != tabId) {
+                                it
+                            } else {
+                                it.copy(
+                                    liveTree = next,
+                                    focusedLiveLeafId = focusId,
+                                    targetId = focused?.targetId,
+                                    title = focused?.title,
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    private fun syncLiveMirrorHolds(before: LivePaneNode?, after: LivePaneNode?) {
+        val beforeCounts = before?.targetIds().orEmpty().groupingBy { it }.eachCount()
+        val afterCounts = after?.targetIds().orEmpty().groupingBy { it }.eachCount()
+        val ids = beforeCounts.keys + afterCounts.keys
+        for (id in ids) {
+            val delta = (afterCounts[id] ?: 0) - (beforeCounts[id] ?: 0)
+            repeat(delta.coerceAtLeast(0)) { holdLiveMirror(id) }
+            repeat((-delta).coerceAtLeast(0)) { releaseLiveMirror(id) }
+        }
+    }
+
+    private fun liveTabTitle(targetId: String): String =
+        workspaceState.deviceLabels[targetId]
+            ?: devices.firstOrNull { it.serial == targetId }?.displayName
+            ?: iosTargets.firstOrNull { it.udid == targetId }?.displayName
+            ?: "Live"
+
+    /** Called from the desktop shell to refcount pooled mirror engines for Live dock tabs. */
+    var onLiveMirrorHold: ((String) -> Unit)? = null
+    var onLiveMirrorRelease: ((String) -> Unit)? = null
+
+    private fun holdLiveMirror(targetId: String) {
+        onLiveMirrorHold?.invoke(targetId)
+    }
+
+    private fun releaseLiveMirror(targetId: String) {
+        onLiveMirrorRelease?.invoke(targetId)
     }
 
     fun noteViewedAgentTaskId(taskId: String?) {
@@ -619,11 +822,115 @@ internal class ShellState(
         if (tab?.kind == DockTabKind.Browser) {
             closeBrowserPane(tabId)
         }
+        if (tab?.kind == DockTabKind.Live) {
+            syncLiveMirrorHolds(before = tab.liveTree, after = null)
+        }
         docks = docks.update(placement) { it.closeTab(tabId) }
     }
 
     fun closeDock(placement: DockPlacement) {
         docks = docks.update(placement) { it.hide() }
+    }
+
+    private companion object {
+        const val MaxSavedLayouts = 20
+        const val MaxLayoutNameLength = 40
+    }
+
+    val savedLayouts: List<SavedDockLayout>
+        get() = workspaceState.savedDockLayouts
+
+    val canSaveDockLayout: Boolean
+        get() = docks.right.tabs.isNotEmpty() || docks.bottom.tabs.isNotEmpty()
+
+    val savedLayoutLimitReached: Boolean
+        get() = workspaceState.savedDockLayouts.size >= MaxSavedLayouts
+
+    /** "Layout 1", "Layout 2", … — first index not already taken (case-insensitive). */
+    fun defaultDockLayoutName(): String {
+        var index = 1
+        while (savedLayouts.any { it.name.equals("Layout $index", ignoreCase = true) }) {
+            index++
+        }
+        return "Layout $index"
+    }
+
+    fun saveDockLayout(name: String) {
+        val trimmed = name.trim().take(MaxLayoutNameLength)
+        if (trimmed.isEmpty()) return
+        if (!canSaveDockLayout) return
+        val existing = savedLayouts.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        if (existing == null && savedLayoutLimitReached) return
+        val layout = docks.toSavedLayout(
+            id = existing?.id ?: "layout-${currentTimeMillis()}-${paneIdSeq++}",
+            name = trimmed,
+            savedAtMillis = currentTimeMillis(),
+            rightPaneWidth = workspaceState.rightDockPaneWidth,
+            bottomPaneHeight = workspaceState.bottomDockPaneHeight,
+            browserUrlOf = { browserPanes[it]?.url },
+            projectIdOfRun = { runId ->
+                services.actionRuns.running.value.firstOrNull { it.runId == runId }?.projectId
+            },
+        )
+        updateWorkspace { ws ->
+            val nextList = if (existing != null) {
+                ws.savedDockLayouts.map { if (it.id == existing.id) layout else it }
+            } else {
+                ws.savedDockLayouts + layout
+            }
+            ws.copy(savedDockLayouts = nextList)
+        }
+    }
+
+    fun loadDockLayout(layoutId: String) {
+        val layout = workspaceState.savedDockLayouts.firstOrNull { it.id == layoutId } ?: return
+        (docks.right.tabs + docks.bottom.tabs)
+            .filter { it.kind == DockTabKind.Live }
+            .forEach { syncLiveMirrorHolds(before = it.liveTree, after = null) }
+
+        val restore = layout.toRestore(
+            nextId = ::nextPaneId,
+            openShell = { projectId ->
+                restoreProject(projectId)?.let { services.actionRuns.openShell(it).takeIf(String::isNotBlank) }
+            },
+            isTargetAvailable = ::isTargetAvailable,
+            isAgentTaskAlive = { id -> services.agentRuns.tasks.value.any { it.id == id } },
+        )
+
+        browserPanes = restore.browserPanes
+        if (restore.browserPanes.isEmpty()) closeEmbeddedBrowser()
+
+        docks = restore.docks
+        restore.boundLiveTargetIds.forEach { holdLiveMirror(it) }
+
+        if (restore.focusedRunId != null) {
+            activeRunId = restore.focusedRunId
+            terminalRunId = restore.focusedRunId
+            handledTerminalRunId = restore.focusedRunId
+        } else {
+            activeRunId = null
+            terminalRunId = null
+            handledTerminalRunId = null
+        }
+        restore.focusedTerminalPlacement?.let { lastTerminalPlacement = it }
+
+        updateWorkspace {
+            it.copy(
+                rightDockPaneWidth = layout.rightPaneWidth,
+                bottomDockPaneHeight = layout.bottomPaneHeight,
+            )
+        }
+    }
+
+    private fun restoreProject(projectId: String?): ActionProject? {
+        if (!services.capabilities.hostAutomation) return null
+        return projectId?.let { id -> actionsConfig.projects.firstOrNull { it.id == id } }
+            ?: actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull()
+    }
+
+    fun deleteDockLayout(layoutId: String) {
+        updateWorkspace { it.copy(savedDockLayouts = it.savedDockLayouts.filterNot { l -> l.id == layoutId }) }
     }
 
     fun consumeTerminalRun(runningActions: List<RunningAction>) {
@@ -676,17 +983,29 @@ internal class ShellState(
             return devices
         }
 
+        val dhuSession = services.dhu.session.value
+        val pinnedForDhu = dhuSession?.serial?.takeIf {
+            dhuSession.phase == DhuSessionPhase.Starting ||
+                dhuSession.phase == DhuSessionPhase.Running ||
+                dhuSession.phase == DhuSessionPhase.Stopping
+        }
         val reconciled = reconcileDeviceSelection(
             previousOnlineAndroidSerials = previousOnlineAndroid,
             devices = devices,
             iosTargets = iosTargets,
             selectedSerial = selectedSerial,
             selectedIosUdid = selectedIosUdid,
+            pinnedAndroidSerial = pinnedForDhu,
         )
         if (reconciled.selectedSerial != selectedSerial || reconciled.selectedIosUdid != selectedIosUdid) {
             if (reconciled.selectedSerial != selectedSerial) foldableHingeAngle = 180f
             selectedSerial = reconciled.selectedSerial
             selectedIosUdid = reconciled.selectedIosUdid
+            // Selection only moves off a DHU serial once the session is no longer pinned above
+            // (failed/stopped), so the intent is stale — drop it instead of restarting AA on the
+            // device we just landed on.
+            (reconciled.selectedIosUdid ?: reconciled.selectedSerial)
+                ?.let { clearAndroidAutoForTargetSwitch(it) }
             persistSelectedTarget()
         }
         return devices
@@ -953,8 +1272,8 @@ internal class ShellState(
         val runId = services.actionRuns.run(project, action)
         // Always reveal — re-runs of a still-active action reuse the same runId, so setting
         // terminalRunId alone won't re-fire consumeTerminalRun after the user closed the tab.
+        // Stay on the current destination; only surface the run in the terminal dock.
         focusTerminalRun(runId)
-        destination = AndyDestination.Actions
     }
 
     fun rememberActionSelection(projectId: String, actionId: String?) {

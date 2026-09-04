@@ -1,5 +1,6 @@
 package app.andy.terminal.rust
 
+import app.andy.model.TerminalAppearanceSnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -157,6 +158,55 @@ class RustTerminalEngineTest {
             assertTrue(flags and RustMouseFlags.REPORTING != 0)
             assertTrue(flags and RustMouseFlags.SGR != 0)
         }
+    }
+
+    @Test
+    fun closedEngineDegradesToNoOpsInsteadOfThrowing() {
+        if (!isMacArm64()) return
+        // Compose keeps dispatching scroll/paint at a terminal backend for a frame or two
+        // after a chat swap closes it — those late calls must not blow up the EDT.
+        val engine = RustTerminalEngine(columns = 20, rows = 4)
+        engine.advance("hello")
+        val frame = RustTerminalFrame()
+        assertTrue(engine.fillFrame(frame))
+
+        engine.close()
+        engine.close() // idempotent
+
+        assertTrue(engine.isClosed)
+        engine.scrollDisplay(3)
+        engine.scrollToBottom()
+        engine.advance("more")
+        engine.resize(40, 10)
+        engine.stopSync()
+        assertFalse(engine.fillFrame(frame))
+        assertEquals(0, engine.displayOffset())
+        assertEquals(0, engine.mouseFlags())
+        assertEquals("", engine.viewportText())
+        assertEquals("", engine.extractText(0, 0, 1, 1))
+        assertFalse(engine.bracketedPasteEnabled())
+        assertFalse(engine.isAltScreen())
+    }
+
+    @Test
+    fun closedScrollbackReplayIgnoresLateScrollAndPaint() {
+        if (!isMacArm64()) return
+        val replay = RustScrollbackReplay.create(
+            content = (1..200).joinToString("\n") { "line $it" },
+            cols = 40,
+            rows = 10,
+        )
+        val frame = RustTerminalFrame()
+        replay.copyPaintFrame(frame)
+        assertTrue(frame.rows > 0)
+
+        replay.close()
+        // Late mouse-wheel delivery at the old chat's canvas.
+        replay.scrollDisplay(5)
+        replay.copyPaintFrame(frame)
+        assertEquals(0, replay.displayOffset())
+        assertEquals("", replay.extractText(0, 0, 1, 1))
+        replay.updateAppearance(TerminalAppearanceSnapshot())
     }
 
     private fun isMacArm64(): Boolean {

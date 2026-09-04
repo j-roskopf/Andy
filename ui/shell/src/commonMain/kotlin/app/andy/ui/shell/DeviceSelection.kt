@@ -14,6 +14,7 @@ internal data class DeviceSelection(
  * - disconnect → next online Android (or empty)
  * - plug into an empty slate (no prior online Android, nothing selected) → auto-select
  * - preserves a still-valid iOS or Android selection
+ * - [pinnedAndroidSerial] survives transient offline (DHU USB AOA reset drops ADB briefly)
  */
 internal fun reconcileDeviceSelection(
     previousOnlineAndroidSerials: Set<String>,
@@ -21,6 +22,7 @@ internal fun reconcileDeviceSelection(
     iosTargets: List<IosTarget>,
     selectedSerial: String?,
     selectedIosUdid: String?,
+    pinnedAndroidSerial: String? = null,
 ): DeviceSelection {
     fun iosAvailable(udid: String) = iosTargets.any { it.udid == udid && it.isLiveReady }
     fun androidAvailable(serial: String) =
@@ -38,6 +40,11 @@ internal fun reconcileDeviceSelection(
     val android = selectedSerial
     if (android != null) {
         if (androidAvailable(android)) return DeviceSelection(selectedSerial = android, selectedIosUdid = null)
+        // DHU USB accessory renegotiation (and Andy's stale-AOA clear) briefly remove the phone
+        // from `adb devices`. Keep the selection so Live does not tear down the DHU session.
+        if (pinnedAndroidSerial != null && pinnedAndroidSerial == android) {
+            return DeviceSelection(selectedSerial = android, selectedIosUdid = null)
+        }
         return DeviceSelection(selectedSerial = onlineAndroid.firstOrNull(), selectedIosUdid = null)
     }
 

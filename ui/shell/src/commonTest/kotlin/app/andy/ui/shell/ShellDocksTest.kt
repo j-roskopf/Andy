@@ -3,6 +3,7 @@ package app.andy.ui.shell
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -22,13 +23,25 @@ class ShellDocksTest {
     }
 
     @Test
-    fun liveAndLogsAreSingletonPerPane() {
+    fun logsAreSingletonPerPaneButLiveTabsAreIndependent() {
         val pane = DockPane()
-            .withTab(DockTab.live())
+            .withTab(DockTab.live("live-1", "leaf-1"))
             .withTab(DockTab.logs())
-            .withTab(DockTab.live())
+            .withTab(DockTab.live("live-2", "leaf-2"))
+        assertEquals(3, pane.tabs.size)
+        assertEquals(2, pane.tabs.count { it.kind == DockTabKind.Live })
+        assertEquals("live-2", pane.activeTabId)
+    }
+
+    @Test
+    fun reopeningSameLiveTabIdSelectsInPlace() {
+        val pane = DockPane()
+            .withTab(DockTab.live("live-1", "leaf-1", targetId = "device-a"))
+            .withTab(DockTab.logs())
+            .withTab(DockTab.live("live-1", "leaf-2", targetId = "device-b"))
         assertEquals(2, pane.tabs.size)
-        assertEquals("live", pane.activeTabId)
+        assertEquals("live-1", pane.activeTabId)
+        assertEquals("device-a", pane.tabs.single { it.id == "live-1" }.targetId)
     }
 
     @Test
@@ -68,13 +81,16 @@ class ShellDocksTest {
     }
 
     @Test
-    fun liveIsExclusiveAcrossPlacements() {
+    fun liveTabsCanOpenInBothPlacements() {
         val docks = ShellDocks()
-            .withLiveExclusive(DockPlacement.Right)
-            .withLiveExclusive(DockPlacement.Bottom)
-        assertTrue(docks.bottom.visible)
-        assertTrue(docks.bottom.tabs.any { it.kind == DockTabKind.Live })
-        assertFalse(docks.right.tabs.any { it.kind == DockTabKind.Live })
+            .update(DockPlacement.Right) { it.withTab(DockTab.live("live-right", "leaf-r", targetId = "a")) }
+            .update(DockPlacement.Bottom) { it.withTab(DockTab.live("live-bottom", "leaf-b", targetId = "b")) }
+        assertTrue(docks.right.tabs.any { it.id == "live-right" })
+        assertTrue(docks.bottom.tabs.any { it.id == "live-bottom" })
+        assertNotEquals(
+            docks.right.tabs.single { it.kind == DockTabKind.Live }.targetId,
+            docks.bottom.tabs.single { it.kind == DockTabKind.Live }.targetId,
+        )
     }
 
     @Test
@@ -157,14 +173,13 @@ class ShellDocksTest {
     }
 
     @Test
-    fun movingLivePreservesCustomTitle() {
-        val docks = ShellDocks()
-            .withLiveExclusive(DockPlacement.Right)
-            .update(DockPlacement.Right) { it.renameTab("live", "Phone") }
-            .withLiveExclusive(DockPlacement.Bottom)
+    fun liveTabKeepsTargetIdAndTitleWhenRenamed() {
+        val pane = DockPane()
+            .withTab(DockTab.live("live-1", "leaf-1", targetId = "device-a", title = "Phone"))
+            .renameTab("live-1", "Desk phone")
 
-        assertEquals("Phone", docks.bottom.tabs.single { it.kind == DockTabKind.Live }.title)
-        assertFalse(docks.right.tabs.any { it.kind == DockTabKind.Live })
+        assertEquals("device-a", pane.tabs.single().targetId)
+        assertEquals("Desk phone", pane.tabs.single().title)
     }
 
     @Test
@@ -317,6 +332,24 @@ class ShellDocksTest {
             .withTab(DockTab.chat("chat-1", parentChatTaskId = "parent-a"))
             .updateTab("chat-1") { it.copy(agentTaskId = "child-1") }
         assertEquals("child-1", pane.tabs.single().agentTaskId)
+    }
+
+    @Test
+    fun updateTabSetsLiveTargetId() {
+        val pane = DockPane()
+            .withTab(DockTab.live("live-1", "leaf-1"))
+            .updateTab("live-1") { it.copy(targetId = "device-a", title = "Pixel") }
+        assertEquals("device-a", pane.tabs.single().targetId)
+        assertEquals("Pixel", pane.tabs.single().title)
+    }
+
+    @Test
+    fun liveWorkspaceSeedsSingleLeafTree() {
+        val tab = DockTab.live("live-1", "leaf-1", targetId = "device-a", title = "Phone")
+        assertEquals("leaf-1", tab.focusedLiveLeafId)
+        val leaf = tab.liveTree as LivePaneNode.Leaf
+        assertEquals("device-a", leaf.targetId)
+        assertEquals("Phone", leaf.title)
     }
 
     @Test

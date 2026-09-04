@@ -80,7 +80,9 @@ internal fun TerminalPaneTreeView(
     callbacks: TerminalPaneCallbacks,
     modifier: Modifier = Modifier,
     addKindMenu: Boolean = false,
+    dockStripCollapsed: Boolean = false,
     showChatInAddMenu: Boolean = true,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     val tree = tab.terminalTree ?: return
     TerminalPaneNodeView(
@@ -94,7 +96,8 @@ internal fun TerminalPaneTreeView(
         modifier = modifier,
         addKindMenu = addKindMenu,
         showChatInAddMenu = showChatInAddMenu,
-        showLeafChrome = terminalLeafChromeVisible(tree, dockStripCollapsed = addKindMenu),
+        showLeafChrome = terminalLeafChromeVisible(tree, dockStripCollapsed = dockStripCollapsed),
+        layoutMenu = layoutMenu,
     )
 }
 
@@ -111,6 +114,7 @@ private fun TerminalPaneNodeView(
     addKindMenu: Boolean = false,
     showChatInAddMenu: Boolean = true,
     showLeafChrome: Boolean,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     when (node) {
         is TerminalPaneNode.Leaf -> TerminalLeafView(
@@ -124,6 +128,7 @@ private fun TerminalPaneNodeView(
             addKindMenu = addKindMenu,
             showChatInAddMenu = showChatInAddMenu,
             showChrome = showLeafChrome,
+            layoutMenu = layoutMenu,
         )
         is TerminalPaneNode.Split -> TerminalSplitView(
             services = services,
@@ -137,6 +142,7 @@ private fun TerminalPaneNodeView(
             addKindMenu = addKindMenu,
             showChatInAddMenu = showChatInAddMenu,
             showLeafChrome = showLeafChrome,
+            layoutMenu = layoutMenu,
         )
     }
 }
@@ -154,6 +160,7 @@ private fun TerminalSplitView(
     addKindMenu: Boolean = false,
     showChatInAddMenu: Boolean = true,
     showLeafChrome: Boolean,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     // Local weights drive the live drag feel; committed to the tree via onWeightsChanged on
     // drag end (same local-then-persist pattern as the dock's own width/height dividers).
@@ -190,6 +197,7 @@ private fun TerminalSplitView(
                             addKindMenu = addKindMenu,
                             showChatInAddMenu = showChatInAddMenu,
                             showLeafChrome = showLeafChrome,
+                            layoutMenu = layoutMenu,
                         )
                     }
                     if (index < node.children.lastIndex) {
@@ -215,6 +223,7 @@ private fun TerminalSplitView(
                             addKindMenu = addKindMenu,
                             showChatInAddMenu = showChatInAddMenu,
                             showLeafChrome = showLeafChrome,
+                            layoutMenu = layoutMenu,
                         )
                     }
                     if (index < node.children.lastIndex) {
@@ -241,6 +250,7 @@ private fun TerminalLeafView(
     addKindMenu: Boolean = false,
     showChatInAddMenu: Boolean = true,
     showChrome: Boolean,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     var addMenuExpanded by remember { mutableStateOf(false) }
     Column(
@@ -323,9 +333,9 @@ private fun TerminalLeafView(
                                 Lucide.X,
                                 if (hovered) Red else Color.Transparent,
                                 Modifier
-                                    .size(14.dp)
-                                    .semantics { contentDescription = "Close tab"; role = Role.Button }
-                                    .clickable(onClick = { callbacks.onCloseTab(topLevelTabId, tab.id) }),
+                                .size(14.dp)
+                                .semantics { contentDescription = "Close tab"; role = Role.Button }
+                                .clickable(onClick = { callbacks.onCloseTab(topLevelTabId, tab.id) }),
                             )
                         },
                     )
@@ -343,6 +353,12 @@ private fun TerminalLeafView(
                         else callbacks.onAddPaneKind(kind)
                     },
                     showChat = showChatInAddMenu,
+                    layoutMenu = layoutMenu?.let { menu ->
+                        menu.copy(
+                            onLoad = { id -> menu.onLoad(id); addMenuExpanded = false },
+                            onSave = { name -> menu.onSave(name); addMenuExpanded = false },
+                        )
+                    },
                 )
             }
         }

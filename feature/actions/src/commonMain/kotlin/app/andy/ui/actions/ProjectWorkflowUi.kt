@@ -43,7 +43,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -90,6 +89,7 @@ import app.andy.ui.agents.AgentBadge
 import app.andy.ui.agents.AgentProviderModelProfileControls
 import app.andy.ui.agents.AgentUserInputCard
 import app.andy.ui.agents.ChatAttachedImages
+import app.andy.ui.agents.UnreadDot
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatImageAttachButton
 import app.andy.ui.components.EmptyState
@@ -133,13 +133,15 @@ internal data class BuildEditorSeed(
 internal fun ProjectWorkflowList(
     workflow: ProjectWorkflowState,
     selectedTaskId: String?,
+    unreadWorkflowTaskIds: Set<String> = emptySet(),
+    collapsedTaskIds: Set<String> = emptySet(),
+    onCollapsedTaskIdsChange: (Set<String>) -> Unit = {},
     onSelectTask: (String) -> Unit,
     onNewSpec: () -> Unit,
     onNewBuild: () -> Unit,
     onProfiles: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val expanded = remember(workflow.projectId) { mutableStateMapOf<String, Boolean>() }
     val specs = workflow.tasks.filter { it.kind == ProjectTaskKind.Spec }.sortedByDescending { it.updatedAtMillis }
     val builds = workflow.tasks.filter { it.kind == ProjectTaskKind.Build }
     val standaloneBuilds = builds.filter { it.linkedSpecTaskId == null }.sortedByDescending { it.updatedAtMillis }
@@ -162,7 +164,7 @@ internal fun ProjectWorkflowList(
             LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(specs, key = { "spec-group-${it.id}" }) { spec ->
                     val childBuilds = builds.filter { it.linkedSpecTaskId == spec.id }.sortedByDescending { it.updatedAtMillis }
-                    val open = expanded[spec.id] ?: true
+                    val open = spec.id !in collapsedTaskIds
                     Column(
                         Modifier.fillMaxWidth().border(1.dp, if (selectedTaskId == spec.id) AndyColors.OrangeBorder else PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
                             .animateContentSize(tween(180)),
@@ -170,11 +172,16 @@ internal fun ProjectWorkflowList(
                         WorkflowRow(
                             task = spec,
                             selected = selectedTaskId == spec.id,
+                            unread = spec.id in unreadWorkflowTaskIds,
                             depth = 0,
                             meta = spec.planVersions.lastOrNull()?.let { "plan v${it.version}" } ?: "plan not run",
                             expanded = open,
                             expandable = childBuilds.isNotEmpty(),
-                            onToggle = { expanded[spec.id] = !open },
+                            onToggle = {
+                                onCollapsedTaskIdsChange(
+                                    if (open) collapsedTaskIds + spec.id else collapsedTaskIds - spec.id,
+                                )
+                            },
                             onClick = { onSelectTask(spec.id) },
                         )
                         AnimatedVisibility(
@@ -184,7 +191,7 @@ internal fun ProjectWorkflowList(
                         ) {
                             Column {
                                 childBuilds.forEach { build ->
-                                    WorkflowBuildPairRows(workflow, build, selectedTaskId, onSelectTask)
+                                    WorkflowBuildPairRows(workflow, build, selectedTaskId, unreadWorkflowTaskIds, onSelectTask)
                                 }
                             }
                         }
@@ -196,7 +203,7 @@ internal fun ProjectWorkflowList(
                     }
                     items(standaloneBuilds, key = { "standalone-build-${it.id}" }) { build ->
                         Column(Modifier.fillMaxWidth().border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))) {
-                            WorkflowBuildPairRows(workflow, build, selectedTaskId, onSelectTask)
+                            WorkflowBuildPairRows(workflow, build, selectedTaskId, unreadWorkflowTaskIds, onSelectTask)
                         }
                     }
                 }
@@ -210,6 +217,7 @@ private fun WorkflowBuildPairRows(
     workflow: ProjectWorkflowState,
     build: ProjectTask,
     selectedTaskId: String?,
+    unreadWorkflowTaskIds: Set<String>,
     onSelectTask: (String) -> Unit,
 ) {
     val review = workflow.tasks.firstOrNull { it.id == build.linkedReviewTaskId }
@@ -217,6 +225,7 @@ private fun WorkflowBuildPairRows(
     WorkflowRow(
         task = build,
         selected = selectedTaskId == build.id,
+        unread = build.id in unreadWorkflowTaskIds,
         depth = 1,
         meta = "${build.attempts.size} build attempt${if (build.attempts.size == 1) "" else "s"}",
         onClick = { onSelectTask(build.id) },
@@ -226,6 +235,7 @@ private fun WorkflowBuildPairRows(
         WorkflowRow(
             task = item,
             selected = selectedTaskId == item.id,
+            unread = item.id in unreadWorkflowTaskIds,
             depth = 2,
             meta = when {
                 item.state == ProjectTaskState.Disabled -> "disabled · ${item.attempts.size} attempt${if (item.attempts.size == 1) "" else "s"} retained"
@@ -239,6 +249,7 @@ private fun WorkflowBuildPairRows(
         WorkflowRow(
             task = verify,
             selected = selectedTaskId == verify.id,
+            unread = verify.id in unreadWorkflowTaskIds,
             depth = 2,
             meta = verify.verdicts.lastOrNull()?.let { "${it.status.name.lowercase()} · attempt ${verify.attempts.size}/5" }
                 ?: "attempt ${verify.attempts.size}/5 · no verdict",
@@ -251,6 +262,7 @@ private fun WorkflowBuildPairRows(
 private fun WorkflowRow(
     task: ProjectTask,
     selected: Boolean,
+    unread: Boolean = false,
     depth: Int,
     meta: String,
     expanded: Boolean = false,
@@ -276,6 +288,9 @@ private fun WorkflowRow(
                 Text(task.title, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Text(meta, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (unread && !selected) {
+            UnreadDot()
         }
         StatusTag(taskStateLabel(task.state), taskStateColor(task.state))
     }

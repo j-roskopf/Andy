@@ -53,6 +53,38 @@ class DesktopPopOutMirrorPoolTest {
         assertSame(first, firstAgain)
         assertNotSame(first, second)
         assertTrue(first is RoutingMirrorEngine)
+        assertEquals(2, pool.holdCount("device-a"))
+        assertEquals(1, pool.holdCount("device-b"))
+    }
+
+    @Test
+    fun releaseKeepsEngineUntilLastHold() = runBlocking {
+        val runner = CommandRunner { _, _ -> CommandResult.success("") }
+        val store = object : WorkspaceStore {
+            override suspend fun load() = WorkspaceState()
+            override suspend fun save(state: WorkspaceState) = Unit
+        }
+        val devices = DesktopDeviceService(runner, SdkLocator(), store)
+        val iosDevices = DesktopIosDeviceService(runner)
+        val primary = RoutingMirrorEngine(
+            DesktopMirrorEngine(runner, devices),
+            DesktopIosMirrorEngine(iosDevices),
+        )
+        val pool = DesktopPopOutMirrorPool(
+            primary = primary,
+            newAndroid = { DesktopMirrorEngine(runner, devices) },
+            newIos = { DesktopIosMirrorEngine(iosDevices) },
+        )
+
+        val first = pool.acquire("device-a")
+        pool.acquire("device-a")
+        assertEquals(2, pool.holdCount("device-a"))
+        pool.release("device-a")
+        assertEquals(1, pool.holdCount("device-a"))
+        assertSame(first, pool.engine("device-a"))
+        pool.release("device-a")
+        assertEquals(0, pool.holdCount("device-a"))
+        assertNull(pool.engine("device-a"))
     }
 
     @Test

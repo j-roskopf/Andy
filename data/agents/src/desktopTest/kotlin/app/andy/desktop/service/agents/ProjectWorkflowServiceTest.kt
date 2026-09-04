@@ -150,6 +150,59 @@ class ProjectWorkflowServiceTest {
     }
 
     @Test
+    fun recoveryReviewAllowsMultipleReviewsUnderSingleReviewPassAndPausedBuild() = runBlocking {
+        withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("changes", "changes", "approved")))) { harness ->
+            val buildId = harness.service.saveBuildPair(
+                ProjectBuildPairDraft(
+                    projectId = "project-1",
+                    title = "Implement external plan",
+                    plan = ProjectPlanSnapshot("1. Add the feature\n2. Test it"),
+                    buildNotes = "",
+                    verificationInstructions = "Run deterministic checks",
+                    buildProfile = buildProfile(useWorktree = false),
+                    verificationProfile = verifyProfile(),
+                    reviewEnabled = true,
+                    singleReviewPass = true,
+                    reviewInstructions = "Flag regressions",
+                    reviewProfile = reviewProfile(),
+                ),
+            )
+            harness.service.startBuildPair(buildId)
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.NeedsAttention
+            }
+            var build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertTrue(build.paused)
+
+            // First manual recovery follow-up + review (which requests changes again)
+            harness.service.startRecoveryFollowUp(buildId, "Fix review findings.")
+            await { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            val error1 = harness.service.startRecoveryReview(buildId)
+            assertEquals(null, error1)
+            await {
+                val workflow = harness.service.projects.value["project-1"] ?: return@await false
+                workflow.tasks.first { it.id == buildId }.state == ProjectTaskState.Paused &&
+                    workflow.tasks.first { it.id == workflow.tasks.first { task -> task.id == buildId }.linkedReviewTaskId }.reviewVerdicts.size == 2
+            }
+            build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertTrue(build.recoveryMode)
+            assertTrue(build.reviewStale)
+
+            // Second manual recovery follow-up + review (must succeed despite singleReviewPass and prior failure in generation)
+            harness.service.startRecoveryFollowUp(buildId, "Fix secondary findings.")
+            await { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Paused }
+            val error2 = harness.service.startRecoveryReview(buildId)
+            assertEquals(null, error2, "single review pass must not block manual recovery review")
+            await { harness.service.projects.value["project-1"]?.tasks?.first { it.id == buildId }?.state == ProjectTaskState.Completed }
+            build = harness.service.projects.value.getValue("project-1").tasks.first { it.id == buildId }
+            assertEquals(3, build.attempts.size)
+            assertFalse(build.recoveryMode)
+            assertFalse(build.paused)
+        }
+    }
+
+    @Test
     fun reviewApprovalBlocksVerificationAndIsStampedToTheExactBuild() = runBlocking {
         withHarness(WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("approved-warnings")))) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)

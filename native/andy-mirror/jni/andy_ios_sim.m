@@ -258,7 +258,7 @@ static void present_iosurface(IOSurfaceRef surface) {
         return;
     }
     andy_mirror_remember_latest_pixels(pixel_buffer);
-    const int64_t hub_decoder = andy_hub_ios_decoder();
+    const int64_t hub_decoder = andy_hub_ios_sim_decoder();
     if (hub_decoder != ANDY_HUB_INVALID_ID) {
         const bool probe = andy_hub_latency_probe_changed(hub_decoder, pixel_buffer);
         andy_hub_render_pixel_buffer(hub_decoder, pixel_buffer, probe, 0, 0, true);

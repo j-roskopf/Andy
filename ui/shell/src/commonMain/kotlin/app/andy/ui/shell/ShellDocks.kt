@@ -7,10 +7,25 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.input.ImeAction
+import app.andy.model.SavedDockLayout
+import app.andy.ui.components.AndyHorizontalDivider
+import app.andy.ui.components.FieldChromeStyle
+import app.andy.ui.components.TextField
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -53,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.BrowserNavCommand
 import app.andy.model.ActionRunStatus
 import app.andy.model.AndroidDevice
+import app.andy.model.IosTarget
 import app.andy.model.RunningAction
 import app.andy.model.TerminalThemePreset
 import app.andy.model.WorkspaceState
@@ -61,6 +77,7 @@ import app.andy.resignEmbeddedBrowserKey
 import app.andy.service.AndyServices
 import app.andy.service.AppService
 import app.andy.service.LogcatService
+import app.andy.service.MirrorEngine
 import app.andy.ui.actions.ActionIcon
 import app.andy.ui.components.Lucide
 import app.andy.ui.components.LucideIcon
@@ -69,7 +86,6 @@ import app.andy.LocalSuppressHeavyweightSurfaces
 import app.andy.ui.components.PanelCard
 import app.andy.ui.components.TabBarItem
 import app.andy.ui.components.TabBarRow
-import app.andy.ui.live.DeviceLivePanel
 import app.andy.ui.logcat.LogcatPanel
 import app.andy.ui.logcat.LogcatState
 import app.andy.ui.theme.AndyColors
@@ -99,8 +115,9 @@ internal enum class DockTabKind { Live, Terminal, Logs, Browser, Chat }
 /**
  * One tab inside a right/bottom dock pane. A Terminal-kind tab is itself a whole split
  * workspace: [terminalTree] holds its panes, [focusedTerminalLeafId] which one last had
- * focus. Unlike Live/Logs, multiple Terminal tabs can coexist at top level — each is an
- * independent workspace the user can split on its own.
+ * focus. A Live-kind tab owns a [liveTree] of mirror panes (one leaf, or a row/column
+ * split); [focusedLiveLeafId] / [targetId] track the focused leaf for the tab strip.
+ * Unlike Logs/Browser, multiple Terminal/Live/Chat tabs can coexist at top level.
  */
 internal data class DockTab(
     val id: String,
@@ -113,10 +130,30 @@ internal data class DockTab(
     val agentTaskId: String? = null,
     /** Parent chat the side-chat tab was opened against. */
     val parentChatTaskId: String? = null,
+    /**
+     * Focused Live leaf's Android serial / iOS udid — mirrored from [liveTree] for tab-strip
+     * titles and quick lookups. Prefer the leaf in [liveTree] as source of truth when split.
+     */
+    val targetId: String? = null,
+    /** Split tree of device panes inside a Live workspace tab. */
+    val liveTree: LivePaneNode? = null,
+    val focusedLiveLeafId: String? = null,
 ) {
     companion object {
-        fun live(title: String? = null): DockTab =
-            DockTab(id = "live", kind = DockTabKind.Live, title = title)
+        /** Independent Live mirror workspace — seeded with a single-leaf [liveTree]. */
+        fun live(
+            id: String,
+            leafId: String,
+            targetId: String? = null,
+            title: String? = null,
+        ): DockTab = DockTab(
+            id = id,
+            kind = DockTabKind.Live,
+            targetId = targetId,
+            title = title,
+            liveTree = LivePaneNode.Leaf(id = leafId, targetId = targetId, title = title),
+            focusedLiveLeafId = leafId,
+        )
         fun logs(): DockTab = DockTab(id = "logs", kind = DockTabKind.Logs)
         /** A leaf-level session tab — lives inside a [TerminalPaneNode.Leaf]'s own tab strip. */
         fun terminal(runId: String, title: String? = null): DockTab =
@@ -162,11 +199,11 @@ internal data class DockPane(
         get() = tabs.firstOrNull { it.id == activeTabId } ?: tabs.lastOrNull()
 
     fun withTab(tab: DockTab): DockPane {
-        // Live/Logs/Browser are singletons per pane (WKWebView is process-wide). Terminal
-        // workspaces are independent and merge only on an exact id match.
+        // Logs/Browser are singletons per pane (WKWebView is process-wide). Live/Terminal/Chat
+        // are independent and merge only on an exact id match.
         val existing = when (tab.kind) {
-            DockTabKind.Live, DockTabKind.Logs, DockTabKind.Browser -> tabs.firstOrNull { it.kind == tab.kind }
-            DockTabKind.Terminal, DockTabKind.Chat -> tabs.firstOrNull { it.id == tab.id }
+            DockTabKind.Logs, DockTabKind.Browser -> tabs.firstOrNull { it.kind == tab.kind }
+            DockTabKind.Live, DockTabKind.Terminal, DockTabKind.Chat -> tabs.firstOrNull { it.id == tab.id }
         }
         return if (existing != null) {
             copy(visible = true, activeTabId = existing.id)
@@ -327,16 +364,6 @@ internal data class ShellDocks(
         return clearedOther.update(placement) { it.withTab(keep) }
     }
 
-    /** Live is a single mirror session — keep at most one Live tab across both panes. */
-    fun withLiveExclusive(placement: DockPlacement): ShellDocks {
-        val existingTitle = tabTitle(DockTabKind.Live)
-        val clearedOther = when (placement) {
-            DockPlacement.Right -> copy(bottom = bottom.withoutKind(DockTabKind.Live))
-            DockPlacement.Bottom -> copy(right = right.withoutKind(DockTabKind.Live))
-        }
-        return clearedOther.update(placement) { it.withTab(DockTab.live(title = existingTitle)) }
-    }
-
     /**
      * Reveals [runId]'s terminal tab in [placement] — selecting it in place if it already
      * exists there, moving it over (as a fresh single-leaf tab) if it lived in the other
@@ -412,10 +439,6 @@ internal data class ShellDocks(
             DockPlacement.Bottom -> withOtherStripped.copy(bottom = updatedTarget, landingFor = null)
         }
     }
-
-    private fun tabTitle(kind: DockTabKind): String? =
-        right.tabs.firstOrNull { it.kind == kind }?.title
-            ?: bottom.tabs.firstOrNull { it.kind == kind }?.title
 
     /**
      * Browser tab to reuse for a new URL, if one is already open in either dock.
@@ -529,6 +552,7 @@ internal fun DockLandingPanel(
     onSelect: (DockTabKind) -> Unit,
     modifier: Modifier = Modifier,
     showChat: Boolean = true,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     Column(modifier.fillMaxWidth()) {
         DockLandingItem(
@@ -552,6 +576,101 @@ internal fun DockLandingPanel(
                 label = "Chat",
                 onClick = { onSelect(DockTabKind.Chat) },
             )
+        }
+        if (layoutMenu != null) {
+            AndyHorizontalDivider()
+            var naming by remember { mutableStateOf(false) }
+            var draft by remember { mutableStateOf("") }
+            val focusRequester = remember { FocusRequester() }
+
+            fun commit() {
+                val trimmed = draft.trim()
+                if (trimmed.isNotEmpty()) {
+                    layoutMenu.onSave(trimmed)
+                }
+                naming = false
+            }
+
+            if (!naming) {
+                ChromeFlyoutRow(
+                    label = "Save current layout…",
+                    leading = { LucideIcon(Lucide.Save, TextSecondary, Modifier.size(16.dp)) },
+                    enabled = layoutMenu.isSaveActionEnabled,
+                    supporting = when {
+                        layoutMenu.canSave && layoutMenu.atLimit -> "Limit reached (20)"
+                        else -> null
+                    },
+                    onClick = {
+                        draft = layoutMenu.defaultName()
+                        naming = true
+                    },
+                )
+            } else {
+                LaunchedEffect(naming) {
+                    if (naming) focusRequester.requestFocus()
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space2),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextField(
+                        value = draft,
+                        onValueChange = { draft = it.take(40) },
+                        singleLine = true,
+                        chromeStyle = FieldChromeStyle.Standard,
+                        placeholder = { Text("Layout name") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { commit() }),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown) {
+                                    when (event.key) {
+                                        Key.Enter -> {
+                                            commit()
+                                            true
+                                        }
+                                        Key.Escape -> {
+                                            naming = false
+                                            true
+                                        }
+                                        else -> false
+                                    }
+                                } else {
+                                    false
+                                }
+                            },
+                    )
+                }
+            }
+
+            layoutMenu.layouts.forEach { layout ->
+                val interaction = remember { MutableInteractionSource() }
+                val hovered by interaction.collectIsHoveredAsState()
+                ChromeFlyoutRow(
+                    label = layout.name,
+                    supporting = layout.summaryLine(),
+                    leading = { LucideIcon(Lucide.LayoutGrid, TextSecondary, Modifier.size(16.dp)) },
+                    modifier = Modifier.hoverable(interaction),
+                    onClick = { layoutMenu.onLoad(layout.id) },
+                    trailing = {
+                        LucideIcon(
+                            Lucide.X,
+                            if (hovered) Red else Color.Transparent,
+                            Modifier
+                                .size(14.dp)
+                                .semantics {
+                                    contentDescription = "Delete layout ${layout.name}"
+                                    role = Role.Button
+                                }
+                                .clickable { layoutMenu.onDelete(layout.id) },
+                        )
+                    },
+                )
+            }
         }
     }
 }
@@ -586,6 +705,20 @@ private fun DockKindIcon(kind: DockTabKind, modifier: Modifier = Modifier) {
     )
 }
 
+/** Layouts section of [DockLandingPanel]; null hides the section entirely. */
+internal data class DockLayoutMenu(
+    val layouts: List<SavedDockLayout>,
+    val canSave: Boolean,
+    val atLimit: Boolean,
+    val defaultName: () -> String,
+    val onSave: (name: String) -> Unit,
+    val onLoad: (layoutId: String) -> Unit,
+    val onDelete: (layoutId: String) -> Unit,
+) {
+    val isSaveActionEnabled: Boolean
+        get() = canSave
+}
+
 /**
  * Callbacks for a terminal workspace tab's split tree. Every callback is scoped by
  * [topLevelTabId] first — the id of the top-level Terminal [DockTab] the tree belongs to —
@@ -613,7 +746,6 @@ internal fun ShellDockDrawer(
     serial: String?,
     device: AndroidDevice?,
     targetDisplayName: String?,
-    liveActive: Boolean,
     logcat: LogcatService,
     appsService: AppService,
     selectedPackage: String?,
@@ -625,6 +757,19 @@ internal fun ShellDockDrawer(
     onOpenKind: (DockTabKind, newTerminal: Boolean) -> Unit,
     onClose: () -> Unit,
     terminalPaneCallbacks: TerminalPaneCallbacks,
+    livePaneCallbacks: LivePaneCallbacks = LivePaneCallbacks(
+        onSelectTarget = { _, _, _ -> },
+        onFocusLeaf = { _, _ -> },
+        onSplit = { _, _, _ -> },
+        onCloseLeaf = { _, _ -> },
+        onWeightsChanged = { _, _, _ -> },
+    ),
+    devices: List<AndroidDevice> = emptyList(),
+    iosTargets: List<IosTarget> = emptyList(),
+    deviceLabels: Map<String, String> = emptyMap(),
+    liveMirrorFor: (targetId: String) -> MirrorEngine? = { null },
+    liveTabPaused: (targetId: String?) -> Boolean = { false },
+    liveTabPauseMessage: (targetId: String?) -> String = { "Live view pauses while another tab is open" },
     browserPaneOf: (String) -> BrowserPaneState = { BrowserPaneState() },
     onBrowserNav: (tabId: String, BrowserNavCommand) -> Unit = { _, _ -> },
     onBrowserNavStateChanged: (tabId: String, title: String?, url: String, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) -> Unit = { _, _, _, _, _, _ -> },
@@ -635,10 +780,14 @@ internal fun ShellDockDrawer(
     viewedAgentTaskId: String? = null,
     modifier: Modifier = Modifier,
     terminalThemeId: String = TerminalThemePreset.Default.id,
+    layoutMenu: DockLayoutMenu? = null,
 ) {
     val active = pane.activeTab
     val agentTasks by services.agentRuns.tasks.collectAsState()
     var addMenuExpanded by remember { mutableStateOf(false) }
+    // Live device picker is a ChromeFlyout under the tab strip (same host as the add menu) so
+    // Metal/SwingPanel mirrors reflow instead of painting over a Popup dropdown.
+    var liveDevicePickerTabId by remember { mutableStateOf<String?>(null) }
     val reveal = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         reveal.snapTo(0f)
@@ -670,12 +819,25 @@ internal fun ShellDockDrawer(
         active != null &&
         active.kind == DockTabKind.Terminal &&
         active.terminalTree != null
-    val hoistSplit = active
+    val hoistTerminalSplit = active
         ?.takeIf { it.kind == DockTabKind.Terminal }
         ?.let { tab ->
             val leaf = tab.terminalTree as? TerminalPaneNode.Leaf ?: return@let null
             leaf.takeUnless { terminalLeafChromeVisible(it, dockStripCollapsed = soloTerminalWorkspace) }
                 ?.let { tab to it }
+        }
+    // Live split icons live on the dock strip only while this Live tab is a single leaf;
+    // after a split, each leaf owns Terminal-style sub-tab chrome with its own split controls.
+    // (+) still adds a separate top-level Live tab.
+    val hoistLiveSplit = active
+        ?.takeIf { it.kind == DockTabKind.Live }
+        ?.takeIf { it.liveTree is LivePaneNode.Leaf || it.liveTree == null }
+        ?.let { tab ->
+            val leafId = tab.focusedLiveLeafId
+                ?.takeIf { id -> tab.liveTree?.findLeaf(id) != null }
+                ?: tab.liveTree?.firstLeafId()
+                ?: return@let null
+            tab to leafId
         }
     // Pad the tab strip only; the content below manages its own insets so Live/Terminal can
     // bleed to the card's side edges (PanelCard's default 20dp padding was leaving a visible
@@ -704,7 +866,7 @@ internal fun ShellDockDrawer(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    hoistSplit?.let { (tab, leaf) ->
+                    hoistTerminalSplit?.let { (tab, leaf) ->
                         SplitAxisIcon(
                             axis = SplitAxis.Row,
                             onClick = { terminalPaneCallbacks.onSplit(tab.id, leaf.id, SplitAxis.Row) },
@@ -714,10 +876,23 @@ internal fun ShellDockDrawer(
                             onClick = { terminalPaneCallbacks.onSplit(tab.id, leaf.id, SplitAxis.Column) },
                         )
                     }
+                    hoistLiveSplit?.let { (tab, leafId) ->
+                        SplitAxisIcon(
+                            axis = SplitAxis.Row,
+                            onClick = { livePaneCallbacks.onSplit(tab.id, leafId, SplitAxis.Row) },
+                        )
+                        SplitAxisIcon(
+                            axis = SplitAxis.Column,
+                            onClick = { livePaneCallbacks.onSplit(tab.id, leafId, SplitAxis.Column) },
+                        )
+                    }
                     DockIconChromeButton(
                         label = "Add pane tab",
                         onBleedSurface = terminalHeader || liveHeader || chatHeader,
-                        onClick = { addMenuExpanded = !addMenuExpanded },
+                        onClick = {
+                            liveDevicePickerTabId = null
+                            addMenuExpanded = !addMenuExpanded
+                        },
                         icon = { LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(14.dp)) },
                     )
                     DockIconChromeButton(
@@ -745,8 +920,24 @@ internal fun ShellDockDrawer(
                     DockTabKind.Chat -> if (chatTask?.unread == true) Yellow else Cyan
                 }
                 val selected = tab.id == active?.id
+                // Split Live tabs own per-pane device pickers; the dock tab is just a workspace label.
+                val liveIsSplit = tab.kind == DockTabKind.Live && tab.liveTree is LivePaneNode.Split
+                val liveLabel = if (tab.kind == DockTabKind.Live) {
+                    when {
+                        liveIsSplit -> "Devices"
+                        else -> tab.title
+                            ?: tab.targetId?.let { id ->
+                                deviceLabels[id]
+                                    ?: devices.firstOrNull { it.serial == id }?.displayName
+                                    ?: iosTargets.firstOrNull { it.udid == id }?.displayName
+                            }
+                            ?: "Live"
+                    }
+                } else {
+                    null
+                }
                 TabBarItem(
-                    label = tab.title ?: when (tab.kind) {
+                    label = liveLabel ?: tab.title ?: when (tab.kind) {
                         DockTabKind.Live -> "Live"
                         DockTabKind.Logs -> "Logs"
                         DockTabKind.Terminal -> dockTerminalWorkspaceLabel(tab, terminalTabs)
@@ -757,9 +948,31 @@ internal fun ShellDockDrawer(
                     selected = selected,
                     onClick = {
                         resignEmbeddedBrowserKey()
-                        onSelectTab(tab.id)
+                        if (tab.kind == DockTabKind.Live) {
+                            addMenuExpanded = false
+                            when {
+                                liveIsSplit -> {
+                                    liveDevicePickerTabId = null
+                                    onSelectTab(tab.id)
+                                }
+                                selected && liveDevicePickerTabId == tab.id -> {
+                                    liveDevicePickerTabId = null
+                                }
+                                else -> {
+                                    onSelectTab(tab.id)
+                                    liveDevicePickerTabId = tab.id
+                                }
+                            }
+                        } else {
+                            liveDevicePickerTabId = null
+                            onSelectTab(tab.id)
+                        }
                     },
-                    onRename = { title -> onRenameTab(tab.id, title) },
+                    onRename = if (tab.kind == DockTabKind.Live) {
+                        null // Single-leaf click opens the device picker; skip rename on Live tabs.
+                    } else {
+                        { title -> onRenameTab(tab.id, title) }
+                    },
                     modifier = Modifier.pointerInput(tab.id) {
                         awaitPointerEventScope {
                             while (true) {
@@ -786,17 +999,29 @@ internal fun ShellDockDrawer(
                         }
                     },
                     trailing = { hovered ->
-                        LucideIcon(
-                            Lucide.X,
-                            if (hovered) Red else Color.Transparent,
-                            Modifier
-                                .size(14.dp)
-                                .semantics { contentDescription = "Close tab"; role = Role.Button }
-                                .clickable(onClick = {
-                                    resignEmbeddedBrowserKey()
-                                    onCloseTab(tab.id)
-                                }),
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (tab.kind == DockTabKind.Live && !liveIsSplit) {
+                                LucideIcon(
+                                    Lucide.ChevronDown,
+                                    if (selected) accent else accent.copy(alpha = 0.55f),
+                                    Modifier.size(10.dp),
+                                )
+                            }
+                            LucideIcon(
+                                Lucide.X,
+                                if (hovered) Red else Color.Transparent,
+                                Modifier
+                                    .size(14.dp)
+                                    .semantics { contentDescription = "Close tab"; role = Role.Button }
+                                    .clickable(onClick = {
+                                        resignEmbeddedBrowserKey()
+                                        onCloseTab(tab.id)
+                                    }),
+                            )
+                        }
                     },
                 )
             }
@@ -808,6 +1033,33 @@ internal fun ShellDockDrawer(
                     onOpenKind(kind, true)
                 },
                 showChat = showChatTabs,
+                layoutMenu = layoutMenu?.let { menu ->
+                    menu.copy(
+                        onLoad = { id -> menu.onLoad(id); addMenuExpanded = false },
+                        onSave = { name -> menu.onSave(name); addMenuExpanded = false },
+                    )
+                },
+            )
+        }
+        val livePickerTab = liveDevicePickerTabId?.let { id -> pane.tabs.firstOrNull { it.id == id } }
+            ?.takeIf { it.kind == DockTabKind.Live }
+        ChromeFlyout(
+            visible = livePickerTab != null,
+            contentKey = livePickerTab?.id,
+        ) {
+            LiveDevicePickerPanel(
+                devices = devices,
+                iosTargets = iosTargets,
+                deviceLabels = deviceLabels,
+                onSelectTarget = { targetId ->
+                    val tab = livePickerTab ?: return@LiveDevicePickerPanel
+                    val leafId = tab.focusedLiveLeafId
+                        ?.takeIf { id -> tab.liveTree?.findLeaf(id) != null }
+                        ?: tab.liveTree?.firstLeafId()
+                        ?: return@LiveDevicePickerPanel
+                    livePaneCallbacks.onSelectTarget(tab.id, leafId, targetId)
+                    liveDevicePickerTabId = null
+                },
             )
         }
         // Live, Terminal, and Chat fill their own background/theme, so bleed them to the
@@ -833,7 +1085,8 @@ internal fun ShellDockDrawer(
                     start = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     end = if (edgeToEdge) 0.dp else AndySpace.Space5,
                     top = when (active?.kind) {
-                        DockTabKind.Live -> AndySpace.Space2
+                        // Breath under the tab/close chrome before the mirror surface.
+                        DockTabKind.Live -> AndySpace.Space3
                         else -> if (edgeToEdge) 0.dp else AndySpace.Space4
                     },
                     // Browser clips itself to the card's rounded bottom; other kinds keep a
@@ -859,31 +1112,31 @@ internal fun ShellDockDrawer(
                             terminalBackground = terminalBackground,
                             callbacks = terminalPaneCallbacks,
                             modifier = Modifier.fillMaxSize(),
-                            // With the dock strip collapsed away, a leaf's "+" is the only add
-                            // button left, so it takes over the strip's Live/Terminal menu.
-                            addKindMenu = soloTerminalWorkspace,
+                            // Terminal leaves host the add menu (including saved layouts) whenever
+                            // the dock strip is collapsed or layoutMenu is provided.
+                            addKindMenu = soloTerminalWorkspace || layoutMenu != null,
+                            dockStripCollapsed = soloTerminalWorkspace,
                             showChatInAddMenu = showChatTabs,
+                            layoutMenu = layoutMenu,
                         )
                     }
                 }
                 DockTabKind.Live -> {
-                    if (liveActive) {
-                        DeviceLivePanel(
-                            services = services,
-                            serial = serial,
-                            device = device,
-                            displayName = device?.displayName ?: targetDisplayName,
-                            modifier = Modifier.fillMaxSize(),
-                            showChromeControls = false,
-                            showDeviceHeader = false,
-                            showPopOut = false,
-                            // Dock drawer already has PanelCard chrome; skip the nested pane surface.
-                            showContainerChrome = false,
-                            deviceBorderWidth = 0.dp,
-                            deviceCornerRadius = 0.dp,
-                        )
+                    if (active.liveTree == null) {
+                        EmptyState("Select a device to mirror")
                     } else {
-                        EmptyState("Live view pauses while another tab is open")
+                        LivePaneTreeView(
+                            services = services,
+                            tab = active,
+                            devices = devices,
+                            iosTargets = iosTargets,
+                            deviceLabels = deviceLabels,
+                            liveMirrorFor = liveMirrorFor,
+                            liveTabPaused = liveTabPaused,
+                            liveTabPauseMessage = liveTabPauseMessage,
+                            callbacks = livePaneCallbacks,
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     }
                 }
                 DockTabKind.Logs -> {

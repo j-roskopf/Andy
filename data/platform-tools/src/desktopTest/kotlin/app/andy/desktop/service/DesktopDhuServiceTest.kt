@@ -139,6 +139,27 @@ class DesktopDhuServiceTest {
     }
 
     @Test
+    fun interpretTlsAuthFailureAsPhoneDeveloperModeGuidance() {
+        val msg = DesktopDhuService.interpretDhuExit(
+            listOf(
+                "Attached!",
+                "Shutting down connection due to auth failure.",
+                "[E]: Unrecoverable error -3",
+                "BAD_SIGNATURE",
+            ),
+            fallback = "gone",
+        )
+        assertTrue(msg.contains("auth", ignoreCase = true))
+        assertTrue(msg.contains("Unknown sources", ignoreCase = true) || msg.contains("developer", ignoreCase = true))
+        assertTrue(DesktopDhuService.isLinkBroken(listOf("Shutting down connection due to auth failure.")))
+        assertFalse(
+            DesktopDhuService.isLinkReady(
+                listOf("SSL negotiation finished successfully 1", "auth failure"),
+            ),
+        )
+    }
+
+    @Test
     fun startFailsWhenReadinessBlockedAndDoesNotLeaveSessionRunning() = runBlocking {
         val devices = FakeDevices(online = false)
         val service = DesktopDhuService(

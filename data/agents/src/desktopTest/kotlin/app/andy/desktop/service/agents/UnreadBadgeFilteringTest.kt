@@ -34,7 +34,7 @@ class UnreadBadgeFilteringTest {
         val knownProjectIds = setOf("proj-1", "proj-2")
 
         fun isUnreadProjectTask(task: AgentTask): Boolean {
-            return !task.archived && task.unread && task.workflowTaskId == null &&
+            return !task.archived && task.unread &&
                 task.projectId != null && task.projectId in knownProjectIds
         }
 
@@ -44,14 +44,29 @@ class UnreadBadgeFilteringTest {
         // Archived unread chat -> false
         assertFalse(isUnreadProjectTask(createTask("2", projectId = "proj-1", archived = true)))
 
-        // Workflow task -> false
-        assertFalse(isUnreadProjectTask(createTask("3", projectId = "proj-1", workflowTaskId = "wf-1")))
+        // Workflow stage completion also lights Projects / Tasks-tab chrome
+        assertTrue(isUnreadProjectTask(createTask("3", projectId = "proj-1", workflowTaskId = "wf-1")))
 
         // Unknown project ID -> false
         assertFalse(isUnreadProjectTask(createTask("4", projectId = "deleted-proj")))
 
         // Standalone task (no project) -> false
         assertFalse(isUnreadProjectTask(createTask("5", projectId = null)))
+    }
+
+    @Test
+    fun testUnreadWorkflowProjectIdsFilter() {
+        val knownProjectIds = setOf("proj-1")
+
+        fun unreadWorkflowProjectId(task: AgentTask): String? =
+            task.projectId?.takeIf {
+                task.unread && !task.archived && task.workflowTaskId != null && it in knownProjectIds
+            }
+
+        assertEquals("proj-1", unreadWorkflowProjectId(createTask("1", projectId = "proj-1", workflowTaskId = "wf-1")))
+        assertEquals(null, unreadWorkflowProjectId(createTask("2", projectId = "proj-1")))
+        assertEquals(null, unreadWorkflowProjectId(createTask("3", projectId = "proj-1", workflowTaskId = "wf-1", unread = false)))
+        assertEquals(null, unreadWorkflowProjectId(createTask("4", projectId = "proj-1", workflowTaskId = "wf-1", archived = true)))
     }
 
     @Test

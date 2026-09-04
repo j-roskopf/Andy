@@ -90,20 +90,51 @@ class GpuMirrorSessionsTest {
         val android = GpuMirrorSessions.createAndBind("android-guard")!!
         assertNotEquals(ios.decoderId, android.decoderId, "Distinct devices must own distinct decoders")
         try {
-            ios.bindIosCapture()
-            assertEquals(ios.decoderId, GpuMirrorJni.iosDecoder(), "iOS capture must route to the iOS decoder")
+            ios.bindIosCapture(simulator = false)
+            assertEquals(
+                ios.decoderId,
+                GpuMirrorJni.iosDecoder(simulator = false),
+                "iOS capture must route to the physical-device decoder slot",
+            )
 
-            // Regression: an unrelated (Android) pipeline tearing down used to null the global iOS
+            // Regression: an unrelated (Android) pipeline tearing down used to null the iOS
             // routing slot, blanking a live iOS mirror bound to a different decoder.
             GpuMirrorSessions.release("android-guard")
             assertEquals(
                 ios.decoderId,
-                GpuMirrorJni.iosDecoder(),
+                GpuMirrorJni.iosDecoder(simulator = false),
                 "Closing the Android pipeline must not clear the iOS decoder binding",
             )
         } finally {
             GpuMirrorSessions.release("ios-guard")
         }
-        assertEquals(0L, GpuMirrorJni.iosDecoder(), "Closing the iOS pipeline must clear its own binding")
+        assertEquals(
+            0L,
+            GpuMirrorJni.iosDecoder(simulator = false),
+            "Closing the iOS pipeline must clear its own binding",
+        )
+    }
+
+    @Test
+    fun physicalAndSimulatorIosCapturesBindIndependentDecoderSlots() {
+        if (!GpuMirrorJni.isAvailable()) return
+        val physical = GpuMirrorSessions.createAndBind("ios-physical")!!
+        val simulator = GpuMirrorSessions.createAndBind("ios-simulator")!!
+        assertNotEquals(physical.decoderId, simulator.decoderId)
+        try {
+            physical.bindIosCapture(simulator = false)
+            simulator.bindIosCapture(simulator = true)
+            assertEquals(physical.decoderId, GpuMirrorJni.iosDecoder(simulator = false))
+            assertEquals(simulator.decoderId, GpuMirrorJni.iosDecoder(simulator = true))
+
+            // Re-binding one source must not clobber the other.
+            physical.bindIosCapture(simulator = false)
+            assertEquals(simulator.decoderId, GpuMirrorJni.iosDecoder(simulator = true))
+        } finally {
+            GpuMirrorSessions.release("ios-physical")
+            GpuMirrorSessions.release("ios-simulator")
+        }
+        assertEquals(0L, GpuMirrorJni.iosDecoder(simulator = false))
+        assertEquals(0L, GpuMirrorJni.iosDecoder(simulator = true))
     }
 }
