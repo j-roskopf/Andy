@@ -107,7 +107,8 @@ static GpuDecoder decoders[ANDY_MAX_DECODERS];
 static GpuPresenter presenters[ANDY_MAX_PRESENTERS];
 static pthread_mutex_t hub_lock = PTHREAD_MUTEX_INITIALIZER;
 static int64_t next_id = 1;
-static int64_t ios_decoder_id = ANDY_HUB_INVALID_ID;
+static int64_t ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+static int64_t ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
 
 @interface AndyGpuGuideOverlay : NSView
 @property(nonatomic, assign) GpuPresenter *presenter;
@@ -918,8 +919,11 @@ void andy_hub_destroy_decoder(int64_t decoder_id) {
             destroy_presenter_locked(&presenters[i]);
         }
     }
-    if (ios_decoder_id == decoder_id) {
-        ios_decoder_id = ANDY_HUB_INVALID_ID;
+    if (ios_device_decoder_id == decoder_id) {
+        ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+    }
+    if (ios_sim_decoder_id == decoder_id) {
+        ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
     }
     pthread_mutex_lock(&decoder->decoder_lock);
     destroy_decoder_locked(decoder);
@@ -1607,22 +1611,35 @@ float andy_hub_p95_transport_to_present_millis(int64_t decoder_id) {
     return value;
 }
 
-void andy_hub_set_ios_decoder(int64_t decoder_id) {
-    ios_decoder_id = decoder_id;
-}
-
-void andy_hub_clear_ios_decoder(int64_t decoder_id) {
-    // Compare-and-clear: a decoder that never owned iOS routing (Android) must not clobber the
-    // slot for a live iOS mirror bound to a different decoder.
+void andy_hub_set_ios_decoder(int64_t decoder_id, bool simulator) {
     pthread_mutex_lock(&hub_lock);
-    if (ios_decoder_id == decoder_id) {
-        ios_decoder_id = ANDY_HUB_INVALID_ID;
+    if (simulator) {
+        ios_sim_decoder_id = decoder_id;
+    } else {
+        ios_device_decoder_id = decoder_id;
     }
     pthread_mutex_unlock(&hub_lock);
 }
 
-int64_t andy_hub_ios_decoder(void) {
-    return ios_decoder_id;
+void andy_hub_clear_ios_decoder(int64_t decoder_id) {
+    // Compare-and-clear: a decoder that never owned iOS routing (Android) must not clobber
+    // slots for live iOS mirrors bound to different decoders.
+    pthread_mutex_lock(&hub_lock);
+    if (ios_device_decoder_id == decoder_id) {
+        ios_device_decoder_id = ANDY_HUB_INVALID_ID;
+    }
+    if (ios_sim_decoder_id == decoder_id) {
+        ios_sim_decoder_id = ANDY_HUB_INVALID_ID;
+    }
+    pthread_mutex_unlock(&hub_lock);
+}
+
+int64_t andy_hub_ios_device_decoder(void) {
+    return ios_device_decoder_id;
+}
+
+int64_t andy_hub_ios_sim_decoder(void) {
+    return ios_sim_decoder_id;
 }
 
 #define GPU_JNI_METHOD(name) Java_app_andy_desktop_service_mirror_GpuMirrorJni_##name
@@ -1752,16 +1769,17 @@ JNIEXPORT jboolean JNICALL GPU_JNI_METHOD(nativeIsHardwareReady)(JNIEnv *env, jc
     return andy_hub_is_hardware_ready((int64_t) decoder_id) ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeSetIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id) {
+JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeSetIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id,
+                                                            jboolean simulator) {
     (void) env;
     (void) clazz;
-    andy_hub_set_ios_decoder((int64_t) decoder_id);
+    andy_hub_set_ios_decoder((int64_t) decoder_id, simulator == JNI_TRUE);
 }
 
-JNIEXPORT jlong JNICALL GPU_JNI_METHOD(nativeIosDecoder)(JNIEnv *env, jclass clazz) {
+JNIEXPORT jlong JNICALL GPU_JNI_METHOD(nativeIosDecoder)(JNIEnv *env, jclass clazz, jboolean simulator) {
     (void) env;
     (void) clazz;
-    return (jlong) andy_hub_ios_decoder();
+    return (jlong) (simulator == JNI_TRUE ? andy_hub_ios_sim_decoder() : andy_hub_ios_device_decoder());
 }
 
 JNIEXPORT void JNICALL GPU_JNI_METHOD(nativeClearIosDecoder)(JNIEnv *env, jclass clazz, jlong decoder_id) {

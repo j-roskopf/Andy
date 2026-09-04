@@ -98,6 +98,7 @@ internal fun TopChrome(
     onProjectPaneClick: () -> Unit = {},
     onDismissDockLanding: () -> Unit = {},
     onOpenDockKind: (DockPlacement, DockTabKind) -> Unit = { _, _ -> },
+    dockLayoutMenu: DockLayoutMenu? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val hasActionRunnerControls = actionConfig.projects.any { it.actions.isNotEmpty() }
@@ -246,6 +247,12 @@ internal fun TopChrome(
                         closeFlyout()
                     },
                     showChat = destination.showsSideChat,
+                    layoutMenu = dockLayoutMenu?.let { menu ->
+                        menu.copy(
+                            onLoad = { id -> menu.onLoad(id); closeFlyout() },
+                            onSave = { name -> menu.onSave(name); closeFlyout() },
+                        )
+                    },
                 )
                 ChromeFlyoutKind.DevicePicker -> DevicePickerPanel(
                     devices = devices,

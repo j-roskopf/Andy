@@ -81,7 +81,6 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -220,6 +219,9 @@ fun LiveScreen(
     autoBugCaptureEnabled: Boolean = false,
     foldableHingeAngle: Float = 180f,
     onFoldableHingeAngleChange: (Float) -> Unit = {},
+    /** Android Auto intent, hoisted to the shell so DHU outlives Live's composition. */
+    androidAutoSerial: String? = null,
+    onAndroidAutoSerialChange: (String?) -> Unit = {},
 ) {
     val isIosTarget = iosTarget != null
     val caps = when {
@@ -285,13 +287,19 @@ fun LiveScreen(
     var minDevicePaneWidth by remember(serial) { mutableStateOf(360f) }
     var maxDevicePaneWidth by remember(serial) { mutableStateOf(1800f) }
     var currentFittedPaneWidth by remember(serial) { mutableStateOf(devicePaneWidth) }
-    // Android Auto DHU: off by default; Live-scoped and cleared on device switch.
+    // Android Auto DHU: off by default; the intent lives in the shell so leaving Live (or any
+    // other navigation that drops this composition) keeps the head unit running. It is cleared on
+    // an intentional target switch — not on transient USB AOA offline, which briefly nulls
+    // `serial` and must not cancel an in-flight DHU.
     // DHU runs in its own desktop-head-unit window (no Andy embed / pointer forwarding).
-    var androidAutoEnabled by remember(serial) { mutableStateOf(false) }
+    val androidAutoForSerial = androidAutoSerial
+    val androidAutoEnabled = androidAutoForSerial != null
     val dhuReadiness by services.dhu.readiness.collectAsState()
     val dhuSession by services.dhu.session.collectAsState()
     val dhuConsole by services.dhu.console.collectAsState()
-    val showAndroidAuto = caps.androidAuto && !isWeb && serial != null && device != null
+    val showAndroidAuto = caps.androidAuto && !isWeb &&
+        (serial != null || androidAutoForSerial != null) &&
+        (device != null || androidAutoForSerial != null)
     val androidAutoReadyHint = remember(dhuReadiness, dhuSession) {
         when {
             !dhuReadiness.ready && dhuReadiness.checks.isNotEmpty() ->
@@ -423,26 +431,11 @@ fun LiveScreen(
         if (mirrorReady && serial != null && !mirroredElsewhere) {
             val result = services.mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout else result.stderr
-            if (result.isSuccess) {
-                try {
-                    awaitCancellation()
-                } finally {
-                    withContext(NonCancellable) {
-                        // USB AOA prep for DHU briefly drops ADB/mirror; keep DHU if AA stays on.
-                        if (!androidAutoEnabled) {
-                            services.dhu.stop()
-                        }
-                    }
-                }
-            }
         } else {
             // When this device is mirrored elsewhere, do not disconnect the primary engine here.
             // iOS Simulator handoff / shared-primary pop-outs keep Live's session warm; Android
             // pop-outs of the Live device take over that engine into the pop-out pool instead.
             withContext(NonCancellable) {
-                if (!androidAutoEnabled) {
-                    services.dhu.stop()
-                }
                 when {
                     mirroredElsewhere -> Unit
                     // Transient offline while AA USB renegotiates — reconnect when mirrorReady returns.
@@ -452,47 +445,49 @@ fun LiveScreen(
             }
         }
     }
-    LaunchedEffect(androidAutoEnabled, serial, mirroredElsewhere) {
-        if (!showAndroidAuto || !androidAutoEnabled || mirroredElsewhere) {
-            services.dhu.stop()
+    // Live only *starts* DHU — stopping belongs to whoever clears the intent, so navigating away
+    // from Live (which cancels this effect) leaves the head unit running.
+    // Key on androidAutoForSerial only — do not restart when `serial` briefly goes null.
+    LaunchedEffect(androidAutoForSerial, mirroredElsewhere) {
+        val targetSerial = androidAutoForSerial ?: return@LaunchedEffect
+        if (mirroredElsewhere) {
+            // The pop-out window owns the mirror; drop AA rather than leave the toggle on with no
+            // session behind it.
+            onAndroidAutoSerialChange(null)
             return@LaunchedEffect
         }
         // Wait for mirror without keying on mirrorReady — USB accessory reset drops ADB briefly
         // and must not cancel/stop an in-flight DHU start.
         snapshotFlow {
+            val online = serial == targetSerial && device?.state == DeviceConnectionState.Online
             Triple(
-                mirrorReady,
-                mirrorSession?.readyForPresentation == true,
+                online,
+                mirrorSession?.takeIf { it.serial == targetSerial }?.readyForPresentation == true,
                 connectResult,
             )
-        }.first { (ready, presenting, connect) ->
-            ready && (presenting || connect.isNotBlank())
+        }.first { (online, presenting, connect) ->
+            online && (presenting || connect.isNotBlank())
         }
         val phase = services.dhu.session.value?.phase
-        if (phase == DhuSessionPhase.Starting || phase == DhuSessionPhase.Running) {
-            try {
-                awaitCancellation()
-            } finally {
-                withContext(NonCancellable) { services.dhu.stop() }
-            }
+        val sessionSerial = services.dhu.session.value?.serial
+        // Returning to Live with the head unit already up adopts that session instead of
+        // restarting it.
+        if (sessionSerial == targetSerial &&
+            (phase == DhuSessionPhase.Starting || phase == DhuSessionPhase.Running)
+        ) {
             return@LaunchedEffect
         }
-        services.dhu.refreshReadiness(serial)
-        val result = services.dhu.start(serial)
+        services.dhu.refreshReadiness(targetSerial)
+        // Non-cancellable: leaving Live mid-start must not abandon a half-launched head unit.
+        val result = withContext(NonCancellable) { services.dhu.start(targetSerial) }
         if (!result.isSuccess && result.stderr.isNotBlank()) {
             liveActionStatus = "Android Auto: ${result.stderr}"
         }
-        try {
-            awaitCancellation()
-        } finally {
-            withContext(NonCancellable) {
-                services.dhu.stop()
-            }
-        }
     }
-    LaunchedEffect(serial, androidAutoEnabled) {
-        if (showAndroidAuto) {
-            services.dhu.refreshReadiness(serial)
+    LaunchedEffect(serial, androidAutoForSerial) {
+        val readinessSerial = serial ?: androidAutoForSerial
+        if (showAndroidAuto && readinessSerial != null) {
+            services.dhu.refreshReadiness(readinessSerial)
         }
     }
     val showLogcat = caps.logs
@@ -748,14 +743,12 @@ fun LiveScreen(
                             session = dhuSession,
                             readiness = dhuReadiness,
                             onRetry = {
-                                scope.launch {
-                                    services.dhu.start(serial)
+                                val target = androidAutoForSerial ?: serial
+                                if (target != null) {
+                                    scope.launch { services.dhu.start(target) }
                                 }
                             },
-                            onStop = {
-                                androidAutoEnabled = false
-                                scope.launch { services.dhu.stop() }
-                            },
+                            onStop = { onAndroidAutoSerialChange(null) },
                         )
                     }
                 }
@@ -784,9 +777,10 @@ fun LiveScreen(
             showAndroidAuto = showAndroidAuto,
             androidAutoEnabled = androidAutoEnabled,
             onAndroidAutoEnabledChange = { enabled ->
-                androidAutoEnabled = enabled
-                if (!enabled) {
-                    scope.launch { services.dhu.stop() }
+                if (enabled) {
+                    serial?.let { onAndroidAutoSerialChange(it) }
+                } else {
+                    onAndroidAutoSerialChange(null)
                 }
             },
             androidAutoReadyHint = androidAutoReadyHint,

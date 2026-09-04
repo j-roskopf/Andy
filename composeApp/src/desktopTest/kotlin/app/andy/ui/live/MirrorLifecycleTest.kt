@@ -13,6 +13,15 @@ import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
 import app.andy.service.CommandResult
+import app.andy.service.DhuCaptureFrame
+import app.andy.service.DhuCheckStatus
+import app.andy.service.DhuConsoleState
+import app.andy.service.DhuHostKind
+import app.andy.service.DhuReadiness
+import app.andy.service.DhuReadinessCheck
+import app.andy.service.DhuService
+import app.andy.service.DhuSession
+import app.andy.service.DhuSessionPhase
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
@@ -86,6 +95,56 @@ class MirrorLifecycleTest {
             assertEquals(1, mirror.connectCalls)
             assertEquals(0, mirror.disconnectCalls)
             assertFalse(mirror.presenting.value, "presentation must stay paused while nothing shows Live")
+        }
+    }
+
+    @Test
+    fun androidAutoHeadUnitSurvivesLeavingLive() = withComposeMirrorRenderer {
+        runDesktopComposeUiTestDrainingPriorFailures {
+            val visible = mutableStateOf(true)
+            val mirror = TrackingMirror()
+            val dhu = TrackingDhu()
+            val services = ScreenshotServices.create().copy(mirror = mirror, dhu = dhu)
+            val device = AndroidDevice(
+                serial = "device-1",
+                displayName = "Test device",
+                kind = DeviceKind.Physical,
+                state = DeviceConnectionState.Online,
+                transport = DeviceTransport.Usb,
+            )
+
+            setContent {
+                AndyTheme {
+                    if (visible.value) {
+                        LiveScreen(
+                            services = services,
+                            serial = device.serial,
+                            device = device,
+                            devicePaneWidth = 680f,
+                            onStopEmulator = {},
+                            stoppingEmulatorSerial = null,
+                            stopStatus = "",
+                            onDevicePaneWidthChange = {},
+                            onBugSaved = {},
+                            onRecordingSaved = {},
+                            logcatState = LogcatState(),
+                            onPopOutMirror = {},
+                            selectedPackage = null,
+                            onSelectedPackageChange = {},
+                            transfer = DeviceTransferCoordinator(),
+                            androidAutoSerial = device.serial,
+                        )
+                    }
+                }
+            }
+
+            waitUntil(timeoutMillis = 5_000) { dhu.startCalls == 1 }
+            runOnUiThread { visible.value = false }
+            // Give composition teardown a moment; navigating off Live must not kill the head unit.
+            runBlocking { delay(250) }
+
+            assertEquals(1, dhu.startCalls)
+            assertEquals(0, dhu.stopCalls, "leaving Live must keep the DHU session running")
         }
     }
 
@@ -290,6 +349,43 @@ class MirrorLifecycleTest {
         override suspend fun sendInput(input: MirrorInput) = CommandResult.success()
 
         override suspend fun screenshot(serial: String): ByteArray? = null
+    }
+
+    private class TrackingDhu : DhuService {
+        private val ready = DhuReadiness(
+            hostKind = DhuHostKind.MacOs,
+            checks = listOf(DhuReadinessCheck("host", "Desktop host", DhuCheckStatus.Ok, "MacOs")),
+        )
+        override val readiness = MutableStateFlow(ready)
+        override val session = MutableStateFlow<DhuSession?>(null)
+        override val console = MutableStateFlow(DhuConsoleState())
+        override val captureFrame = MutableStateFlow<DhuCaptureFrame?>(null)
+
+        var startCalls = 0
+            private set
+        var stopCalls = 0
+            private set
+
+        override suspend fun refreshReadiness(serial: String?) = ready
+
+        override suspend fun start(serial: String): CommandResult {
+            startCalls += 1
+            session.value = DhuSession(serial = serial, localPort = 5277, phase = DhuSessionPhase.Running)
+            return CommandResult.success("started")
+        }
+
+        override suspend fun stop() {
+            stopCalls += 1
+            session.value = null
+        }
+
+        override suspend fun sendConsoleCommand(command: String) = CommandResult.success()
+
+        override fun openHelp() = Unit
+
+        override fun openExternalTroubleshooting() = CommandResult.success()
+
+        override fun copyDiagnostics() = ready.diagnosticsText()
     }
 
     private class BlockingInputMirror : MirrorEngine {

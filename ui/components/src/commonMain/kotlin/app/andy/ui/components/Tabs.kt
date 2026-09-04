@@ -92,10 +92,13 @@ enum class TabListLayout {
 
 private val LocalTabListSize = compositionLocalOf { TabListSize.Md }
 private val LocalTabListLayout = compositionLocalOf { TabListLayout.Hug }
+private val LocalTabListHasDivider = compositionLocalOf { false }
 
 /**
  * Coordinates for the sliding folder-tab indicator. Selected [TabBarItem]s report their
  * layout node; [TabBarRow] resolves bounds in the strip's local space and animates the wrap.
+ * Only used when [TabBarRow.hasDivider] is true — panel strips (`hasDivider = false`) keep the
+ * underline indicator so they don't grow a floating U-border without a baseline.
  */
 private class TabBarIndicatorHost {
     var rootCoordinates: LayoutCoordinates? = null
@@ -130,9 +133,12 @@ private class TabBarIndicatorHost {
 private val LocalTabBarIndicatorHost = compositionLocalOf<TabBarIndicatorHost?> { null }
 
 /**
- * Folder-tab bar: selected item sits in a three-sided border wrap that meets the baseline,
- * and the wrap slides/resizes as selection changes. Prefer this over [FilterPill] or
- * [SegmentedControl] when switching between distinct content panes.
+ * Tab bar for switching between distinct content panes. With [hasDivider] (default), the
+ * selected item sits in a three-sided folder-tab wrap that meets the baseline. Panel strips
+ * that pass `hasDivider = false` keep the prior underline indicator instead — a wrap with
+ * no baseline reads as a floating border around the label.
+ *
+ * Prefer this over [FilterPill] or [SegmentedControl] for pane navigation.
  *
  * [trailing] is placed on the trailing edge of the tab row (e.g. action buttons).
  */
@@ -206,7 +212,9 @@ fun TabBarRow(
     CompositionLocalProvider(
         LocalTabListSize provides size,
         LocalTabListLayout provides layout,
-        LocalTabBarIndicatorHost provides host,
+        LocalTabListHasDivider provides hasDivider,
+        // Folder wrap only when there is a baseline to meet; panel strips use underlines.
+        LocalTabBarIndicatorHost provides host.takeIf { hasDivider },
     ) {
         Row(
             modifier.fillMaxWidth(),
@@ -247,14 +255,17 @@ fun TabBarRow(
                             },
                         )
                         .height(tabHeight)
-                        .onGloballyPositioned(host::onRootPositioned),
+                        .then(
+                            if (hasDivider) Modifier.onGloballyPositioned(host::onRootPositioned)
+                            else Modifier,
+                        ),
                 ) {
-                    if (indicatorReady && selectedBounds != null) {
+                    if (hasDivider && indicatorReady && selectedBounds != null) {
                         FolderTabIndicator(
                             leftPx = leftAnim.value,
                             widthPx = widthAnim.value,
                             height = tabHeight,
-                            maskBaseline = hasDivider,
+                            maskBaseline = true,
                         )
                     }
                     Row(
@@ -384,6 +395,7 @@ fun RowScope.TabBarItem(
 ) {
     val size = LocalTabListSize.current
     val layout = LocalTabListLayout.current
+    val hasDivider = LocalTabListHasDivider.current
     val host = LocalTabBarIndicatorHost.current
     val tabHeight = size.height
     val accent = indicatorColor ?: AndyColors.Blue
@@ -424,6 +436,9 @@ fun RowScope.TabBarItem(
         modifier
             .then(if (layout == TabListLayout.Fill) Modifier.weight(1f) else Modifier)
             .height(tabHeight)
+            // Clip only for underline strips — folder tabs need the wrap stroke to meet the
+            // baseline below the item bounds, so clipping would cut the open bottom.
+            .then(if (!hasDivider) Modifier.clip(RoundedCornerShape(AndyRadius.Control)) else Modifier)
             .hoverable(interactionSource)
             .combinedClickable(
                 enabled = !editing,
@@ -518,6 +533,20 @@ fun RowScope.TabBarItem(
                 }
             }
             trailing?.invoke(hovered)
+        }
+        // Panel strips (no baseline) use the classic accent underline instead of a folder wrap.
+        if (!hasDivider) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = AndySpace.Space3)
+                    .height(2.dp)
+                    .background(
+                        if (selected) accent else Color.Transparent,
+                        RoundedCornerShape(AndyRadius.Pill),
+                    ),
+            )
         }
     }
 }

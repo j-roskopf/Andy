@@ -140,9 +140,9 @@ object GpuMirrorJni {
         }.getOrNull()
     }
 
-    fun bindIosDecoder(decoderId: Long) {
+    fun bindIosDecoder(decoderId: Long, simulator: Boolean) {
         if (!loadResult.isSuccess || decoderId == 0L) return
-        runCatching { nativeSetIosDecoder(decoderId) }
+        runCatching { nativeSetIosDecoder(decoderId, simulator) }
     }
 
     fun clearIosDecoder(decoderId: Long) {
@@ -150,9 +150,13 @@ object GpuMirrorJni {
         runCatching { nativeClearIosDecoder(decoderId) }
     }
 
-    /** Decoder currently bound to receive iOS capture frames, or 0 when unbound. */
-    fun iosDecoder(): Long =
-        if (!loadResult.isSuccess) 0L else runCatching { nativeIosDecoder() }.getOrDefault(0L)
+    /** Decoder currently bound to receive physical or simulator iOS capture frames, or 0. */
+    fun iosDecoder(simulator: Boolean): Long =
+        if (!loadResult.isSuccess) {
+            0L
+        } else {
+            runCatching { nativeIosDecoder(simulator) }.getOrDefault(0L)
+        }
 
     fun updatePresenterOverlay(
         presenterId: Long,
@@ -283,9 +287,9 @@ object GpuMirrorJni {
     private external fun nativeIsHardwareReady(decoderId: Long): Boolean
     private external fun nativeLatestFrameSize(decoderId: Long, outSize: IntArray): Boolean
     private external fun nativeCopyLatestFrameArgb(decoderId: Long, outSize: IntArray): IntArray?
-    private external fun nativeSetIosDecoder(decoderId: Long)
+    private external fun nativeSetIosDecoder(decoderId: Long, simulator: Boolean)
     private external fun nativeClearIosDecoder(decoderId: Long)
-    private external fun nativeIosDecoder(): Long
+    private external fun nativeIosDecoder(simulator: Boolean): Long
     private external fun nativeUpdatePresenterOverlay(
         presenterId: Long,
         gridEnabled: Boolean,

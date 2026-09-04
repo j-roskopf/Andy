@@ -138,34 +138,24 @@ static AVCaptureDevice *find_ios_screen_device(NSString *udid_string, NSString *
 
 static AVCaptureDevice *wait_for_ios_screen_device(
     NSString *udid_string, NSString *alt_id_string, NSString *name_string, int timeout_ms) {
-    __block AVCaptureDevice *found = nil;
+    // Discovery touches AVFoundation; hop to main briefly per poll. Never hold the main
+    // queue for the full timeout — dispatch_sync + run-loop spinning beach-balls Andy.
     run_on_main(^{
         warmup_capture_discovery();
-        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout_ms / 1000.0];
-        __block id observer = nil;
-        observer = [[NSNotificationCenter defaultCenter]
-            addObserverForName:AVCaptureDeviceWasConnectedNotification
-            object:nil
-            queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification *note) {
-                AVCaptureDevice *device = note.object;
-                if (!device || !is_ios_screen_capture_device(device)) return;
-                if (id_matches_any(device.uniqueID, udid_string, alt_id_string) ||
-                    (name_string.length && name_matches(device.localizedName, name_string))) {
-                    found = device;
-                }
-            }];
-        while ([deadline timeIntervalSinceNow] > 0 && !found) {
-            found = find_ios_screen_device(udid_string, alt_id_string, name_string);
-            if (found) break;
-            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                      beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-        }
-        if (observer) {
-            [[NSNotificationCenter defaultCenter] removeObserver:observer];
-        }
     });
-    return found;
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout_ms / 1000.0];
+    while ([deadline timeIntervalSinceNow] > 0) {
+        __block AVCaptureDevice *candidate = nil;
+        run_on_main(^{
+            candidate = find_ios_screen_device(udid_string, alt_id_string, name_string);
+        });
+        if (candidate) {
+            return candidate;
+        }
+        usleep(50 * 1000);
+    }
+    return nil;
 }
 
 static void append_discovered_device_names(void) {
@@ -239,7 +229,7 @@ static void teardown_device_session(void) {
     content_height = (int) height;
     CVPixelBufferRetain(image_buffer);
     andy_mirror_remember_latest_pixels(image_buffer);
-    const int64_t hub_decoder = andy_hub_ios_decoder();
+    const int64_t hub_decoder = andy_hub_ios_device_decoder();
     if (hub_decoder != ANDY_HUB_INVALID_ID) {
         const bool probe = andy_hub_latency_probe_changed(hub_decoder, image_buffer);
         andy_hub_render_pixel_buffer(hub_decoder, image_buffer, probe, 0, 0, true);
@@ -299,27 +289,40 @@ Java_app_andy_desktop_service_ios_NativeIosDeviceJni_nativeConnect(
     device_error[0] = '\0';
     if (@available(macOS 14.0, *)) {
         __block BOOL connect_error = NO;
-        __block const char *connect_error_message = NULL;
+        // Camera auth + CMIO enable are short; keep them on main. Device discovery can take
+        // tens of seconds — wait off-main so Compose/AppKit stay responsive (see wait_for…).
         run_on_main(^{
             request_camera_access_sync();
             if (!enable_screen_capture_devices()) {
                 connect_error = YES;
-                connect_error_message = device_error;
-                return;
             }
-            NSString *udid_string = [NSString stringWithUTF8String:udid_utf];
-            NSString *alt_string = alt_utf ? [NSString stringWithUTF8String:alt_utf] : @"";
-            NSString *name_string = name_utf ? [NSString stringWithUTF8String:name_utf] : @"";
-            AVCaptureDevice *target = wait_for_ios_screen_device(udid_string, alt_string, name_string, 30000);
-            if (!target) {
-                set_device_error(
-                    "No USB iPhone screen device found. Unlock the phone, tap Trust This Computer, "
-                    "grant Camera access to Andy, then unplug and replug the cable.");
+        });
+        if (connect_error) {
+            (*env)->ReleaseStringUTFChars(env, udid, udid_utf);
+            if (alt_utf) (*env)->ReleaseStringUTFChars(env, alt_udid, alt_utf);
+            if (name_utf) (*env)->ReleaseStringUTFChars(env, display_name, name_utf);
+            (*env)->SetIntArrayRegion(env, result, 0, 2, size_out);
+            return result;
+        }
+        NSString *udid_string = [NSString stringWithUTF8String:udid_utf];
+        NSString *alt_string = alt_utf ? [NSString stringWithUTF8String:alt_utf] : @"";
+        NSString *name_string = name_utf ? [NSString stringWithUTF8String:name_utf] : @"";
+        AVCaptureDevice *target = wait_for_ios_screen_device(udid_string, alt_string, name_string, 30000);
+        if (!target) {
+            set_device_error(
+                "No USB iPhone screen device found. Unlock the phone, tap Trust This Computer, "
+                "grant Camera access to Andy, then unplug and replug the cable.");
+            run_on_main(^{
                 append_discovered_device_names();
-                connect_error = YES;
-                connect_error_message = device_error;
-                return;
-            }
+            });
+            (*env)->ReleaseStringUTFChars(env, udid, udid_utf);
+            if (alt_utf) (*env)->ReleaseStringUTFChars(env, alt_udid, alt_utf);
+            if (name_utf) (*env)->ReleaseStringUTFChars(env, display_name, name_utf);
+            (*env)->SetIntArrayRegion(env, result, 0, 2, size_out);
+            return result;
+        }
+        __block const char *connect_error_message = NULL;
+        run_on_main(^{
             NSError *error = nil;
             AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:target error:&error];
             if (!input || error) {
@@ -337,12 +340,12 @@ Java_app_andy_desktop_service_ios_NativeIosDeviceJni_nativeConnect(
                 return;
             }
             [session addInput:input];
-        AVCaptureVideoDataOutput *output = [[AVCaptureVideoDataOutput alloc] init];
-        // Wired iOS screen capture is natively BGRA; forcing NV12 corrupts chroma (red tint).
-        output.videoSettings = @{
-            (NSString *) kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
-            (NSString *) kCVPixelBufferMetalCompatibilityKey: @YES,
-        };
+            AVCaptureVideoDataOutput *output = [[AVCaptureVideoDataOutput alloc] init];
+            // Wired iOS screen capture is natively BGRA; forcing NV12 corrupts chroma (red tint).
+            output.videoSettings = @{
+                (NSString *) kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+                (NSString *) kCVPixelBufferMetalCompatibilityKey: @YES,
+            };
             output.alwaysDiscardsLateVideoFrames = YES;
             if (![session canAddOutput:output]) {
                 set_device_error("Cannot add iPhone video output");

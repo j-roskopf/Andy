@@ -132,7 +132,9 @@ class DesktopIosMirrorEngine(
             // starts producing IOSurfaces (otherwise frames fan out to zero presenters).
             frames.value = MirrorFrame(2, 2, intArrayOf(), frameNumber = nextFrameNumber++)
             awaitGpuPresenter(serial)
-            GpuMirrorSessions.get(serial)?.bindIosCapture()
+            GpuMirrorSessions.get(serial)?.bindIosCapture(
+                simulator = target?.kind == IosTargetKind.Simulator,
+            )
             NativeMirrorJni.setInlineOverlayVisible(false)
         }
         status.value = "Starting iOS screen capture…"

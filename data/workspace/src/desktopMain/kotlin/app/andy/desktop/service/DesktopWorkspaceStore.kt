@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.model.IntentDraft
 import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
+import app.andy.model.SavedDockLayout
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
@@ -172,12 +173,14 @@ class DesktopWorkspaceStore(
             agentAdoptProviderSessionTitles = props.getProperty("agentAdoptProviderSessionTitles")?.toBooleanStrictOrNull() ?: true,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             collapsedProjectChatIds = props.getProperty("collapsedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
+            collapsedWorkflowTaskIds = props.getProperty("collapsedWorkflowTaskIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             ollamaBaseUrl = props.getProperty("ollamaBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().ollamaBaseUrl,
             ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
             lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
             lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
             savedSshTargets = props.getProperty("savedSshTargets").orEmpty().lines().filter { it.isNotBlank() },
             iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
+            savedDockLayouts = decodeSavedDockLayouts(props.getProperty("savedDockLayouts").orEmpty()),
         )
     }.also { mutableState.value = it }
 
@@ -302,12 +305,14 @@ class DesktopWorkspaceStore(
             setProperty("agentAdoptProviderSessionTitles", state.agentAdoptProviderSessionTitles.toString())
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
             setProperty("collapsedProjectChatIds", state.collapsedProjectChatIds.joinToString("\n"))
+            setProperty("collapsedWorkflowTaskIds", state.collapsedWorkflowTaskIds.joinToString("\n"))
             setProperty("ollamaBaseUrl", state.ollamaBaseUrl)
             setProperty("ollamaBearerToken", state.ollamaBearerToken)
             setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
             setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
             setProperty("savedSshTargets", state.savedSshTargets.joinToString("\n"))
             saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
+            setProperty("savedDockLayouts", encodeSavedDockLayouts(state.savedDockLayouts))
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
         restrictPrivateFilePermissions(file)
@@ -323,6 +328,16 @@ class DesktopWorkspaceStore(
         if (value.isBlank()) return emptyList()
         return runCatching {
             WorkspaceJson.decodeFromString(ListSerializer(IntentDraft.serializer()), value)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeSavedDockLayouts(layouts: List<SavedDockLayout>): String =
+        if (layouts.isEmpty()) "" else WorkspaceJson.encodeToString(layouts)
+
+    private fun decodeSavedDockLayouts(value: String): List<SavedDockLayout> {
+        if (value.isBlank()) return emptyList()
+        return runCatching {
+            WorkspaceJson.decodeFromString(ListSerializer(SavedDockLayout.serializer()), value)
         }.getOrDefault(emptyList())
     }
 

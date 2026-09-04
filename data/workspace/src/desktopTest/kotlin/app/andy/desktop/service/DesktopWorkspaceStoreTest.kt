@@ -4,6 +4,14 @@ import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.IntentDraft
 import app.andy.model.IntentMode
+import app.andy.model.SavedDockLayout
+import app.andy.model.SavedDockPane
+import app.andy.model.SavedDockTab
+import app.andy.model.SavedDockTabKind
+import app.andy.model.SavedLiveNode
+import app.andy.model.SavedSplitAxis
+import app.andy.model.SavedTerminalNode
+import app.andy.model.SavedTerminalSession
 import app.andy.model.WorkspaceState
 import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
@@ -194,6 +202,12 @@ class DesktopWorkspaceStoreTest {
 
         DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = emptySet()))
         assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
+
+        DesktopWorkspaceStore(file).save(saved.copy(collapsedWorkflowTaskIds = setOf("spec-a", "spec-b")))
+        assertEquals(setOf("spec-a", "spec-b"), DesktopWorkspaceStore(file).load().collapsedWorkflowTaskIds)
+
+        DesktopWorkspaceStore(file).save(saved.copy(collapsedWorkflowTaskIds = emptySet()))
+        assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedWorkflowTaskIds)
     }
 
     @Test
@@ -259,5 +273,81 @@ class DesktopWorkspaceStoreTest {
         assertEquals("#ABB2BF", coerced.terminalForegroundHex)
         assertEquals("default", coerced.terminalFontFamilyId)
         assertEquals(16f, coerced.terminalFontSize)
+    }
+
+    @Test
+    fun roundTripsSavedDockLayouts() = runBlocking {
+        val file = createTempDirectory("andy-workspace-layouts").toFile().resolve("workspace.properties")
+        val layout1 = SavedDockLayout(
+            id = "layout-1",
+            name = "Layout 1",
+            savedAtMillis = 1000L,
+            right = SavedDockPane(
+                tabs = listOf(
+                    SavedDockTab(
+                        kind = SavedDockTabKind.Terminal,
+                        title = "Nested Terminal",
+                        terminalTree = SavedTerminalNode.Split(
+                            axis = SavedSplitAxis.Row,
+                            children = listOf(
+                                SavedTerminalNode.Leaf(
+                                    sessions = listOf(SavedTerminalSession("proj-1", "S1")),
+                                    activeSessionIndex = 0,
+                                ),
+                                SavedTerminalNode.Leaf(
+                                    sessions = listOf(SavedTerminalSession("proj-2", "S2")),
+                                    activeSessionIndex = 0,
+                                ),
+                            ),
+                            weights = listOf(0.5f, 0.5f),
+                        ),
+                        focusedLeafIndex = 0,
+                    ),
+                    SavedDockTab(
+                        kind = SavedDockTabKind.Live,
+                        title = "Live",
+                        liveTree = SavedLiveNode.Leaf("dev-1", "Device 1"),
+                    ),
+                ),
+                activeTabIndex = 0,
+                visible = true,
+            ),
+            bottom = SavedDockPane(
+                tabs = listOf(
+                    SavedDockTab(kind = SavedDockTabKind.Logs),
+                    SavedDockTab(kind = SavedDockTabKind.Browser, browserUrl = "https://andy.app"),
+                ),
+                activeTabIndex = 1,
+                visible = true,
+            ),
+            rightPaneWidth = 500f,
+            bottomPaneHeight = 280f,
+        )
+        val layout2 = SavedDockLayout(
+            id = "layout-2",
+            name = "Layout 2",
+            savedAtMillis = 2000L,
+        )
+
+        val state = WorkspaceState(
+            logSearch = "testing-saved-layouts",
+            savedDockLayouts = listOf(layout1, layout2),
+        )
+        DesktopWorkspaceStore(file).save(state)
+        val loaded = DesktopWorkspaceStore(file).load()
+        assertEquals(state.savedDockLayouts, loaded.savedDockLayouts)
+        assertEquals("testing-saved-layouts", loaded.logSearch)
+
+        // Corrupt / garbage JSON in savedDockLayouts falls back to empty list while other properties still parse.
+        val fileContent = file.readText()
+        val corrupt = fileContent.lines().map { line ->
+            if (line.startsWith("savedDockLayouts=")) "savedDockLayouts={not:valid-json..."
+            else line
+        }.joinToString("\n")
+        file.writeText(corrupt)
+
+        val loadedAfterCorrupt = DesktopWorkspaceStore(file).load()
+        assertEquals(emptyList(), loadedAfterCorrupt.savedDockLayouts)
+        assertEquals("testing-saved-layouts", loadedAfterCorrupt.logSearch)
     }
 }

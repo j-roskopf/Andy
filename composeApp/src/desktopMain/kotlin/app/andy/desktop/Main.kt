@@ -88,7 +88,7 @@ fun main() {
             actionsConfig.projects.mapTo(mutableSetOf()) { it.id }
         }
         val unreadCount = agentTasks.count { task ->
-            !task.archived && task.unread && task.workflowTaskId == null &&
+            !task.archived && task.unread &&
                 (task.projectId == null || task.projectId in knownProjectIds)
         }
         val windowState = rememberWindowState(width = 1800.dp, height = 1072.dp)
@@ -214,6 +214,9 @@ fun main() {
             runBlocking {
                 popOutMirrorPool.releaseAll()
                 services.mirror.disconnect(immediate = true)
+                // DHU outlives the Live screen now, so quitting is the last chance to take the
+                // head unit down with us.
+                services.dhu.stop()
             }
             exitApplication()
         }
@@ -382,6 +385,9 @@ fun main() {
                     // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
                     // pop-outs of the Live device own the engine via the pop-out pool instead.
                     poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
+                    liveMirrorHold = { targetId -> popOutMirrorPool.acquire(targetId) },
+                    liveMirrorRelease = { targetId -> scope.launch { popOutMirrorPool.release(targetId) } },
+                    liveMirrorFor = { targetId -> popOutMirrorPool.engine(targetId) },
                     contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
                 )
             }

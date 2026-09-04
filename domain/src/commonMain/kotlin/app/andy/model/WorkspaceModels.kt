@@ -160,6 +160,11 @@ data class WorkspaceState(
     val disabledDestinations: Set<String> = emptySet(),
     /** Project ids whose chat lists are collapsed in the Projects sidebar. */
     val collapsedProjectChatIds: Set<String> = emptySet(),
+    /**
+     * Spec task ids whose child builds are collapsed in the Task workflows list.
+     * Specs default to expanded; an id present here means the user collapsed it.
+     */
+    val collapsedWorkflowTaskIds: Set<String> = emptySet(),
     val ollamaBaseUrl: String = DefaultOllamaBaseUrl,
     val ollamaBearerToken: String = "",
     val lmStudioBaseUrl: String = DefaultLmStudioBaseUrl,
@@ -175,4 +180,6 @@ data class WorkspaceState(
      * (Phase 6.3). Populated after a successful physical mirror connect.
      */
     val iosCmioIds: Map<String, String> = emptyMap(),
+    /** Named right/bottom dock arrangements saved from the new-tab chooser. Max 20, see ShellState. */
+    val savedDockLayouts: List<SavedDockLayout> = emptyList(),
 )
