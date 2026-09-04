@@ -16,10 +16,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -45,6 +46,9 @@ import app.andy.ui.theme.TextSecondary
 internal enum class ChromeFlyoutKind {
     LocalServers,
     DockLanding,
+    DevicePicker,
+    ActionProjectPicker,
+    ActionPicker,
 }
 
 private val ChromeFlyoutEnterMillis = 220
@@ -62,6 +66,11 @@ internal fun ChromeFlyout(
     visible: Boolean,
     modifier: Modifier = Modifier,
     contentAlignment: Alignment.Horizontal = Alignment.Start,
+    /**
+     * When the same flyout host swaps panels without closing, keying scroll on the
+     * active content prevents the new panel from opening mid-list.
+     */
+    contentKey: Any? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     AnimatedVisibility(
@@ -78,6 +87,7 @@ internal fun ChromeFlyout(
             ),
         modifier = modifier.fillMaxWidth(),
     ) {
+        val scrollState = remember(contentKey) { ScrollState(initial = 0) }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -85,7 +95,7 @@ internal fun ChromeFlyout(
                 .bottomBorder(PaneDividerTint)
                 .padding(horizontal = AndySpace.Space5, vertical = AndySpace.Space3)
                 .heightIn(max = 320.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             horizontalAlignment = contentAlignment,
             content = content,
         )
