@@ -45,6 +45,9 @@ import app.andy.ui.theme.TextSecondary
 internal enum class ChromeFlyoutKind {
     LocalServers,
     DockLanding,
+    DevicePicker,
+    ActionProjectPicker,
+    ActionPicker,
 }
 
 private val ChromeFlyoutEnterMillis = 220
