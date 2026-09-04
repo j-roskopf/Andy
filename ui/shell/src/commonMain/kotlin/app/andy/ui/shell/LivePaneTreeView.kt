@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.andy.model.AndroidDevice
 import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.service.AndyServices
 import app.andy.service.MirrorEngine
 import app.andy.ui.components.EmptyState
@@ -61,6 +62,7 @@ internal fun LivePaneTreeView(
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
+    takenIosKinds: (targetId: String?) -> Set<IosTargetKind>,
     callbacks: LivePaneCallbacks,
     modifier: Modifier = Modifier,
 ) {
@@ -76,6 +78,7 @@ internal fun LivePaneTreeView(
         liveMirrorFor = liveMirrorFor,
         liveTabPaused = liveTabPaused,
         liveTabPauseMessage = liveTabPauseMessage,
+        takenIosKinds = takenIosKinds,
         callbacks = callbacks,
         modifier = modifier,
         showLeafChrome = tree is LivePaneNode.Split,
@@ -94,6 +97,7 @@ private fun LivePaneNodeView(
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
+    takenIosKinds: (targetId: String?) -> Set<IosTargetKind>,
     callbacks: LivePaneCallbacks,
     modifier: Modifier = Modifier,
     showLeafChrome: Boolean,
@@ -110,6 +114,7 @@ private fun LivePaneNodeView(
             liveMirrorFor = liveMirrorFor,
             liveTabPaused = liveTabPaused,
             liveTabPauseMessage = liveTabPauseMessage,
+            takenIosKinds = takenIosKinds,
             callbacks = callbacks,
             modifier = modifier,
             showLeafChrome = showLeafChrome,
@@ -125,6 +130,7 @@ private fun LivePaneNodeView(
             liveMirrorFor = liveMirrorFor,
             liveTabPaused = liveTabPaused,
             liveTabPauseMessage = liveTabPauseMessage,
+            takenIosKinds = takenIosKinds,
             callbacks = callbacks,
             modifier = modifier,
         )
@@ -143,6 +149,7 @@ private fun LiveSplitView(
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
+    takenIosKinds: (targetId: String?) -> Set<IosTargetKind>,
     callbacks: LivePaneCallbacks,
     modifier: Modifier = Modifier,
 ) {
@@ -178,6 +185,7 @@ private fun LiveSplitView(
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,
+            takenIosKinds = takenIosKinds,
                             callbacks = callbacks,
                             modifier = Modifier.fillMaxSize(),
                             showLeafChrome = true,
@@ -205,6 +213,7 @@ private fun LiveSplitView(
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,
+            takenIosKinds = takenIosKinds,
                             callbacks = callbacks,
                             modifier = Modifier.fillMaxSize(),
                             showLeafChrome = true,
@@ -234,6 +243,7 @@ private fun LiveLeafView(
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
+    takenIosKinds: (targetId: String?) -> Set<IosTargetKind>,
     callbacks: LivePaneCallbacks,
     modifier: Modifier = Modifier,
     showLeafChrome: Boolean,
@@ -330,6 +340,7 @@ private fun LiveLeafView(
                     devices = devices,
                     iosTargets = iosTargets,
                     deviceLabels = deviceLabels,
+                    takenIosKinds = takenIosKinds(targetId),
                     onSelectTarget = { id ->
                         callbacks.onSelectTarget(topLevelTabId, leaf.id, id)
                         pickerOpen = false
@@ -343,6 +354,7 @@ private fun LiveLeafView(
                     devices = devices,
                     iosTargets = iosTargets,
                     deviceLabels = deviceLabels,
+                    takenIosKinds = takenIosKinds(targetId),
                     onSelectTarget = { id ->
                         callbacks.onSelectTarget(topLevelTabId, leaf.id, id)
                         pickerOpen = false

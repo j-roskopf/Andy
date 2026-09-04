@@ -19,6 +19,7 @@ internal fun LiveDevicePickerPanel(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    takenIosKinds: Set<IosTargetKind> = emptySet(),
     onSelectTarget: (String) -> Unit,
 ) {
     val activeDevices = remember(devices) {
@@ -52,9 +53,13 @@ internal fun LiveDevicePickerPanel(
                         IosTargetKind.Simulator -> "Booted"
                     }
                     val title = deviceLabels[target.udid] ?: target.displayName
+                    // The native hub has one decoder slot per iOS kind, so a second same-kind
+                    // source cannot run alongside the one already bound elsewhere in the dock.
+                    val unavailable = target.kind in takenIosKinds
                     ChromeFlyoutRow(
                         label = title,
-                        supporting = subtitle,
+                        supporting = if (unavailable) "$subtitle · already in use" else subtitle,
+                        enabled = !unavailable,
                         onClick = { onSelectTarget(target.udid) },
                     )
                 }

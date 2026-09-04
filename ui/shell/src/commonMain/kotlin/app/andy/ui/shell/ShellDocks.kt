@@ -69,6 +69,7 @@ import app.andy.BrowserNavCommand
 import app.andy.model.ActionRunStatus
 import app.andy.model.AndroidDevice
 import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.model.RunningAction
 import app.andy.model.TerminalThemePreset
 import app.andy.model.WorkspaceState
@@ -770,6 +771,7 @@ internal fun ShellDockDrawer(
     liveMirrorFor: (targetId: String) -> MirrorEngine? = { null },
     liveTabPaused: (targetId: String?) -> Boolean = { false },
     liveTabPauseMessage: (targetId: String?) -> String = { "Live view pauses while another tab is open" },
+    takenIosKinds: (targetId: String?) -> Set<IosTargetKind> = { emptySet() },
     browserPaneOf: (String) -> BrowserPaneState = { BrowserPaneState() },
     onBrowserNav: (tabId: String, BrowserNavCommand) -> Unit = { _, _ -> },
     onBrowserNavStateChanged: (tabId: String, title: String?, url: String, canGoBack: Boolean, canGoForward: Boolean, loading: Boolean) -> Unit = { _, _, _, _, _, _ -> },
@@ -1134,6 +1136,7 @@ internal fun ShellDockDrawer(
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,
+                            takenIosKinds = takenIosKinds,
                             callbacks = livePaneCallbacks,
                             modifier = Modifier.fillMaxSize(),
                         )

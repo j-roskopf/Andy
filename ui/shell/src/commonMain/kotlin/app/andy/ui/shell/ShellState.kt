@@ -18,6 +18,7 @@ import app.andy.model.AndroidDevice
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
 import app.andy.model.PairedWifiDevice
 import app.andy.service.IosTargetRegistry
@@ -399,8 +400,8 @@ internal class ShellState(
             targetId = targetId,
             title = title,
         )
-        syncLiveMirrorHolds(before = null, after = tab.liveTree)
         docks = docks.update(placement) { it.withTab(tab) }
+        reconcileLiveMirrorHolds()
     }
 
     /** Bind [targetId] to a Live leaf without changing the global device selection. */
@@ -414,11 +415,18 @@ internal class ShellState(
             ?: tree.firstLeafId()
         val leaf = tree.findLeaf(resolvedLeafId) ?: return
         if (leaf.targetId == targetId) return
+        // The native iOS hub owns a single decoder slot per kind (sim / physical). Two same-kind
+        // iOS sources cannot run concurrently, so refuse to bind one if another dock live leaf
+        // already holds that kind (re-binding this leaf's own target is already guarded above).
+        val targetIosKind = iosTargets.firstOrNull { it.udid == targetId }?.kind
+        if (targetIosKind != null &&
+            targetIosKind in takenIosKinds(excludingTargetId = leaf.targetId)
+        ) return
         val title = targetId?.let { liveTabTitle(it) }
         val nextTree = tree.mapLeaf(resolvedLeafId) { it.copy(targetId = targetId, title = title) }
-        syncLiveMirrorHolds(before = tree, after = nextTree)
         updateLiveTree(placement, tabId) { nextTree }
         focusLiveLeaf(placement, tabId, resolvedLeafId)
+        reconcileLiveMirrorHolds()
     }
 
     fun focusLiveLeaf(placement: DockPlacement, tabId: String, leafId: String) {
@@ -460,15 +468,16 @@ internal class ShellState(
         val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
         val tree = tab.liveTree ?: return
         val nextTree = tree.closeLeaf(leafId)
-        syncLiveMirrorHolds(before = tree, after = nextTree)
         if (nextTree == null) {
             docks = docks.update(placement) { it.closeTab(tabId) }
+            reconcileLiveMirrorHolds()
             return
         }
         updateLiveTree(placement, tabId) { nextTree }
         val focusId = tab.focusedLiveLeafId?.takeIf { nextTree.findLeaf(it) != null }
             ?: nextTree.firstLeafId()
         focusLiveLeaf(placement, tabId, focusId)
+        reconcileLiveMirrorHolds()
     }
 
     fun updateLiveSplitWeights(placement: DockPlacement, tabId: String, splitId: String, weights: List<Float>) {
@@ -514,14 +523,78 @@ internal class ShellState(
         }
     }
 
-    private fun syncLiveMirrorHolds(before: LivePaneNode?, after: LivePaneNode?) {
-        val beforeCounts = before?.targetIds().orEmpty().groupingBy { it }.eachCount()
-        val afterCounts = after?.targetIds().orEmpty().groupingBy { it }.eachCount()
-        val ids = beforeCounts.keys + afterCounts.keys
+    /** Pooled engine holds, one per bound Live leaf, tracked here to reconcile pause state. */
+    private val liveHoldCounts = mutableMapOf<String, Int>()
+
+    /**
+     * Targets currently mirrored by the main Live destination or a pop-out. A dock Live leaf whose
+     * target is paused must NOT hold a pooled engine — otherwise two scrcpy sessions (pooled + the
+     * primary Live engine) feed the same Android serial. Fed from the desktop shell.
+     */
+    private var pausedLiveTargetIds: Set<String> = emptySet()
+
+    /** Called from the desktop shell to refcount pooled mirror engines for Live dock tabs. */
+    var onLiveMirrorHold: ((String) -> Unit)? = null
+    var onLiveMirrorRelease: ((String) -> Unit)? = null
+
+    private fun emitLiveHold(targetId: String) {
+        liveHoldCounts[targetId] = (liveHoldCounts[targetId] ?: 0) + 1
+        onLiveMirrorHold?.invoke(targetId)
+    }
+
+    private fun emitLiveRelease(targetId: String) {
+        val next = (liveHoldCounts[targetId] ?: 1) - 1
+        if (next <= 0) {
+            liveHoldCounts.remove(targetId)
+            onLiveMirrorRelease?.invoke(targetId)
+        } else {
+            liveHoldCounts[targetId] = next
+        }
+    }
+
+    /** All device targets bound to Live dock leaves, in tree order (duplicates preserved). */
+    fun currentLiveLeafTargetIds(): List<String> =
+        (docks.right.tabs + docks.bottom.tabs)
+            .filter { it.kind == DockTabKind.Live }
+            .flatMap { it.liveTree?.targetIds().orEmpty() }
+
+    /**
+     * iOS kinds already bound to a live dock leaf other than [excludingTargetId]. The native hub
+     * supports one decoder slot per kind, so a second same-kind iOS target cannot run concurrently.
+     */
+    fun takenIosKinds(excludingTargetId: String?): Set<IosTargetKind> =
+        currentLiveLeafTargetIds()
+            .filter { it != excludingTargetId }
+            .mapNotNull { id -> iosTargets.firstOrNull { it.udid == id }?.kind }
+            .toSet()
+
+    /**
+     * Marks targets taken over by the main Live destination or a pop-out. Paused leaves stop
+     * holding their pooled engine so the takeover can connect without two sessions on one serial;
+     * the hold is restored when the target is no longer paused.
+     */
+    fun setPausedLiveTargetIds(paused: Set<String>) {
+        if (paused == pausedLiveTargetIds) return
+        pausedLiveTargetIds = paused
+        reconcileLiveMirrorHolds()
+    }
+
+    /**
+     * Reconciles pooled engine holds against the current dock live tree minus paused targets.
+     * Call after any structural live-tree change or a pause-state change.
+     */
+    private fun reconcileLiveMirrorHolds() {
+        val desired = mutableMapOf<String, Int>()
+        for (targetId in currentLiveLeafTargetIds()) {
+            if (targetId in pausedLiveTargetIds) continue
+            desired[targetId] = (desired[targetId] ?: 0) + 1
+        }
+        val ids = desired.keys + liveHoldCounts.keys
         for (id in ids) {
-            val delta = (afterCounts[id] ?: 0) - (beforeCounts[id] ?: 0)
-            repeat(delta.coerceAtLeast(0)) { holdLiveMirror(id) }
-            repeat((-delta).coerceAtLeast(0)) { releaseLiveMirror(id) }
+            val want = desired[id] ?: 0
+            val have = liveHoldCounts[id] ?: 0
+            repeat((want - have).coerceAtLeast(0)) { emitLiveHold(id) }
+            repeat((have - want).coerceAtLeast(0)) { emitLiveRelease(id) }
         }
     }
 
@@ -530,18 +603,6 @@ internal class ShellState(
             ?: devices.firstOrNull { it.serial == targetId }?.displayName
             ?: iosTargets.firstOrNull { it.udid == targetId }?.displayName
             ?: "Live"
-
-    /** Called from the desktop shell to refcount pooled mirror engines for Live dock tabs. */
-    var onLiveMirrorHold: ((String) -> Unit)? = null
-    var onLiveMirrorRelease: ((String) -> Unit)? = null
-
-    private fun holdLiveMirror(targetId: String) {
-        onLiveMirrorHold?.invoke(targetId)
-    }
-
-    private fun releaseLiveMirror(targetId: String) {
-        onLiveMirrorRelease?.invoke(targetId)
-    }
 
     fun noteViewedAgentTaskId(taskId: String?) {
         viewedAgentTaskId = taskId
@@ -822,10 +883,8 @@ internal class ShellState(
         if (tab?.kind == DockTabKind.Browser) {
             closeBrowserPane(tabId)
         }
-        if (tab?.kind == DockTabKind.Live) {
-            syncLiveMirrorHolds(before = tab.liveTree, after = null)
-        }
         docks = docks.update(placement) { it.closeTab(tabId) }
+        reconcileLiveMirrorHolds()
     }
 
     fun closeDock(placement: DockPlacement) {
@@ -884,10 +943,6 @@ internal class ShellState(
 
     fun loadDockLayout(layoutId: String) {
         val layout = workspaceState.savedDockLayouts.firstOrNull { it.id == layoutId } ?: return
-        (docks.right.tabs + docks.bottom.tabs)
-            .filter { it.kind == DockTabKind.Live }
-            .forEach { syncLiveMirrorHolds(before = it.liveTree, after = null) }
-
         val restore = layout.toRestore(
             nextId = ::nextPaneId,
             openShell = { projectId ->
@@ -901,7 +956,7 @@ internal class ShellState(
         if (restore.browserPanes.isEmpty()) closeEmbeddedBrowser()
 
         docks = restore.docks
-        restore.boundLiveTargetIds.forEach { holdLiveMirror(it) }
+        reconcileLiveMirrorHolds()
 
         if (restore.focusedRunId != null) {
             activeRunId = restore.focusedRunId
@@ -924,8 +979,12 @@ internal class ShellState(
 
     private fun restoreProject(projectId: String?): ActionProject? {
         if (!services.capabilities.hostAutomation) return null
-        return projectId?.let { id -> actionsConfig.projects.firstOrNull { it.id == id } }
-            ?: actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+        // A non-null ID must resolve to that exact project; a deleted project is dropped during
+        // restore rather than silently remapped to the default (which is reserved for null).
+        if (projectId != null) {
+            return actionsConfig.projects.firstOrNull { it.id == projectId }
+        }
+        return actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
             ?: actionsConfig.projects.firstOrNull()
     }
 

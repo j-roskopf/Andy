@@ -425,6 +425,13 @@ internal fun AndyShell(
                         else -> "Live view pauses while another tab is open"
                     }
                 }
+                // When a dock live pane is paused because the main Live destination or a pop-out
+                // takes over the same device, drop its pooled-engine hold so the takeover doesn't
+                // run two scrcpy sessions on one serial. Restore the hold once it unpauses.
+                val pausedLiveTargetIds = state.currentLiveLeafTargetIds().filter(liveDockPaused).toSet()
+                LaunchedEffect(pausedLiveTargetIds, state.destination, state.activeTargetId, poppedOutTargetIds) {
+                    state.setPausedLiveTargetIds(pausedLiveTargetIds)
+                }
                 var rightDockPaneWidth by remember(state.workspaceState.rightDockPaneWidth) {
                     mutableStateOf(state.workspaceState.rightDockPaneWidth)
                 }
@@ -757,6 +764,7 @@ internal fun AndyShell(
                         liveMirrorFor = liveMirrorFor,
                         liveTabPaused = liveDockPaused,
                         liveTabPauseMessage = liveDockPauseMessage,
+                        takenIosKinds = state::takenIosKinds,
                         browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
                         onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->
@@ -832,6 +840,7 @@ internal fun AndyShell(
                         liveMirrorFor = liveMirrorFor,
                         liveTabPaused = liveDockPaused,
                         liveTabPauseMessage = liveDockPauseMessage,
+                        takenIosKinds = state::takenIosKinds,
                         browserPaneOf = { tabId -> state.browserPanes[tabId] ?: BrowserPaneState() },
                         onBrowserNav = { tabId, command -> state.browserNav(tabId, command) },
                         onBrowserNavStateChanged = { tabId, title, url, canBack, canForward, loading ->

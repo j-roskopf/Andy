@@ -131,8 +131,6 @@ private fun TerminalPaneNode.toSavedNode(projectIdOfRun: (runId: String) -> Stri
 internal data class DockRestore(
     val docks: ShellDocks,
     val browserPanes: Map<String, BrowserPaneState>,
-    /** One entry per bound Live leaf, duplicates included — one hold each. */
-    val boundLiveTargetIds: List<String>,
     val focusedRunId: String?,
     val focusedTerminalPlacement: DockPlacement?,
 )
@@ -145,7 +143,6 @@ internal fun SavedDockLayout.toRestore(
 ): DockRestore {
     var hasRestoredBrowser = false
     val browserPanes = mutableMapOf<String, BrowserPaneState>()
-    val boundLiveTargetIds = mutableListOf<String>()
 
     val restoredRight = restorePane(
         savedPane = right,
@@ -154,7 +151,6 @@ internal fun SavedDockLayout.toRestore(
         isTargetAvailable = isTargetAvailable,
         isAgentTaskAlive = isAgentTaskAlive,
         browserPanes = browserPanes,
-        boundLiveTargetIds = boundLiveTargetIds,
         hasRestoredBrowser = { hasRestoredBrowser },
         onBrowserRestored = { hasRestoredBrowser = true },
     )
@@ -166,7 +162,6 @@ internal fun SavedDockLayout.toRestore(
         isTargetAvailable = isTargetAvailable,
         isAgentTaskAlive = isAgentTaskAlive,
         browserPanes = browserPanes,
-        boundLiveTargetIds = boundLiveTargetIds,
         hasRestoredBrowser = { hasRestoredBrowser },
         onBrowserRestored = { hasRestoredBrowser = true },
     )
@@ -198,7 +193,6 @@ internal fun SavedDockLayout.toRestore(
     return DockRestore(
         docks = ShellDocks(right = restoredRight, bottom = restoredBottom, landingFor = null),
         browserPanes = browserPanes,
-        boundLiveTargetIds = boundLiveTargetIds,
         focusedRunId = focusedRunId,
         focusedTerminalPlacement = focusedTerminalPlacement,
     )
@@ -211,7 +205,6 @@ private fun restorePane(
     isTargetAvailable: (targetId: String) -> Boolean,
     isAgentTaskAlive: (taskId: String) -> Boolean,
     browserPanes: MutableMap<String, BrowserPaneState>,
-    boundLiveTargetIds: MutableList<String>,
     hasRestoredBrowser: () -> Boolean,
     onBrowserRestored: () -> Unit,
 ): DockPane {
@@ -229,7 +222,7 @@ private fun restorePane(
     savedPane.tabs.forEachIndexed { index, savedTab ->
         val restoredTab = when (savedTab.kind) {
             SavedDockTabKind.Terminal -> restoreTerminalTab(savedTab, nextId, openShell)
-            SavedDockTabKind.Live -> restoreLiveTab(savedTab, nextId, isTargetAvailable, boundLiveTargetIds)
+            SavedDockTabKind.Live -> restoreLiveTab(savedTab, nextId, isTargetAvailable)
             SavedDockTabKind.Logs -> {
                 if (paneHasLogs) null
                 else {
@@ -362,9 +355,8 @@ private fun restoreLiveTab(
     tab: SavedDockTab,
     nextId: (prefix: String) -> String,
     isTargetAvailable: (targetId: String) -> Boolean,
-    boundLiveTargetIds: MutableList<String>,
 ): DockTab {
-    val liveTree = tab.liveTree?.let { restoreLiveNode(it, nextId, isTargetAvailable, boundLiveTargetIds) }
+    val liveTree = tab.liveTree?.let { restoreLiveNode(it, nextId, isTargetAvailable) }
         ?: LivePaneNode.Leaf(id = nextId("live-leaf"), targetId = null, title = null)
     val leaves = liveTree.flattenLeaves()
     val clampedIndex = tab.focusedLeafIndex.coerceIn(0, leaves.lastIndex)
@@ -383,23 +375,16 @@ private fun restoreLiveNode(
     node: SavedLiveNode,
     nextId: (prefix: String) -> String,
     isTargetAvailable: (targetId: String) -> Boolean,
-    boundLiveTargetIds: MutableList<String>,
     depth: Int = 0,
 ): LivePaneNode? {
     if (depth >= 12) return null
     return when (node) {
         is SavedLiveNode.Leaf -> {
             val availableTargetId = node.targetId?.takeIf(isTargetAvailable)
-            val title = if (availableTargetId != null) {
-                boundLiveTargetIds.add(availableTargetId)
-                node.title
-            } else {
-                null
-            }
             LivePaneNode.Leaf(
                 id = nextId("live-leaf"),
                 targetId = availableTargetId,
-                title = title,
+                title = if (availableTargetId != null) node.title else null,
             )
         }
         is SavedLiveNode.Split -> {
@@ -410,7 +395,7 @@ private fun restoreLiveNode(
                 List(node.children.size) { 1f / node.children.size }
             }
             val kept = node.children.mapIndexedNotNull { index, child ->
-                restoreLiveNode(child, nextId, isTargetAvailable, boundLiveTargetIds, depth + 1)?.let {
+                restoreLiveNode(child, nextId, isTargetAvailable, depth + 1)?.let {
                     it to rawWeights[index]
                 }
             }

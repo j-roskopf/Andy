@@ -3,6 +3,10 @@ package app.andy.ui.shell
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ActionsConfig
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
+import app.andy.model.IosTransport
 import app.andy.model.RunningAction
 import app.andy.model.SavedDockLayout
 import app.andy.model.SavedDockPane
@@ -11,10 +15,13 @@ import app.andy.model.SavedDockTabKind
 import app.andy.model.SavedTerminalNode
 import app.andy.model.SavedTerminalSession
 import app.andy.service.ActionRunService
+import app.andy.service.IosDeviceService
 import app.andy.service.PlatformCapabilities
 import app.andy.service.UnavailableActionRunService
+import app.andy.service.UnavailableIosDeviceService
 import app.andy.service.createUnavailableAndyServices
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -204,6 +211,65 @@ class ShellStateLayoutTest {
         val unboundRefocusedTab = state.docks.right.tabs.single()
         assertNull(unboundRefocusedTab.targetId)
         assertNull(unboundRefocusedTab.title)
+    }
+
+    @Test
+    fun pausedLiveTargetReleasesPoolHoldAndRestoresOnUnpause() {
+        val state = ShellState(createUnavailableAndyServices(), CoroutineScope(EmptyCoroutineContext))
+        val held = mutableListOf<String>()
+        val released = mutableListOf<String>()
+        state.onLiveMirrorHold = { held.add(it) }
+        state.onLiveMirrorRelease = { released.add(it) }
+
+        state.openNewLiveTab(DockPlacement.Right, seedWithActiveTarget = false)
+        val tab = state.docks.right.tabs.single()
+        val leafId = tab.liveTree!!.firstLeafId()
+        state.setLiveTabTarget(tab.id, "device-1", leafId)
+        assertEquals(listOf("device-1"), held)
+        assertTrue(released.isEmpty())
+
+        // Pausing (main Live or pop-out takes over) must drop the pooled engine hold.
+        state.setPausedLiveTargetIds(setOf("device-1"))
+        assertEquals(listOf("device-1"), released)
+
+        // Unpausing must restore the hold.
+        state.setPausedLiveTargetIds(emptySet())
+        assertEquals(listOf("device-1", "device-1"), held)
+        assertEquals(listOf("device-1"), released)
+    }
+
+    @Test
+    fun setLiveTabTargetRejectsSecondSameKindIosTarget() = runBlocking {
+        val iosDevices = object : IosDeviceService by UnavailableIosDeviceService {
+            override suspend fun listTargets() = listOf(
+                IosTarget(udid = "sim-1", displayName = "Sim 1", kind = IosTargetKind.Simulator, state = IosTargetState.Booted),
+                IosTarget(udid = "sim-2", displayName = "Sim 2", kind = IosTargetKind.Simulator, state = IosTargetState.Booted),
+                IosTarget(
+                    udid = "dev-1", displayName = "iPhone", kind = IosTargetKind.Physical,
+                    state = IosTargetState.Unknown, transport = IosTransport.Usb,
+                ),
+            )
+        }
+        val services = createUnavailableAndyServices().copy(iosDevices = iosDevices)
+        val state = ShellState(services, CoroutineScope(EmptyCoroutineContext))
+        state.refreshDevicesNow()
+
+        state.openNewLiveTab(DockPlacement.Right, seedWithActiveTarget = false)
+        val tab = state.docks.right.tabs.single()
+        val leaf1 = tab.liveTree!!.firstLeafId()
+        state.setLiveTabTarget(tab.id, "sim-1", leaf1)
+
+        state.splitLiveLeaf(DockPlacement.Right, tab.id, leaf1, SplitAxis.Row)
+        val tabId = state.docks.right.tabs.single().id
+        val leaf2 = state.docks.right.tabs.single().focusedLiveLeafId!!
+
+        // A second simulator (same native decoder slot) must be rejected.
+        state.setLiveTabTarget(tabId, "sim-2", leaf2)
+        assertNull(state.docks.right.tabs.single().liveTree!!.findLeaf(leaf2)!!.targetId)
+
+        // A physical device (different kind) is allowed alongside the simulator.
+        state.setLiveTabTarget(tabId, "dev-1", leaf2)
+        assertEquals("dev-1", state.docks.right.tabs.single().liveTree!!.findLeaf(leaf2)!!.targetId)
     }
 
     @Test

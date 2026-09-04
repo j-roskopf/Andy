@@ -186,7 +186,7 @@ class DockLayoutSnapshotTest {
         assertEquals(restoredLeaf2.id, restoredTab.focusedLiveLeafId)
         assertEquals("device-2", restoredTab.targetId)
         assertEquals("Device 2", restoredTab.title)
-        assertEquals(listOf("device-1", "device-2"), restore.boundLiveTargetIds)
+        assertEquals(listOf("device-1", "device-2"), restore.docks.right.tabs.single().liveTree!!.targetIds())
     }
 
     @Test
@@ -213,7 +213,7 @@ class DockLayoutSnapshotTest {
             isAgentTaskAlive = { true },
         )
 
-        assertTrue(restore.boundLiveTargetIds.isEmpty())
+        assertTrue(restore.docks.right.tabs.single().liveTree!!.targetIds().isEmpty())
         val tab = restore.docks.right.tabs.single()
         assertNull(tab.targetId)
         assertNull(tab.title)
