@@ -235,6 +235,7 @@ internal fun TopChrome(
             } else {
                 Alignment.Start
             },
+            contentKey = renderedFlyout,
         ) {
             when (renderedFlyout) {
                 ChromeFlyoutKind.LocalServers -> localServersFlyout(::closeFlyout)
