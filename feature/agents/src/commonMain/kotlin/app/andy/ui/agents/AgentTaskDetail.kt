@@ -358,6 +358,9 @@ fun AgentTaskDetail(
     }.orEmpty()
     val slashMenuOpen = slashCommand != null && !skillMenuDismissed
     val slashMenuCount = matchingCommands.size + matchingSkills.size
+    val orchestrationPrefs = remember(slashMenuOpen) {
+        services.orchestrationPreferences.load()
+    }
     val fileMention = if (slashCommand == null && services.capabilities.hostAutomation) {
         findComposerFileMention(followUp)
     } else {
@@ -1072,10 +1075,12 @@ fun AgentTaskDetail(
                                     selected = index == autocompleteHighlight,
                                     onClick = { selectCommand(command) },
                                 ) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text(command.name.composerCommandToken(), color = Green, fontFamily = MonoFont, fontSize = 12.sp)
-                                        Text(command.description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    }
+                                    ComposerSlashEntryMenuContent(
+                                        token = command.name.composerCommandToken(),
+                                        tokenColor = Green,
+                                        description = command.description,
+                                        orchestrationPrefs = orchestrationPrefs,
+                                    )
                                 }
                             }
                             matchingSkills.forEachIndexed { skillIndex, skill ->
@@ -1084,12 +1089,12 @@ fun AgentTaskDetail(
                                     selected = index == autocompleteHighlight,
                                     onClick = { selectSkill(skill) },
                                 ) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Text("/${skill.name}", color = Cyan, fontFamily = MonoFont, fontSize = 12.sp)
-                                        skill.description.takeIf { it.isNotBlank() }?.let { description ->
-                                            Text(description, color = TextSecondary, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
+                                    ComposerSlashEntryMenuContent(
+                                        token = "/${skill.name}",
+                                        tokenColor = Cyan,
+                                        description = skill.description,
+                                        orchestrationPrefs = orchestrationPrefs,
+                                    )
                                 }
                             }
                         }

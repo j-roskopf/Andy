@@ -52,6 +52,12 @@ data class WorkspaceState(
     val proxyUpstreamTrustedCaPath: String? = null,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
+    /**
+     * When true, the MCP `screenshot_host` tool may capture this machine's whole desktop
+     * and return it to attached agents. Off by default — unlike device screenshots, this
+     * reaches the user's full host screen.
+     */
+    val hostScreenshotEnabled: Boolean = false,
     /** When true, MCP/HTTP binds to 0.0.0.0 so other devices on the user's network can reach Andy. */
     val networkAccessEnabled: Boolean = false,
     /**
@@ -171,7 +177,7 @@ data class WorkspaceState(
     val lmStudioBearerToken: String = "",
     /**
      * Saved SSH targets for desktop remote (`Host` alias or `user@host`). Non-secret only —
-     * credentials stay in the system ssh agent / `~/.ssh/config`.
+     * optional passwords live in the OS keychain (`Andy SSH`), not in this file.
      */
     val savedSshTargets: List<String> = emptyList(),
     /**

@@ -18,6 +18,8 @@ import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTint
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,13 +32,28 @@ import java.util.Properties
 class DesktopWorkspaceStore(
     private val file: File = File(System.getProperty("user.home"), ".andy/workspace.properties"),
 ) : WorkspaceStore {
+    private val mutex = Mutex()
     private val mutableState = MutableStateFlow(WorkspaceState())
     override val state: StateFlow<WorkspaceState> = mutableState
 
     override suspend fun load(): WorkspaceState = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext WorkspaceState()
+        mutex.withLock { loadLocked() }
+    }
+
+    override suspend fun update(transform: (WorkspaceState) -> WorkspaceState): WorkspaceState =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val current = if (file.exists()) loadLocked() else mutableState.value
+                val next = transform(current)
+                saveLocked(next)
+                next
+            }
+        }
+
+    private fun loadLocked(): WorkspaceState {
+        if (!file.exists()) return WorkspaceState()
         val props = Properties().apply { file.inputStream().use(::load) }
-        WorkspaceState(
+        return WorkspaceState(
             selectedSdkPath = props.getProperty("selectedSdkPath")?.takeIf { it.isNotBlank() },
             selectedDeviceSerial = props.getProperty("selectedDeviceSerial")?.takeIf { it.isNotBlank() },
             // Indexed key/value properties, not a `key:value:...` line format — device serials
@@ -52,6 +69,7 @@ class DesktopWorkspaceStore(
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             networkAccessEnabled = props.getProperty("networkAccessEnabled")?.toBooleanStrictOrNull() ?: false,
+            hostScreenshotEnabled = props.getProperty("hostScreenshotEnabled")?.toBooleanStrictOrNull() ?: false,
             networkAccessTailscaleOnly =
                 props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
             networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
@@ -181,10 +199,14 @@ class DesktopWorkspaceStore(
             savedSshTargets = props.getProperty("savedSshTargets").orEmpty().lines().filter { it.isNotBlank() },
             iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
             savedDockLayouts = decodeSavedDockLayouts(props.getProperty("savedDockLayouts").orEmpty()),
-        )
-    }.also { mutableState.value = it }
+        ).also { mutableState.value = it }
+    }
 
     override suspend fun save(state: WorkspaceState) = withContext(Dispatchers.IO) {
+        mutex.withLock { saveLocked(state) }
+    }
+
+    private fun saveLocked(state: WorkspaceState) {
         file.parentFile.mkdirs()
         // Daemon-owned VAPID keys may be generated after the GUI loaded ShellState.
         // Preserve non-blank on-disk keys when the incoming state still has empties so a
@@ -214,6 +236,7 @@ class DesktopWorkspaceStore(
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
+            setProperty("hostScreenshotEnabled", state.hostScreenshotEnabled.toString())
             setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
             setProperty("networkAccessToken", state.networkAccessToken)
             setProperty("vapidPublicKey", vapidPublic)

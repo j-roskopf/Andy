@@ -94,6 +94,8 @@ internal fun LocalServersFlyout(
     onDismiss: () -> Unit,
 ) {
     val servers by services.localServers.servers.collectAsState()
+    val remoteSession by services.remoteSession.state.collectAsState()
+    val portForwards by services.remoteSession.portForwards.collectAsState()
     var refreshing by remember { mutableStateOf(false) }
     var stoppingPid by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
@@ -106,6 +108,8 @@ internal fun LocalServersFlyout(
 
     LocalServersPanel(
         servers = servers,
+        portForwards = portForwards,
+        isRemote = remoteSession.isRemote,
         refreshing = refreshing,
         stoppingPid = stoppingPid,
         onRefresh = {
@@ -123,9 +127,20 @@ internal fun LocalServersFlyout(
                 stoppingPid = null
             }
         },
-        onOpenInBrowser = { url ->
-            onDismiss()
-            onOpenInBrowser(url)
+        onOpenInBrowser = { server ->
+            val remotePort = server.ports.firstOrNull() ?: return@LocalServersPanel
+            scope.launch {
+                val url = if (remoteSession.isRemote) {
+                    val local = services.remoteSession.forwardPort(remotePort).getOrElse {
+                        return@launch
+                    }
+                    "http://127.0.0.1:$local"
+                } else {
+                    server.browserUrl ?: return@launch
+                }
+                onDismiss()
+                onOpenInBrowser(url)
+            }
         },
     )
 }
@@ -168,11 +183,13 @@ private fun LocalServersTrigger(
 @Composable
 private fun LocalServersPanel(
     servers: List<LocalServerProcess>,
+    portForwards: Map<Int, Int>,
+    isRemote: Boolean,
     refreshing: Boolean,
     stoppingPid: Int?,
     onRefresh: () -> Unit,
     onStop: (LocalServerProcess) -> Unit,
-    onOpenInBrowser: (String) -> Unit,
+    onOpenInBrowser: (LocalServerProcess) -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth(),
@@ -185,7 +202,7 @@ private fun LocalServersPanel(
             Text(
                 when {
                     refreshing && servers.isEmpty() -> "Scanning ports…"
-                    servers.isEmpty() -> "No servers running"
+                    servers.isEmpty() -> if (isRemote) "No remote servers running" else "No servers running"
                     servers.size == 1 -> "1 server running"
                     else -> "${servers.size} servers running"
                 },
@@ -217,8 +234,12 @@ private fun LocalServersPanel(
             }
             servers.isEmpty() -> {
                 LocalServersPlaceholder(
-                    title = "No servers running",
-                    subtitle = "Local dev servers will appear here.",
+                    title = if (isRemote) "No remote servers running" else "No servers running",
+                    subtitle = if (isRemote) {
+                        "Dev servers on the remote host will appear here."
+                    } else {
+                        "Local dev servers will appear here."
+                    },
                 )
             }
             else -> {
@@ -229,10 +250,11 @@ private fun LocalServersPanel(
                     servers.forEach { server ->
                         LocalServerRow(
                             server = server,
+                            portForwards = portForwards,
                             stopping = stoppingPid == server.pid,
                             onStop = { onStop(server) },
-                            onOpenInBrowser = server.browserUrl?.let { url ->
-                                { onOpenInBrowser(url) }
+                            onOpenInBrowser = server.ports.firstOrNull()?.let {
+                                { onOpenInBrowser(server) }
                             },
                         )
                     }
@@ -245,10 +267,12 @@ private fun LocalServersPanel(
 @Composable
 private fun LocalServerRow(
     server: LocalServerProcess,
+    portForwards: Map<Int, Int>,
     stopping: Boolean,
     onStop: () -> Unit,
     onOpenInBrowser: (() -> Unit)?,
 ) {
+    val addressLabel = server.portMappingLabel(portForwards)
     Row(
         Modifier
             .fillMaxWidth()
@@ -268,7 +292,7 @@ private fun LocalServerRow(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    server.addressLabel,
+                    addressLabel,
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
@@ -308,7 +332,7 @@ private fun LocalServerRow(
                     modifier = Modifier
                         .clip(RoundedCornerShape(AndyRadius.Control))
                         .semantics {
-                            contentDescription = "Open ${server.addressLabel} in browser tab"
+                            contentDescription = "Open $addressLabel in browser tab"
                             role = Role.Button
                         }
                         .clickable(onClick = onOpenInBrowser),
@@ -331,6 +355,19 @@ private fun LocalServerRow(
                     modifier = Modifier.size(12.dp),
                 )
             }
+        }
+    }
+}
+
+/** Show `8080 → 15001` only when a forward remapped the port. */
+internal fun LocalServerProcess.portMappingLabel(portForwards: Map<Int, Int>): String {
+    if (ports.isEmpty()) return "localhost"
+    return ports.joinToString(", ") { remote ->
+        val local = portForwards[remote]
+        if (local != null && local != remote) {
+            "localhost:$remote → $local"
+        } else {
+            "localhost:$remote"
         }
     }
 }

@@ -11,14 +11,20 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
- * In-memory SSH password / passphrase cache for the Andy process lifetime.
- * Askpass subprocesses query a unix socket; secrets never go to workspace prefs or disk cache files.
+ * In-memory SSH password / passphrase cache for the Andy process lifetime, with optional
+ * OS keychain fill-in via [prepareTarget] / [lastSecretFor].
+ * Askpass subprocesses query a unix socket; secrets never go into workspace prefs.
  */
 object SshAskpassBroker {
     private val passwords = ConcurrentHashMap<String, String>()
+    private val lastSecretByTarget = ConcurrentHashMap<String, String>()
+    private val activeTarget = AtomicReference<String?>(null)
+    private val keychainFallback = AtomicReference<String?>(null)
+    private val cancelled = AtomicBoolean(false)
     private val started = AtomicBoolean(false)
     private var server: ServerSocketChannel? = null
     private var socketFile: File? = null
@@ -52,23 +58,67 @@ object SshAskpassBroker {
         )
     }
 
+    /** Load any keychain secret for [target] and reset cancel state for a new connect attempt. */
+    fun prepareTarget(target: String) {
+        val trimmed = target.trim()
+        activeTarget.set(trimmed)
+        cancelled.set(false)
+        keychainFallback.set(SshCredentialStore.load(trimmed))
+    }
+
+    fun clearActiveTarget() {
+        activeTarget.set(null)
+        keychainFallback.set(null)
+    }
+
+    fun wasCancelled(): Boolean = cancelled.get()
+
+    fun lastSecretFor(target: String): String? = lastSecretByTarget[target.trim()]
+
     fun clear() {
         passwords.clear()
+        lastSecretByTarget.clear()
+        clearActiveTarget()
+        cancelled.set(false)
     }
 
     fun forget(targetHint: String) {
         val needle = targetHint.lowercase()
         passwords.keys.filter { it.contains(needle) }.forEach { passwords.remove(it) }
+        lastSecretByTarget.keys.filter { it.contains(needle) }.forEach { lastSecretByTarget.remove(it) }
+        if (activeTarget.get()?.contains(needle, ignoreCase = true) == true) {
+            clearActiveTarget()
+        }
     }
 
     private fun handleClient(client: SocketChannel) {
         client.use { ch ->
             val prompt = readLine(ch)?.trim().orEmpty()
             if (prompt.isEmpty()) return
+            // After Cancel, ssh may ask again — never show another dialog for this attempt.
+            if (cancelled.get()) {
+                ch.write(ByteBuffer.wrap("\n".toByteArray(StandardCharsets.UTF_8)))
+                return
+            }
             val key = cacheKey(prompt)
             val cached = passwords[key]
-            val secret = cached ?: promptForSecret(prompt)?.also { passwords[key] = it }
-            val out = (secret.orEmpty() + "\n").toByteArray(StandardCharsets.UTF_8)
+            val fromKeychain = if (cached == null) keychainFallback.getAndSet(null) else null
+            val typed = if (cached == null && fromKeychain == null) {
+                promptForSecret(prompt)
+            } else {
+                null
+            }
+            if (cached == null && fromKeychain == null && typed == null) {
+                cancelled.set(true)
+                ch.write(ByteBuffer.wrap("\n".toByteArray(StandardCharsets.UTF_8)))
+                return
+            }
+            val secret = cached ?: fromKeychain ?: typed.orEmpty()
+            if (secret.isNotEmpty()) {
+                passwords[key] = secret
+                activeTarget.get()?.let { lastSecretByTarget[it] = secret }
+            }
+            val out = (secret + "\n").toByteArray(StandardCharsets.UTF_8)
             ch.write(ByteBuffer.wrap(out))
         }
     }

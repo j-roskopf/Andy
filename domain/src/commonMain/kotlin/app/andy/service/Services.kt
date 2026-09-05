@@ -478,6 +478,17 @@ interface WorkspaceStore {
 
     suspend fun load(): WorkspaceState
     suspend fun save(state: WorkspaceState)
+
+    /**
+     * Atomic read-modify-write so concurrent writers (ShellState vs remote host list, etc.)
+     * do not clobber each other's fields. Default is racy load→transform→save; desktop
+     * overrides with a mutex.
+     */
+    suspend fun update(transform: (WorkspaceState) -> WorkspaceState): WorkspaceState {
+        val next = transform(load())
+        save(next)
+        return next
+    }
 }
 
 enum class AgentAttentionKind {

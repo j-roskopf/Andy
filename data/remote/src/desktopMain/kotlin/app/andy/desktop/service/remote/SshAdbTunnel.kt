@@ -4,8 +4,8 @@ import app.andy.desktop.service.CommandRunner
 import app.andy.model.SdkDiscovery
 import app.andy.service.CommandResult
 import java.io.File
+import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -19,6 +19,7 @@ class SshAdbTunnel(
     val localAdbPort: Int,
 ) {
     private val activeScrcpyForwards = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private val portForwarder = SshPortForwarder(target, controlPath)
 
     /** Local adb client talks to the tunneled remote server via `-P [localAdbPort]`. */
     fun adbRunner(base: CommandRunner): CommandRunner =
@@ -85,75 +86,48 @@ class SshAdbTunnel(
     /**
      * After remote `adb forward tcp:PORT …`, open a matching local SSH forward so the GUI can
      * connect to 127.0.0.1:PORT. Uses ControlMaster `-O forward`.
+     *
+     * Same-port only (no fallback) — scrcpy expects the local port to match adb's forward.
      */
     fun openLocalTcpForward(port: Int): Boolean {
         if (!activeScrcpyForwards.add(port)) return true
-        val ok = sshControl(
-            listOf(
-                "-O", "forward",
-                "-L", "$port:127.0.0.1:$port",
-            ),
-        )
+        val ok = portForwarder.forwardExact(port)
         if (!ok) activeScrcpyForwards.remove(port)
         return ok
     }
 
     fun closeLocalTcpForward(port: Int) {
         if (!activeScrcpyForwards.remove(port)) return
-        sshControl(
-            listOf(
-                "-O", "cancel",
-                "-L", "$port:127.0.0.1:$port",
-            ),
-        )
+        portForwarder.release(port)
     }
 
     fun closeAllScrcpyForwards() {
         activeScrcpyForwards.toList().forEach { closeLocalTcpForward(it) }
     }
 
-    private fun sshControl(extra: List<String>): Boolean {
-        // Control-master mux only — do not pass ControlMaster=auto here or OpenSSH may try
-        // to open a second session instead of talking to the existing -N master.
-        val cmd = buildList {
-            add("ssh")
-            add("-o")
-            add("ControlPath=${controlPath.absolutePath}")
-            add("-o")
-            add("ConnectTimeout=8")
-            addAll(extra)
-            add(target)
-        }
-        return runCatching {
-            val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().readText()
-            val finished = process.waitFor(8, TimeUnit.SECONDS)
-            val ok = finished && process.exitValue() == 0
-            if (!ok) {
-                System.err.println(
-                    "andy remote: ssh ${extra.joinToString(" ")} failed " +
-                        "(exit=${if (finished) process.exitValue() else "timeout"}): ${output.take(300)}",
-                )
-            }
-            ok
-        }.getOrDefault(false)
-    }
-
     companion object {
         private val portSeq = AtomicInteger(15_000)
 
         fun allocateLocalPort(): Int {
+            // Bind 127.0.0.1 with reuseAddress=false so we don't pick a port still held by a
+            // prior ssh -L (Address already in use).
             repeat(40) {
                 val candidate = portSeq.updateAndGet { current ->
                     val next = current + 1
                     if (next > 60_000) 15_000 else next
                 }
                 runCatching {
-                    ServerSocket(candidate).use { return it.localPort }
+                    ServerSocket().use { socket ->
+                        socket.reuseAddress = false
+                        socket.bind(InetSocketAddress("127.0.0.1", candidate))
+                        return socket.localPort
+                    }
                 }
             }
-            ServerSocket(0).use { return it.localPort }
+            ServerSocket().use { socket ->
+                socket.bind(InetSocketAddress("127.0.0.1", 0))
+                return socket.localPort
+            }
         }
     }
 }
-

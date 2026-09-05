@@ -1295,9 +1295,25 @@ internal class ShellState(
     }
 
     fun updateWorkspace(transform: (WorkspaceState) -> WorkspaceState) {
-        val updated = transform(workspaceState).copy(selectedDeviceSerial = activeTargetId)
+        val previous = workspaceState
+        val updated = transform(previous).copy(selectedDeviceSerial = activeTargetId)
         workspaceState = updated
-        scope.launch { services.workspaceStore.save(updated) }
+        scope.launch {
+            // Preserve saved SSH targets written by RemoteSessionService so a sidebar toggle
+            // (or any other ShellState save) does not wipe the Host list.
+            val committed = services.workspaceStore.update { current ->
+                val targets =
+                    if (updated.savedSshTargets != previous.savedSshTargets) {
+                        updated.savedSshTargets
+                    } else {
+                        current.savedSshTargets
+                    }
+                updated.copy(savedSshTargets = targets)
+            }
+            if (workspaceState.savedSshTargets != committed.savedSshTargets) {
+                workspaceState = workspaceState.copy(savedSshTargets = committed.savedSshTargets)
+            }
+        }
     }
 
     fun persistActionsConfig(next: ActionsConfig) {

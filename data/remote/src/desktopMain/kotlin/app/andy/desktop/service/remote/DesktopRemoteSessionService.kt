@@ -1,14 +1,23 @@
 package app.andy.desktop.service.remote
 
 import app.andy.desktop.service.DesktopActionConfigStore
+import app.andy.desktop.service.CommandRunner
+import app.andy.desktop.service.DesktopLocalServerService
 import app.andy.service.WorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.model.ActionsConfig
+import app.andy.service.ActionRunService
+import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
+import app.andy.service.CommandResult
+import app.andy.service.LocalServerService
+import app.andy.service.RemoteHostCapabilities
+import app.andy.service.RemoteScreenAvailability
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
+import app.andy.service.RemoteShellEndpoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +39,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -56,6 +67,10 @@ class DesktopRemoteSessionService(
     private val localAgentBackend: app.andy.service.AgentRunService,
     private val localAutomations: AutomationService,
     private val androidBackend: AndroidBackendSwitcher? = null,
+    private val localServers: SwappableLocalServerService? = null,
+    private val localLocalServers: LocalServerService? = null,
+    private val agentRunsForLocalServers: AgentRunService? = null,
+    private val actionRunsForLocalServers: ActionRunService? = null,
 ) : RemoteSessionService {
     private val json = Json { ignoreUnknownKeys = true }
     private val mutex = Mutex()
@@ -65,9 +80,12 @@ class DesktopRemoteSessionService(
     override val state: StateFlow<RemoteSessionState> = _state.asStateFlow()
     private val _remoteActionsConfig = MutableStateFlow<ActionsConfig?>(null)
     override val remoteActionsConfig: StateFlow<ActionsConfig?> = _remoteActionsConfig.asStateFlow()
+    private val _portForwards = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    override val portForwards: StateFlow<Map<Int, Int>> = _portForwards.asStateFlow()
 
     private val tunnel = AtomicReference<TunnelHandles?>(null)
     private val remoteClient = AtomicReference<McpAgentRunClient?>(null)
+    private var remoteLocalServers: DesktopLocalServerService? = null
     /** Authenticated remotes kept alive while the UI is on Local or another host. */
     private val warmByTarget = java.util.concurrent.ConcurrentHashMap<String, WarmSession>()
     private var watchJob: Job? = null
@@ -78,6 +96,7 @@ class DesktopRemoteSessionService(
         val handles: TunnelHandles,
         val client: McpAgentRunClient,
         val actionsConfig: ActionsConfig,
+        val capabilities: RemoteHostCapabilities? = null,
     ) {
         fun isAlive(): Boolean =
             handles.process.isAlive && handles.localAndyd.exists()
@@ -98,7 +117,7 @@ class DesktopRemoteSessionService(
         )
     }
 
-    override suspend fun connect(target: String): Result<Unit> = mutex.withLock {
+    override suspend fun connect(target: String, rememberPassword: Boolean): Result<Unit> = mutex.withLock {
         val trimmed = target.trim()
         if (trimmed.isEmpty()) {
             return Result.failure(IllegalArgumentException("SSH target is empty"))
@@ -134,21 +153,49 @@ class DesktopRemoteSessionService(
             }
         }
 
+        SshProcess.debugLog("connect start target=$trimmed remember=$rememberPassword")
+        SshAskpassBroker.prepareTarget(trimmed)
         val result = runCatching { connectLocked(trimmed) }
         if (result.isFailure) {
-            val message = result.exceptionOrNull()?.message ?: "SSH remote connect failed"
+            val raw = result.exceptionOrNull()?.message ?: "SSH remote connect failed"
+            val message = when {
+                SshAskpassBroker.wasCancelled() -> "SSH authentication cancelled"
+                else -> raw
+            }
+            SshProcess.debugLog("connect FAIL: $message")
             SshAskpassBroker.forget(trimmed)
+            SshAskpassBroker.clearActiveTarget()
+            if (message.contains("Permission denied", ignoreCase = true) ||
+                message.contains("Authentication failed", ignoreCase = true)
+            ) {
+                runCatching { SshCredentialStore.delete(trimmed) }
+            }
             teardownTunnelOnly()
             clearRemoteTerminalBridge()
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
             androidBackend?.deactivateRemote()
+            deactivateLocalServerBackend()
+            publishPortForwards(null)
             _remoteActionsConfig.value = null
             _state.update {
-                it.copy(status = RemoteSessionStatus.Local, target = null, error = message)
+                it.copy(
+                    status = RemoteSessionStatus.Local,
+                    target = null,
+                    error = message,
+                    hostCapabilities = null,
+                )
             }
             return Result.failure(result.exceptionOrNull() ?: IllegalStateException(message))
         }
+        if (rememberPassword) {
+            SshAskpassBroker.lastSecretFor(trimmed)?.let { secret ->
+                SshProcess.debugLog("keychain save for $trimmed")
+                runCatching { SshCredentialStore.save(trimmed, secret) }
+            }
+        }
+        SshAskpassBroker.clearActiveTarget()
+        SshProcess.debugLog("connect OK target=$trimmed")
         Result.success(Unit)
     }
 
@@ -157,7 +204,7 @@ class DesktopRemoteSessionService(
         disconnectLocked(restoreLocal = true, park = true)
     }
 
-    override suspend fun reconnect(): Result<Unit> {
+    override suspend fun reconnect(rememberPassword: Boolean): Result<Unit> {
         val target = _state.value.target
             ?: workspaceStore.load().savedSshTargets.firstOrNull()
             ?: return Result.failure(IllegalStateException("No SSH target to reconnect"))
@@ -176,15 +223,25 @@ class DesktopRemoteSessionService(
                 }
             }
         }
-        return connect(target)
+        return connect(target, rememberPassword)
+    }
+
+    override fun shellEndpoint(): RemoteShellEndpoint? {
+        if (_state.value.status != RemoteSessionStatus.Connected) return null
+        val handles = tunnel.get() ?: return null
+        return RemoteShellEndpoint(
+            sshTarget = handles.target,
+            controlPath = handles.controlPath.absolutePath,
+        )
     }
 
     override suspend fun addSavedTarget(target: String) {
         val trimmed = target.trim()
         if (trimmed.isEmpty()) return
-        val current = workspaceStore.state?.value ?: workspaceStore.load()
-        if (trimmed in current.savedSshTargets) return
-        workspaceStore.save(current.copy(savedSshTargets = current.savedSshTargets + trimmed))
+        workspaceStore.update { current ->
+            if (trimmed in current.savedSshTargets) current
+            else current.copy(savedSshTargets = current.savedSshTargets + trimmed)
+        }
     }
 
     override suspend fun removeSavedTarget(target: String) {
@@ -195,22 +252,28 @@ class DesktopRemoteSessionService(
                 disconnectLocked(restoreLocal = true, park = false)
             }
         }
-        val current = workspaceStore.state?.value ?: workspaceStore.load()
-        workspaceStore.save(
-            current.copy(savedSshTargets = current.savedSshTargets.filterNot { it == trimmed }),
-        )
+        workspaceStore.update { current ->
+            current.copy(savedSshTargets = current.savedSshTargets.filterNot { it == trimmed })
+        }
         SshAskpassBroker.forget(trimmed)
+        runCatching { SshCredentialStore.delete(trimmed) }
     }
 
     private suspend fun connectLocked(target: String) = withContext(Dispatchers.IO) {
         val controlPath = SshProcess.controlPathForTarget(target)
+        SshProcess.exitMaster(controlPath)
         controlPath.delete()
-        val paths = resolveRemotePaths(target, controlPath)
+        // One-shot ssh (no ControlMaster) so we never leave a ControlPersist mux that a
+        // second `ssh -N -L` would trip over with Broken pipe on OpenSSH 10+.
+        SshProcess.debugLog("resolve paths one-shot target=$target")
+        val paths = resolveRemotePaths(target, controlPath = null)
+        SshProcess.debugLog("resolved andyd=${paths.andydSock} tmux=${paths.tmuxSock}")
         val localAndyd = SshProcess.localAndydSocket(target)
         val localTmux = SshProcess.localTmuxSocket(target)
         localAndyd.delete()
         localTmux.delete()
         val localAdbPort = SshAdbTunnel.allocateLocalPort()
+        SshProcess.debugLog("startSshTunnel adbPort=$localAdbPort control=$controlPath")
 
         val sshProcess = startSshTunnel(
             target = target,
@@ -228,13 +291,26 @@ class DesktopRemoteSessionService(
             controlPath = controlPath,
             target = target,
             localAdbPort = localAdbPort,
+            portForwarder = SshPortForwarder(target, controlPath),
         )
         tunnel.set(handles)
 
+        SshProcess.debugLog("awaitSocket andyd")
         awaitSocket(localAndyd, label = "andyd")
         // tmux socket may be absent until a session exists; still require andyd.
 
-        val missing = probeRequiredTools(localAndyd)
+        SshProcess.debugLog("probeRequiredTools begin alive=${sshProcess.isAlive}")
+        val missing = try {
+            probeRequiredTools(localAndyd)
+        } catch (err: Throwable) {
+            SshProcess.debugLog("probeRequiredTools THROW ${err::class.simpleName}: ${err.message}")
+            throw IllegalStateException(
+                "SSH tunnel is up but talking to remote andyd failed (${err.message}). " +
+                    "Confirm andyd is running on $target (not just that ~/.andy/andyd.sock exists).",
+                err,
+            )
+        }
+        SshProcess.debugLog("probeRequiredTools ok missing=$missing")
         if (missing.isNotEmpty()) {
             error(
                 "Remote andyd is missing required tools: ${missing.joinToString(", ")}. " +
@@ -242,6 +318,7 @@ class DesktopRemoteSessionService(
             )
         }
 
+        SshProcess.debugLog("create McpAgentRunClient")
         val client = McpAgentRunClient(
             scope = scope,
             socketPath = localAndyd,
@@ -251,16 +328,33 @@ class DesktopRemoteSessionService(
         remoteClient.set(client)
         agentBackend.switchTo(client)
         automationBackend.switchTo(client)
+        SshProcess.debugLog("activateAndroidBackend")
         activateAndroidBackend(handles)
+        SshProcess.debugLog("activateLocalServerBackend")
+        activateLocalServerBackend(handles)
         configureRemoteTerminalBridge(client, localTmux)
 
+        val capabilities = runCatching {
+            RemoteHostCapabilityScanner.probe(target, controlPath)
+        }.getOrElse {
+            SshProcess.debugLog("capability probe failed: ${it.message}")
+            RemoteHostCapabilities(localVncClient = LocalVncClient.detect())
+        }
+        SshProcess.debugLog("loadRemoteActionsConfig")
         _remoteActionsConfig.value = loadRemoteActionsConfig(target, controlPath)
 
         addSavedTargetQuiet(target)
+        publishPortForwards(handles)
         _state.update {
-            it.copy(status = RemoteSessionStatus.Connected, target = target, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Connected,
+                target = target,
+                error = null,
+                hostCapabilities = capabilities,
+            )
         }
         startWatch(target, localAndyd, sshProcess)
+        SshProcess.debugLog("connectLocked done")
     }
 
     private suspend fun activateWarm(target: String, warm: WarmSession) {
@@ -272,12 +366,19 @@ class DesktopRemoteSessionService(
         agentBackend.switchTo(warm.client)
         automationBackend.switchTo(warm.client)
         activateAndroidBackend(warm.handles)
+        activateLocalServerBackend(warm.handles)
         configureRemoteTerminalBridge(warm.client, warm.handles.localTmux)
 
         _remoteActionsConfig.value = warm.actionsConfig
         addSavedTargetQuiet(target)
+        publishPortForwards(warm.handles)
         _state.update {
-            it.copy(status = RemoteSessionStatus.Connected, target = target, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Connected,
+                target = target,
+                error = null,
+                hostCapabilities = warm.capabilities,
+            )
         }
         startWatch(target, warm.handles.localAndyd, warm.handles.process)
     }
@@ -291,6 +392,38 @@ class DesktopRemoteSessionService(
         androidBackend?.activateRemote(adbTunnel)
     }
 
+    private fun activateLocalServerBackend(handles: TunnelHandles) {
+        val swappable = localServers ?: return
+        val agents = agentRunsForLocalServers ?: return
+        val actions = actionRunsForLocalServers ?: return
+        val probes = SshRemoteProbes(handles.target, handles.controlPath)
+        val sshRunner = CommandRunner(executor = { command, _ ->
+            val result = probes.sshExec(command)
+            CommandResult(result.exitCode, result.stdout, result.stderr)
+        })
+        val remote = DesktopLocalServerService(
+            runner = sshRunner,
+            agentRuns = agents,
+            actionRuns = actions,
+            scope = scope,
+        )
+        remoteLocalServers?.dispose()
+        remoteLocalServers = remote
+        swappable.switchTo(remote)
+    }
+
+    private fun deactivateLocalServerBackend() {
+        val swappable = localServers ?: return
+        val local = localLocalServers ?: return
+        remoteLocalServers?.dispose()
+        remoteLocalServers = null
+        swappable.switchTo(local)
+    }
+
+    private fun publishPortForwards(handles: TunnelHandles?) {
+        _portForwards.value = handles?.portForwarder?.mapping().orEmpty()
+    }
+
     private fun parkActiveIfAny() {
         watchJob?.cancel()
         watchJob = null
@@ -302,11 +435,17 @@ class DesktopRemoteSessionService(
         }
         client.setSshProbeTarget(null)
         val actions = _remoteActionsConfig.value ?: ActionsConfig()
+        val capabilities = _state.value.hostCapabilities
         // Replace any stale warm entry for this host.
-        warmByTarget.put(handles.target, WarmSession(handles, client, actions))?.let { stale ->
+        warmByTarget.put(
+            handles.target,
+            WarmSession(handles, client, actions, capabilities),
+        )?.let { stale ->
             if (stale.handles !== handles) destroyHandles(stale.handles)
         }
         clearRemoteTerminalBridge()
+        deactivateLocalServerBackend()
+        publishPortForwards(null)
     }
 
     private fun configureRemoteTerminalBridge(client: McpAgentRunClient, localTmux: File) {
@@ -335,6 +474,7 @@ class DesktopRemoteSessionService(
     }
 
     private fun destroyHandles(handles: TunnelHandles) {
+        runCatching { handles.portForwarder.releaseAll() }
         handles.process.destroy()
         runCatching {
             if (!handles.process.waitFor(2, TimeUnit.SECONDS)) {
@@ -352,6 +492,66 @@ class DesktopRemoteSessionService(
         runCatching {
             writeRemoteActionsConfig(handles.target, handles.controlPath, config)
             _remoteActionsConfig.value = config
+        }
+    }
+
+    override suspend fun forwardPort(remotePort: Int): Result<Int> = mutex.withLock {
+        val handles = tunnel.get()
+            ?: return Result.failure(IllegalStateException("Not connected to a remote host"))
+        runCatching {
+            val local = handles.portForwarder.forward(remotePort)
+            publishPortForwards(handles)
+            local
+        }
+    }
+
+    override suspend fun openRemoteScreen(): Result<String> = mutex.withLock {
+        val handles = tunnel.get()
+            ?: return Result.failure(IllegalStateException("Not connected to a remote host"))
+        val caps = _state.value.hostCapabilities
+            ?: return Result.failure(IllegalStateException("Remote host capabilities are unknown"))
+        when (caps.screenAvailability) {
+            RemoteScreenAvailability.NeedsEnabling ->
+                return Result.success(
+                    caps.enablementHint
+                        ?: "Enable Screen Sharing / a VNC server on the remote host, then reconnect.",
+                )
+            RemoteScreenAvailability.Unsupported ->
+                return Result.success(
+                    "Remote screen sharing is not available on this host. " +
+                        (caps.enablementHint ?: "No VNC server path was detected."),
+                )
+            RemoteScreenAvailability.Available -> Unit
+        }
+        runCatching {
+            val localPort = handles.portForwarder.forward(caps.vncPort)
+            publishPortForwards(handles)
+            val vncUrl = "vnc://127.0.0.1:$localPort"
+            val client = caps.localVncClient
+            if (client == null) {
+                copyToClipboard(vncUrl)
+                "No VNC client found on this machine. Copied $vncUrl to the clipboard — " +
+                    "open it with your Screen Sharing / VNC app."
+            } else {
+                val argv = LocalVncClient.launchArgv(client, vncUrl)
+                val process = ProcessBuilder(argv).redirectErrorStream(true).start()
+                // Don't wait forever — Screen Sharing.app stays running.
+                val exitedQuickly = process.waitFor(800, TimeUnit.MILLISECONDS)
+                if (exitedQuickly && process.exitValue() != 0) {
+                    val err = process.inputStream.bufferedReader().readText().take(200)
+                    copyToClipboard(vncUrl)
+                    "Could not launch VNC client (${err.ifBlank { "exit ${process.exitValue()}" }}). " +
+                        "Copied $vncUrl to the clipboard."
+                } else {
+                    "Opening remote screen via $vncUrl"
+                }
+            }
+        }
+    }
+
+    private fun copyToClipboard(text: String) {
+        runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
         }
     }
 
@@ -398,6 +598,8 @@ class DesktopRemoteSessionService(
         } else {
             remoteClient.getAndSet(null)?.setSshProbeTarget(null)
             teardownTunnelOnly()
+            deactivateLocalServerBackend()
+            publishPortForwards(null)
         }
         _remoteActionsConfig.value = null
         clearRemoteTerminalBridge()
@@ -405,9 +607,15 @@ class DesktopRemoteSessionService(
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
             androidBackend?.deactivateRemote()
+            deactivateLocalServerBackend()
         }
         _state.update {
-            it.copy(status = RemoteSessionStatus.Local, target = null, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Local,
+                target = null,
+                error = null,
+                hostCapabilities = null,
+            )
         }
     }
 
@@ -417,20 +625,34 @@ class DesktopRemoteSessionService(
 
     private data class RemotePaths(val andydSock: String, val tmuxSock: String)
 
-    private fun resolveRemotePaths(target: String, controlPath: File): RemotePaths {
+    private fun resolveRemotePaths(target: String, controlPath: File?): RemotePaths {
         val remoteCommand =
             "set -e; " +
                 "ANDY_SOCK=\"\$HOME/.andy/andyd.sock\"; " +
                 "if [ ! -S \"\$ANDY_SOCK\" ]; then echo \"andyd_missing:\$ANDY_SOCK\" >&2; exit 2; fi; " +
+                // Socket file can be stale — require an actual accept/connect.
+                "if command -v python3 >/dev/null 2>&1; then " +
+                "python3 -c \"import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(sys.argv[1]); s.close()\" \"\$ANDY_SOCK\" " +
+                "|| { echo \"andyd_not_accepting:\$ANDY_SOCK\" >&2; exit 3; }; " +
+                "fi; " +
                 "UID_N=\$(id -u); " +
                 "TMP=\${TMUX_TMPDIR:-\${TMPDIR:-/tmp}}; " +
                 "TMUX_SOCK=\"\$TMP/tmux-\$UID_N/andy\"; " +
                 "printf '%s\\n%s\\n' \"\$ANDY_SOCK\" \"\$TMUX_SOCK\""
+        SshProcess.debugLog("sshShell resolve controlPath=${controlPath?.absolutePath ?: "none"}")
         val result = SshRemoteProbes(target, controlPath).sshShell(remoteCommand)
+        SshProcess.debugLog("sshShell resolve exit=${result.exitCode} stderr=${result.stderr.take(200)}")
         if (result.exitCode == 2 || result.stderr.contains("andyd_missing")) {
             error(
                 "Remote andyd is not running (missing ~/.andy/andyd.sock). " +
                     "Start standalone andyd (launchd/systemd) on $target, then retry.",
+            )
+        }
+        if (result.exitCode == 3 || result.stderr.contains("andyd_not_accepting")) {
+            error(
+                "Restart andyd on $target — ~/.andy/andyd.sock is stale (not accepting). " +
+                    "On the remote: remove ~/.andy/andyd.sock and start andyd (Andy app, " +
+                    "launchd, or `andy` daemon), then Connect again.",
             )
         }
         if (result.exitCode != 0) {
@@ -444,8 +666,8 @@ class DesktopRemoteSessionService(
     }
 
     /**
-     * Persistent ssh master we can destroy on disconnect. Reuses [controlPath] from the
-     * path-resolve step so password askpass only runs once.
+     * Long-lived `ssh -N` ControlMaster that also owns the unix/TCP local forwards.
+     * Askpass password is reused from the one-shot [resolveRemotePaths] via [SshAskpassBroker].
      */
     private fun startSshTunnel(
         target: String,
@@ -458,10 +680,11 @@ class DesktopRemoteSessionService(
     ): Process {
         localAndyd.delete()
         localTmux.delete()
+        controlPath.delete()
         val cmd = buildList {
             add("ssh")
             add("-N")
-            addAll(SshProcess.baseOptions(controlPath))
+            addAll(SshProcess.masterOptions(controlPath))
             add("-o")
             add("ExitOnForwardFailure=yes")
             add("-o")
@@ -477,7 +700,10 @@ class DesktopRemoteSessionService(
             add("$localAdbPort:127.0.0.1:5037")
             add(target)
         }
+        SshProcess.debugLog("ssh -N master cmd=${cmd.joinToString(" ")}")
+        val masterLog = File("/tmp", "andy-ssh-master-${SshProcess.targetKey(target)}.log")
         val process = SshProcess.processBuilder(cmd)
+            .redirectOutput(masterLog)
             .redirectErrorStream(true)
             .start()
         // Give forwards a moment; failure usually exits the process quickly.
@@ -488,8 +714,40 @@ class DesktopRemoteSessionService(
             waited += 100
         }
         if (!process.isAlive) {
-            val err = process.inputStream.bufferedReader().readText().trim()
+            val err = masterLog.takeIf { it.exists() }?.readText()?.trim().orEmpty()
+            SshProcess.debugLog("ssh -N master died: $err")
             error(sshFailureMessage(target, err, "", process.exitValue()))
+        }
+        // Local socket file can appear before the streamlocal forward accepts — wait for a real connect.
+        var ready = false
+        var readyWaited = 0
+        while (process.isAlive && !ready && readyWaited < 10_000) {
+            ready = runCatching {
+                SocketChannel.open(StandardProtocolFamily.UNIX).use { ch ->
+                    ch.connect(UnixDomainSocketAddress.of(localAndyd.toPath()))
+                }
+                true
+            }.getOrDefault(false)
+            if (!ready) {
+                Thread.sleep(100)
+                readyWaited += 100
+            }
+        }
+        SshProcess.debugLog(
+            "ssh -N master up andydExists=${localAndyd.exists()} connectReady=$ready " +
+                "waitedMs=$waited readyWaitedMs=$readyWaited alive=${process.isAlive}",
+        )
+        if (!ready) {
+            val err = masterLog.takeIf { it.exists() }?.readText()?.trim().orEmpty()
+            process.destroyForcibly()
+            error(
+                sshFailureMessage(
+                    target,
+                    err.ifBlank { "local andyd forward never accepted a connection" },
+                    "",
+                    -1,
+                ),
+            )
         }
         return process
     }
@@ -560,8 +818,20 @@ class DesktopRemoteSessionService(
             "project.list",
             "automation.list",
         )
-        val available = listTools(socket)
-        return required.filter { it !in available }
+        var lastError: Throwable? = null
+        repeat(15) { attempt ->
+            val available = runCatching { listTools(socket) }
+                .onFailure {
+                    lastError = it
+                    SshProcess.debugLog("listTools attempt=$attempt failed: ${it.message}")
+                }
+                .getOrNull()
+            if (available != null) {
+                return required.filter { it !in available }
+            }
+            Thread.sleep(150)
+        }
+        throw lastError ?: IllegalStateException("Could not list tools on remote andyd")
     }
 
     private fun listTools(socket: File): Set<String> {
@@ -638,5 +908,6 @@ class DesktopRemoteSessionService(
         val controlPath: File,
         val target: String,
         val localAdbPort: Int,
+        val portForwarder: SshPortForwarder,
     )
 }

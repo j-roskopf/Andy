@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import app.andy.ui.components.TextButton
+import app.andy.ui.components.AndyCheckbox
 import app.andy.ui.components.CodeFieldTextStyle
 import app.andy.ui.components.TextField
 import androidx.compose.runtime.Composable
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
+import app.andy.service.RemoteScreenAvailability
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -52,6 +54,7 @@ internal fun RemoteSessionSidebarControls(
 ) {
     val scope = rememberCoroutineScope()
     var draftTarget by remember { mutableStateOf("") }
+    var savePassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
     fun runSwitch(block: suspend () -> Unit) {
@@ -152,7 +155,7 @@ internal fun RemoteSessionSidebarControls(
                 },
                 onClick = {
                     if (!selected) {
-                        runSwitch { remoteSession.connect(saved) }
+                        runSwitch { remoteSession.connect(saved, rememberPassword = savePassword) }
                     }
                 },
             )
@@ -174,13 +177,33 @@ internal fun RemoteSessionSidebarControls(
                 )
             },
         )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            AndyCheckbox(
+                checked = savePassword,
+                onCheckedChange = { savePassword = it },
+                enabled = !busy,
+            )
+            Text(
+                "Save password",
+                color = TextSecondary,
+                fontFamily = DisplayFont,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(enabled = !busy) { savePassword = !savePassword },
+            )
+        }
         TextButton(
             onClick = {
                 val target = draftTarget.trim()
                 if (target.isEmpty()) return@TextButton
                 runSwitch {
                     remoteSession.addSavedTarget(target)
-                    remoteSession.connect(target)
+                    remoteSession.connect(target, rememberPassword = savePassword)
                     if (remoteSession.state.value.isRemote) {
                         draftTarget = ""
                     }
@@ -191,9 +214,81 @@ internal fun RemoteSessionSidebarControls(
 
         if (session.isRemote) {
             TextButton(
-                onClick = { runSwitch { remoteSession.reconnect() } },
+                onClick = { runSwitch { remoteSession.reconnect(rememberPassword = savePassword) } },
                 enabled = !busy,
             ) { Text("Reconnect current", fontSize = 11.sp) }
+
+            RemoteScreenSection(
+                session = session,
+                busy = busy,
+                onOpenScreen = { onResult ->
+                    runSwitch {
+                        val result = remoteSession.openRemoteScreen()
+                        onResult(
+                            result.getOrElse { error ->
+                                error.message ?: "Could not open remote screen"
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RemoteScreenSection(
+    session: RemoteSessionState,
+    busy: Boolean,
+    onOpenScreen: (onResult: (String) -> Unit) -> Unit,
+) {
+    val caps = session.hostCapabilities
+    val availability = caps?.screenAvailability ?: RemoteScreenAvailability.Unsupported
+    var statusMessage by remember(session.target, availability) { mutableStateOf<String?>(null) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = AndySpace.Space2),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+    ) {
+        Text(
+            "Screen",
+            color = TextSecondary,
+            fontFamily = DisplayFont,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        when (availability) {
+            RemoteScreenAvailability.Available -> {
+                TextButton(
+                    onClick = {
+                        onOpenScreen { statusMessage = it }
+                    },
+                    enabled = !busy,
+                ) { Text("Open remote screen", fontSize = 11.sp) }
+            }
+            RemoteScreenAvailability.NeedsEnabling -> {
+                Text(
+                    caps?.enablementHint
+                        ?: "Enable Screen Sharing on the remote host, then reconnect.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+            RemoteScreenAvailability.Unsupported -> {
+                Text(
+                    caps?.enablementHint
+                        ?: "Remote screen sharing is not available on this host.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+        }
+        statusMessage?.let { msg ->
+            Text(msg, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         }
     }
 }

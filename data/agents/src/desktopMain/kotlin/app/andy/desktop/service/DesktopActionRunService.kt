@@ -6,6 +6,7 @@ import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.service.ActionRunService
+import app.andy.service.RemoteShellEndpoint
 import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalSession
 import app.andy.terminal.TerminalSessions
@@ -29,6 +30,11 @@ internal typealias SpawnSession =
 class DesktopActionRunService(
     private val scope: CoroutineScope,
     private val terminalAppearance: () -> TerminalAppearanceSnapshot = { TerminalAppearanceSnapshot() },
+    /**
+     * When non-null, project Terminal docks spawn `ssh -t` over the Host-switcher
+     * ControlMaster instead of a local shell (remote project paths are not local dirs).
+     */
+    private val remoteShell: () -> RemoteShellEndpoint? = { null },
     internal val spawnSession: SpawnSession = { runId, argv, cwd, env ->
         val session = TerminalSessions.create(
             TerminalLaunchRequest(
@@ -103,7 +109,7 @@ class DesktopActionRunService(
 
     private fun start(project: ActionProject, action: ProjectAction, initialCommand: String?): String {
         val runId = "run-${nextRun.getAndIncrement()}"
-        val cwd = resolveCwd(project, action)
+        val remoteCwd = resolveCwd(project, action)
         val snapshot = RunningAction(
             runId = runId,
             projectId = project.id,
@@ -111,7 +117,7 @@ class DesktopActionRunService(
             actionName = action.name,
             icon = action.icon,
             command = action.command,
-            cwd = cwd,
+            cwd = remoteCwd,
             status = ActionRunStatus.Starting,
             startedAtMillis = System.currentTimeMillis(),
         )
@@ -121,11 +127,10 @@ class DesktopActionRunService(
         // lib load), so it runs off the UI thread and the dock tab appears before it finishes.
         scope.launch(Dispatchers.IO) {
             runCatching {
-                val command = persistentShellCommand()
-                val environment = buildTerminalLaunchEnvironment(
-                    project.env + action.env,
-                )
-                spawnSession(runId, command, cwd, environment)
+                val envOverrides = project.env + action.env
+                val (command, spawnCwd) = resolveLaunch(remoteCwd, envOverrides)
+                val environment = buildTerminalLaunchEnvironment(envOverrides)
+                spawnSession(runId, command, spawnCwd, environment)
             }.fold(
                 onSuccess = { rustTerminal ->
                     val registered = synchronized(lifecycleLock) {
@@ -271,6 +276,16 @@ class DesktopActionRunService(
                 }
             }
         }
+    }
+
+    /** Local shell argv + cwd, or `ssh -t` over the Host-switcher mux when remoted. */
+    private fun resolveLaunch(remoteCwd: String, envOverrides: Map<String, String>): Pair<List<String>, String> {
+        val endpoint = remoteShell()
+        if (endpoint != null) {
+            val launch = RemoteProjectShell.launch(endpoint, remoteCwd, envOverrides)
+            return launch.argv to launch.localCwd
+        }
+        return persistentShellCommand() to remoteCwd
     }
 
     private fun persistentShellCommand(): List<String> {
