@@ -177,7 +177,7 @@ data class WorkspaceState(
     val lmStudioBearerToken: String = "",
     /**
      * Saved SSH targets for desktop remote (`Host` alias or `user@host`). Non-secret only —
-     * credentials stay in the system ssh agent / `~/.ssh/config`.
+     * optional passwords live in the OS keychain (`Andy SSH`), not in this file.
      */
     val savedSshTargets: List<String> = emptyList(),
     /**

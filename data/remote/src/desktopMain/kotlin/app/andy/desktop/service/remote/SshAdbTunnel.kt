@@ -4,6 +4,7 @@ import app.andy.desktop.service.CommandRunner
 import app.andy.model.SdkDiscovery
 import app.andy.service.CommandResult
 import java.io.File
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -108,16 +109,25 @@ class SshAdbTunnel(
         private val portSeq = AtomicInteger(15_000)
 
         fun allocateLocalPort(): Int {
+            // Bind 127.0.0.1 with reuseAddress=false so we don't pick a port still held by a
+            // prior ssh -L (Address already in use).
             repeat(40) {
                 val candidate = portSeq.updateAndGet { current ->
                     val next = current + 1
                     if (next > 60_000) 15_000 else next
                 }
                 runCatching {
-                    ServerSocket(candidate).use { return it.localPort }
+                    ServerSocket().use { socket ->
+                        socket.reuseAddress = false
+                        socket.bind(InetSocketAddress("127.0.0.1", candidate))
+                        return socket.localPort
+                    }
                 }
             }
-            ServerSocket(0).use { return it.localPort }
+            ServerSocket().use { socket ->
+                socket.bind(InetSocketAddress("127.0.0.1", 0))
+                return socket.localPort
+            }
         }
     }
 }

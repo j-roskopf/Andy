@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val BrowserUnavailable = "This host-only feature is unavailable in Andy Web."
 private fun unavailable() = CommandResult.failure(BrowserUnavailable)
@@ -248,9 +250,19 @@ object UnavailableAppDatabaseService : AppDatabaseService {
 }
 
 class InMemoryWorkspaceStore(initial: WorkspaceState = WorkspaceState()) : WorkspaceStore {
-    private var value = initial
-    override suspend fun load() = value
-    override suspend fun save(state: WorkspaceState) { value = state }
+    private val mutex = Mutex()
+    private val mutableState = MutableStateFlow(initial)
+    override val state: StateFlow<WorkspaceState> = mutableState
+    override suspend fun load() = mutableState.value
+    override suspend fun save(state: WorkspaceState) {
+        mutex.withLock { mutableState.value = state }
+    }
+    override suspend fun update(transform: (WorkspaceState) -> WorkspaceState): WorkspaceState =
+        mutex.withLock {
+            val next = transform(mutableState.value)
+            mutableState.value = next
+            next
+        }
 }
 
 object EmptyActionConfigStore : ActionConfigStore {

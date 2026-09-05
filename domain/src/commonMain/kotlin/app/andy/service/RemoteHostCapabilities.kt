@@ -57,14 +57,76 @@ object RemoteHostCapabilityProbe {
         }
     }
 
-    /** True when `lsof -nP -iTCP:5900 -sTCP:LISTEN` (or similar) reports a listener. */
-    fun parseVncListening(lsofOutput: String, port: Int = RemoteHostCapabilities.DefaultVncPort): Boolean {
+    /**
+     * True when any listen/open signal reports [port] ready.
+     *
+     * Prefer [netstatOutput] / [connectProbeOutput] over [lsofOutput]: on macOS an
+     * unprivileged SSH user often cannot see root/`launchd` Screen Sharing sockets
+     * via `lsof`, which produced false "enable Screen Sharing" guidance.
+     */
+    fun parseVncListening(
+        lsofOutput: String,
+        port: Int = RemoteHostCapabilities.DefaultVncPort,
+        netstatOutput: String = "",
+        connectProbeOutput: String = "",
+    ): Boolean {
+        if (parseLsofListening(lsofOutput, port)) return true
+        if (parseNetstatListening(netstatOutput, port)) return true
+        if (parseConnectProbeOpen(connectProbeOutput)) return true
+        return false
+    }
+
+    fun parseLsofListening(lsofOutput: String, port: Int = RemoteHostCapabilities.DefaultVncPort): Boolean {
         val listeners = LocalServerScan.parseLsofTcpListenOutput(lsofOutput)
         if (listeners.any { it.port == port }) return true
         // Also accept one-line `lsof -i` style without -F.
         return lsofOutput.lineSequence().any { line ->
             line.contains(":$port") && line.contains("LISTEN", ignoreCase = true)
         }
+    }
+
+    /** `netstat -an` / `ss -ltn` style lines that mention [port] in LISTEN state. */
+    fun parseNetstatListening(netstatOutput: String, port: Int = RemoteHostCapabilities.DefaultVncPort): Boolean {
+        val patterns = listOf(
+            Regex("""\.${port}\b"""),
+            Regex(""":${port}\b"""),
+            Regex("""\*+\.${port}\b"""),
+            Regex("""\[::\]:$port\b"""),
+            Regex("""0\.0\.0\.0:$port\b"""),
+            Regex("""127\.0\.0\.1:$port\b"""),
+        )
+        return netstatOutput.lineSequence().any { line ->
+            val upper = line.uppercase()
+            (upper.contains("LISTEN") || upper.contains("LISTENING")) &&
+                patterns.any { it.containsMatchIn(line) }
+        }
+    }
+
+    /** Marker line from `nc -z` / `/dev/tcp` probe (`ANDY_VNC_OPEN`). */
+    fun parseConnectProbeOpen(connectProbeOutput: String): Boolean =
+        connectProbeOutput.lineSequence().any { it.trim() == "ANDY_VNC_OPEN" }
+
+    /**
+     * True when macOS `launchctl print system/com.apple.screensharing` shows the
+     * daemon is configured (loaded), even if `lsof` cannot see the socket.
+     */
+    fun parseMacScreensharingLaunchd(launchctlOutput: String): Boolean {
+        val text = launchctlOutput.trim()
+        if (text.isEmpty()) return false
+        val lower = text.lowercase()
+        if (lower.contains("could not find service")) return false
+        if (lower.contains("bad request") && !lower.contains("com.apple.screensharing")) return false
+        // Disabled override wins when present.
+        if (Regex("""disabled\s*=\s*1""").containsMatchIn(lower)) return false
+        if (Regex(""""disabled"\s*=>\s*true""").containsMatchIn(lower)) return false
+        // Loaded service prints path / state / program.
+        return lower.contains("com.apple.screensharing") &&
+            (
+                lower.contains("state =") ||
+                    lower.contains("path =") ||
+                    lower.contains("program =") ||
+                    lower.contains("pid =")
+                )
     }
 
     /**
@@ -114,9 +176,21 @@ object RemoteHostCapabilityProbe {
         waylandDisplay: String = "",
         localVncClient: String? = null,
         vncPort: Int = RemoteHostCapabilities.DefaultVncPort,
+        netstatStdout: String = "",
+        connectProbeStdout: String = "",
+        macLaunchctlStdout: String = "",
     ): RemoteHostCapabilities {
         val os = parseUname(unameStdout)
-        val listening = parseVncListening(lsofVncStdout, vncPort)
+        val portOpen = parseVncListening(
+            lsofOutput = lsofVncStdout,
+            port = vncPort,
+            netstatOutput = netstatStdout,
+            connectProbeOutput = connectProbeStdout,
+        )
+        val macConfigured = os == RemoteHostOs.Mac && parseMacScreensharingLaunchd(macLaunchctlStdout)
+        // Treat launchd-configured Screen Sharing as available even when unprivileged
+        // lsof misses the socket — Open will still forward :5900 and hand off to the OS client.
+        val listening = portOpen || macConfigured
         val screenshotTool = parseScreenshotTool(screenshotCommandV)
         val linuxHasVnc = os == RemoteHostOs.Linux &&
             linuxVncCommandV.lineSequence()

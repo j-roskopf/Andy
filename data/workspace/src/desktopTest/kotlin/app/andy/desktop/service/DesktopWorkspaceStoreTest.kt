@@ -208,6 +208,22 @@ class DesktopWorkspaceStoreTest {
 
         DesktopWorkspaceStore(file).save(saved.copy(collapsedWorkflowTaskIds = emptySet()))
         assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedWorkflowTaskIds)
+
+        DesktopWorkspaceStore(file).save(saved.copy(savedSshTargets = listOf("alice@box", "HostAlias")))
+        assertEquals(listOf("alice@box", "HostAlias"), DesktopWorkspaceStore(file).load().savedSshTargets)
+
+        // Concurrent ShellState-style save must not wipe targets written via update().
+        val store = DesktopWorkspaceStore(file)
+        store.update { it.copy(savedSshTargets = listOf("user@remote")) }
+        store.update { current ->
+            // Mimic ShellState: UI transform that did not touch savedSshTargets, but was
+            // built from a stale snapshot that still had an empty list.
+            current.copy(
+                workspaceSidebarExpanded = false,
+                savedSshTargets = listOf("user@remote"),
+            )
+        }
+        assertEquals(listOf("user@remote"), store.load().savedSshTargets)
     }
 
     @Test

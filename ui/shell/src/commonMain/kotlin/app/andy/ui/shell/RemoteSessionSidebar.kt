@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import app.andy.ui.components.TextButton
+import app.andy.ui.components.AndyCheckbox
 import app.andy.ui.components.CodeFieldTextStyle
 import app.andy.ui.components.TextField
 import androidx.compose.runtime.Composable
@@ -53,6 +54,7 @@ internal fun RemoteSessionSidebarControls(
 ) {
     val scope = rememberCoroutineScope()
     var draftTarget by remember { mutableStateOf("") }
+    var savePassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
     fun runSwitch(block: suspend () -> Unit) {
@@ -153,7 +155,7 @@ internal fun RemoteSessionSidebarControls(
                 },
                 onClick = {
                     if (!selected) {
-                        runSwitch { remoteSession.connect(saved) }
+                        runSwitch { remoteSession.connect(saved, rememberPassword = savePassword) }
                     }
                 },
             )
@@ -175,13 +177,33 @@ internal fun RemoteSessionSidebarControls(
                 )
             },
         )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            AndyCheckbox(
+                checked = savePassword,
+                onCheckedChange = { savePassword = it },
+                enabled = !busy,
+            )
+            Text(
+                "Save password",
+                color = TextSecondary,
+                fontFamily = DisplayFont,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(enabled = !busy) { savePassword = !savePassword },
+            )
+        }
         TextButton(
             onClick = {
                 val target = draftTarget.trim()
                 if (target.isEmpty()) return@TextButton
                 runSwitch {
                     remoteSession.addSavedTarget(target)
-                    remoteSession.connect(target)
+                    remoteSession.connect(target, rememberPassword = savePassword)
                     if (remoteSession.state.value.isRemote) {
                         draftTarget = ""
                     }
@@ -192,7 +214,7 @@ internal fun RemoteSessionSidebarControls(
 
         if (session.isRemote) {
             TextButton(
-                onClick = { runSwitch { remoteSession.reconnect() } },
+                onClick = { runSwitch { remoteSession.reconnect(rememberPassword = savePassword) } },
                 enabled = !busy,
             ) { Text("Reconnect current", fontSize = 11.sp) }
 

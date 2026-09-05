@@ -81,6 +81,75 @@ class RemoteHostCapabilitiesTest {
     }
 
     @Test
+    fun macAvailableFromNetstatWhenLsofEmpty() {
+        // Unprivileged SSH often cannot lsof root/launchd Screen Sharing sockets.
+        val caps = RemoteHostCapabilityProbe.fromProbeOutputs(
+            unameStdout = "Darwin",
+            lsofVncStdout = "",
+            screenshotCommandV = "/usr/sbin/screencapture",
+            localVncClient = "open",
+            netstatStdout = "tcp4       0      0  *.5900                 *.*                    LISTEN",
+        )
+        assertEquals(RemoteScreenAvailability.Available, caps.screenAvailability)
+        assertNull(caps.enablementHint)
+    }
+
+    @Test
+    fun macAvailableFromConnectProbeWhenLsofEmpty() {
+        val caps = RemoteHostCapabilityProbe.fromProbeOutputs(
+            unameStdout = "Darwin",
+            lsofVncStdout = "",
+            screenshotCommandV = "/usr/sbin/screencapture",
+            localVncClient = "open",
+            connectProbeStdout = "ANDY_VNC_OPEN\n",
+        )
+        assertTrue(caps.vncServerListening)
+        assertEquals(RemoteScreenAvailability.Available, caps.screenAvailability)
+    }
+
+    @Test
+    fun macAvailableFromLaunchctlWhenPortProbesEmpty() {
+        val launchctl = """
+            system/com.apple.screensharing = {
+            	path = /System/Library/LaunchDaemons/com.apple.screensharing.plist
+            	state = active
+            	program = /System/Library/CoreServices/RemoteManagement/AppleVNCServer.bundle/Contents/MacOS/AppleVNCServer
+            }
+        """.trimIndent()
+        val caps = RemoteHostCapabilityProbe.fromProbeOutputs(
+            unameStdout = "Darwin",
+            lsofVncStdout = "",
+            screenshotCommandV = "/usr/sbin/screencapture",
+            localVncClient = "open",
+            macLaunchctlStdout = launchctl,
+        )
+        assertEquals(RemoteScreenAvailability.Available, caps.screenAvailability)
+    }
+
+    @Test
+    fun macLaunchctlMissingStillNeedsEnabling() {
+        assertFalse(
+            RemoteHostCapabilityProbe.parseMacScreensharingLaunchd(
+                "Bad request.\nCould not find service \"com.apple.screensharing\" in domain for system",
+            ),
+        )
+    }
+
+    @Test
+    fun parseNetstatListeningMatchesMacStyle() {
+        assertTrue(
+            RemoteHostCapabilityProbe.parseNetstatListening(
+                "tcp4       0      0  *.5900                 *.*                    LISTEN",
+            ),
+        )
+        assertFalse(
+            RemoteHostCapabilityProbe.parseNetstatListening(
+                "tcp4       0      0  *.22                   *.*                    LISTEN",
+            ),
+        )
+    }
+
+    @Test
     fun linuxWaylandHintWhenNoVncBinary() {
         val caps = RemoteHostCapabilityProbe.fromProbeOutputs(
             unameStdout = "Linux",

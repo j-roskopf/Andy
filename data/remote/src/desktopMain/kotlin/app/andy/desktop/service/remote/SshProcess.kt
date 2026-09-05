@@ -6,7 +6,14 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Shared OpenSSH argv / ProcessBuilder helpers for Andy remote sessions.
- * Prefer multiplexing via [controlPath] so password askpass runs once per connect.
+ *
+ * Connect model:
+ * 1. One-shot `ssh` (no mux) to resolve remote socket paths — askpass may prompt.
+ * 2. Long-lived `ssh -N -L …` with [masterOptions] (`ControlMaster=yes`) — askpass cache
+ *    reuses the password; this process owns the forwards.
+ *
+ * Do not use `ControlMaster=auto` on a second client that also passes `-L` against an
+ * existing mux — OpenSSH 10+ fails with `Broken pipe`.
  *
  * Socket paths stay under `/tmp` with short hashed names — macOS AF_UNIX paths are
  * capped around 104 bytes, and `java.io.tmpdir` (`/var/folders/...`) is already long.
@@ -40,27 +47,43 @@ object SshProcess {
     fun controlPathForPid(pid: Long = ProcessHandle.current().pid()): File =
         File(File("/tmp", "andy-r$pid").also { it.mkdirs() }, "mux")
 
-    fun baseOptions(controlPath: File?): List<String> = buildList {
+    private fun commonOptions(): List<String> = listOf(
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "ForwardAgent=no",
+        "-o", "ConnectTimeout=20",
+        "-o", "Compression=no",
+        "-o", "IPQoS=lowdelay",
+        // One prompt only — Cancel must not open 3 stacked Andy SSH dialogs.
+        "-o", "NumberOfPasswordPrompts=1",
+    )
+
+    /** Long-lived `ssh -N -L …` that owns the ControlMaster + forwards. */
+    fun masterOptions(controlPath: File): List<String> = buildList {
+        addAll(commonOptions())
         add("-o")
-        add("StrictHostKeyChecking=yes")
+        add("ControlPath=${controlPath.absolutePath}")
         add("-o")
-        add("ForwardAgent=no")
+        add("ControlMaster=yes")
         add("-o")
-        add("ConnectTimeout=20")
-        add("-o")
-        add("Compression=no")
-        // Prefer interactive/low-delay QoS — Live video + scrcpy control share this mux.
-        add("-o")
-        add("IPQoS=lowdelay")
-        if (controlPath != null) {
-            add("-o")
-            add("ControlPath=${controlPath.absolutePath}")
-            add("-o")
-            add("ControlMaster=auto")
-            add("-o")
-            add("ControlPersist=yes")
-        }
+        add("ControlPersist=no")
     }
+
+    /**
+     * Mux clients against an existing master (probes, `-O forward`).
+     * ControlPath only — never `ControlMaster=auto`.
+     */
+    fun muxOptions(controlPath: File): List<String> = buildList {
+        addAll(commonOptions())
+        add("-o")
+        add("ControlPath=${controlPath.absolutePath}")
+    }
+
+    /**
+     * When [controlPath] is set, talk to an existing master ([muxOptions]).
+     * When null, one-shot non-multiplexed ssh (initial path resolve).
+     */
+    fun baseOptions(controlPath: File?): List<String> =
+        if (controlPath != null) muxOptions(controlPath) else commonOptions()
 
     fun processBuilder(command: List<String>): ProcessBuilder =
         ProcessBuilder(command).also { SshAskpass.applyTo(it) }
@@ -78,5 +101,13 @@ object SshProcess {
             p.waitFor(3, TimeUnit.SECONDS)
         }
         controlPath.delete()
+    }
+
+    fun debugLog(message: String) {
+        runCatching {
+            File("/tmp/andy-ssh-connect.log").appendText(
+                "${System.currentTimeMillis()} $message\n",
+            )
+        }
     }
 }

@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
 import app.andy.model.ProjectAction
+import app.andy.service.RemoteShellEndpoint
 import app.andy.terminal.TerminalLaunchRequest
 import app.andy.terminal.TerminalSessions
 import app.andy.terminal.rust.RustTerminalBackend
@@ -96,6 +97,52 @@ class DesktopActionRunServiceTest {
             assertEquals(listOf(runId), service.running.value.map { it.runId })
             awaitTerminalText(service, runId, "second")
             assertTrue(service.bufferSnapshot(runId).contains("first"))
+        } finally {
+            service.stop(runId)
+            awaitRunFinished(service, runId)
+        }
+    }
+
+    @Test
+    fun remotedOpenShellSpawnsSshInsteadOfLocalShell() = runBlocking {
+        val spawned = AtomicReference<List<String>?>(null)
+        val service = DesktopActionRunService(
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+            remoteShell = {
+                RemoteShellEndpoint(
+                    sshTarget = "user@remote.host",
+                    controlPath = "/tmp/andy-mux",
+                )
+            },
+            spawnSession = { runId, argv, cwd, env ->
+                spawned.set(argv)
+                TerminalSessions.create(
+                    TerminalLaunchRequest(
+                        sessionId = runId,
+                        argv = listOf("/bin/sh", "-c", "exit 0"),
+                        cwd = cwd,
+                        env = env,
+                    ),
+                ) as RustTerminalBackend
+            },
+        )
+        val project = ActionProject(
+            id = "project",
+            name = "Project",
+            // Path that does not exist locally — previously fell through to ~/.andy-tasks.
+            contextDir = "/Users/remote/Code/DoesNotExistHere",
+        )
+        val runId = service.openShell(project)
+        try {
+            withTimeout(5_000) {
+                while (spawned.get() == null) delay(25)
+            }
+            val argv = spawned.get()!!
+            assertEquals("ssh", argv.first())
+            assertTrue(argv.contains("-t"))
+            assertTrue(argv.contains("user@remote.host"))
+            assertTrue(argv.last().contains("/Users/remote/Code/DoesNotExistHere"))
+            assertEquals("/Users/remote/Code/DoesNotExistHere", service.running.value.single().cwd)
         } finally {
             service.stop(runId)
             awaitRunFinished(service, runId)

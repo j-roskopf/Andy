@@ -65,6 +65,7 @@ import app.andy.desktop.updates.DesktopRuntimeBundleService
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
 import app.andy.service.PlatformCapabilities
+import app.andy.service.RemoteShellEndpoint
 import app.andy.service.UnavailableKanbanService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 
 fun createDesktopServices(): AndyServices = createDesktopRuntime().services
 
@@ -413,9 +415,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
          listOfNotNull(ws.lastHostFilePath?.let { File(it).parent }))
             .distinct()
     })
+    val remoteShellRef = AtomicReference<(() -> RemoteShellEndpoint?)?>(null)
     val actionRuns = DesktopActionRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
+        remoteShell = { remoteShellRef.get()?.invoke() },
     )
     val localAvd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
     val avd = SwappableAvdService(localAvd)
@@ -563,6 +567,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         agentRunsForLocalServers = swappableAgents,
         actionRunsForLocalServers = actionRuns,
     )
+    remoteShellRef.set { remoteSession.shellEndpoint() }
 
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
     // Do not open a second writer here — use UnavailableKanbanService until the daemon
@@ -669,9 +674,11 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
          listOfNotNull(ws.lastHostFilePath?.let { File(it).parent }))
             .distinct()
     })
+    val remoteShellRef = AtomicReference<(() -> RemoteShellEndpoint?)?>(null)
     val actionRuns = DesktopActionRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         terminalAppearance = { store.state.value.toTerminalAppearance() },
+        remoteShell = { remoteShellRef.get()?.invoke() },
     )
 
     val localAvd = DesktopAvdService(runner, locator) { store.load().selectedSdkPath }
@@ -838,6 +845,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         agentRunsForLocalServers = swappableAgents,
         actionRunsForLocalServers = actionRuns,
     )
+    remoteShellRef.set { remoteSession.shellEndpoint() }
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
