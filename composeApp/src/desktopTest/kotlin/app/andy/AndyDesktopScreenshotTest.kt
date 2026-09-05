@@ -10,7 +10,9 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.isRoot
@@ -132,6 +134,10 @@ class AndyDesktopScreenshotTest {
     fun desktopProjectAutomations() = capture(listOf(AndyScreenshotScenario.ProjectsAutomations))
 
     @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
+    @Test
+    fun desktopHostPanelRemoteConnected() = capture(listOf(AndyScreenshotScenario.HostRemoteConnected))
+
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     private fun capture(scenarios: List<AndyScreenshotScenario>) {
         assumeTrue(
             "Desktop screenshot baselines are macOS-only; record/verify on macOS",
@@ -211,6 +217,15 @@ class AndyDesktopScreenshotTest {
                                     .fetchSemanticsNodes()
                                     .isNotEmpty()
                             }
+                        }
+                        AndyScreenshotScenario.HostRemoteConnected -> {
+                            // Host panel starts folded; open it so the connected card is captured.
+                            onNodeWithText("Host").performClick()
+                            waitForIdle()
+                            // Expanding shifts rows under the cursor — park it off the panel so
+                            // the baseline records rest state, not a hover fill.
+                            onRoot().performMouseInput { moveTo(Offset(1100f, 700f)) }
+                            waitForIdle()
                         }
                         AndyScreenshotScenario.TracingPerfetto -> {
                             // Quick-start cards fill the left pane; scroll so the seeded

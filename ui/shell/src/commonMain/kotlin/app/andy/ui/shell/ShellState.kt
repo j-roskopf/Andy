@@ -108,8 +108,23 @@ internal class ShellState(
         private set
     var docks by mutableStateOf(ShellDocks())
         private set
-    var lastTerminalPlacement by mutableStateOf(DockPlacement.Right)
-        private set
+    /**
+     * The dock the user last put a terminal in by hand — chrome "+"/landing, a leaf split, or a
+     * restored layout. Null until they pick one, which is what lets [lastTerminalPlacement] send
+     * terminals we open on their behalf somewhere other than the right dock.
+     */
+    private var explicitTerminalPlacement by mutableStateOf<DockPlacement?>(null)
+
+    /**
+     * Where a terminal lands when the caller has no placement of its own — an action run, a CLI
+     * update. Action output is wide and short, so it defaults to the bottom dock; a placement the
+     * user picked, or terminals already sitting in the right dock, keep new ones with them.
+     */
+    val lastTerminalPlacement: DockPlacement
+        get() = explicitTerminalPlacement ?: when {
+            docks.right.tabs.any { it.kind == DockTabKind.Terminal } -> DockPlacement.Right
+            else -> DockPlacement.Bottom
+        }
     /** Nav state per Browser [DockTab.id] — kept out of [DockTab] itself, mirroring how
      * Terminal state lives in [DockTab.terminalTree] but browser tabs aren't a split tree. */
     var browserPanes by mutableStateOf<Map<String, BrowserPaneState>>(emptyMap())
@@ -598,6 +613,34 @@ internal class ShellState(
         }
     }
 
+    /**
+     * A dock Live leaf owns its target independently of the global picker. Drop targets that
+     * disappeared from discovery so a pooled mirror cannot keep painting its final frame after
+     * the picker has moved to "No device". A running DHU session is the one intentional brief
+     * offline state: USB accessory renegotiation removes it from ADB before it returns.
+     */
+    private fun clearUnavailableLiveDockTargets(pinnedAndroidSerial: String?) {
+        var changed = false
+        for (placement in listOf(DockPlacement.Right, DockPlacement.Bottom)) {
+            val liveTabs = docks.pane(placement).tabs.filter { it.kind == DockTabKind.Live }
+            for (tab in liveTabs) {
+                val tree = tab.liveTree ?: continue
+                var clearedTree = tree
+                tree.flattenLeaves().forEach leafLoop@{ leaf ->
+                    val targetId = leaf.targetId ?: return@leafLoop
+                    if (targetId != pinnedAndroidSerial && !isTargetAvailable(targetId)) {
+                        clearedTree = clearedTree.mapLeaf(leaf.id) { it.copy(targetId = null, title = null) }
+                    }
+                }
+                if (clearedTree != tree) {
+                    updateLiveTree(placement, tab.id) { clearedTree }
+                    changed = true
+                }
+            }
+        }
+        if (changed) reconcileLiveMirrorHolds()
+    }
+
     private fun liveTabTitle(targetId: String): String =
         workspaceState.deviceLabels[targetId]
             ?: devices.firstOrNull { it.serial == targetId }?.displayName
@@ -740,7 +783,7 @@ internal class ShellState(
         val runId = services.actionRuns.openShell(project)
         val tabId = nextPaneId("terminal-tab")
         val leafId = nextPaneId("leaf")
-        lastTerminalPlacement = placement
+        explicitTerminalPlacement = placement
         activeRunId = runId
         terminalRunId = runId
         handledTerminalRunId = runId
@@ -748,24 +791,39 @@ internal class ShellState(
         docks = docks.update(placement) { it.withTab(DockTab.terminalWorkspace(tabId, tree, leafId)) }
     }
 
-    /** Reveals [runId]'s terminal tab wherever it lives, or opens a fresh top-level tab for it. */
-    fun focusTerminalRun(runId: String, placement: DockPlacement = lastTerminalPlacement) {
+    /**
+     * Reveals [runId]'s terminal tab wherever it lives, or opens a fresh top-level tab for it.
+     * A non-null [placement] is a placement the user chose, and sticks for later terminals;
+     * null leaves the choice to [placementForRun].
+     */
+    fun focusTerminalRun(runId: String, placement: DockPlacement? = null) {
         if (runId.isBlank()) return
-        lastTerminalPlacement = placement
+        if (placement != null) explicitTerminalPlacement = placement
+        val target = placement ?: placementForRun(runId)
         activeRunId = runId
         terminalRunId = runId
         handledTerminalRunId = runId
         docks = docks.withTerminalExclusive(
-            placement = placement,
+            placement = target,
             runId = runId,
             newTabId = nextPaneId("terminal-tab"),
             newLeafId = nextPaneId("leaf"),
         )
     }
 
+    /**
+     * Dock to reveal [runId] in when nobody picked one: whichever one already holds it (so a
+     * re-run never yanks a terminal across the shell), else [lastTerminalPlacement].
+     */
+    private fun placementForRun(runId: String): DockPlacement = when {
+        docks.right.tabOwningRun(runId) != null -> DockPlacement.Right
+        docks.bottom.tabOwningRun(runId) != null -> DockPlacement.Bottom
+        else -> lastTerminalPlacement
+    }
+
     fun notifyTerminalRun(runId: String) {
         if (runId.isBlank()) return
-        focusTerminalRun(runId, lastTerminalPlacement)
+        focusTerminalRun(runId)
     }
 
     /** Resolves [activeRunId] from whichever leaf/tab last had focus in [placement]'s [tabId] workspace. */
@@ -802,7 +860,7 @@ internal class ShellState(
             ?: actionsConfig.projects.firstOrNull() ?: return
         val runId = services.actionRuns.openShell(project)
         updateTerminalTree(placement, tabId) { it.addTab(leafId, DockTab.terminal(runId)) }
-        lastTerminalPlacement = placement
+        explicitTerminalPlacement = placement
         activeRunId = runId
         terminalRunId = runId
         handledTerminalRunId = runId
@@ -852,7 +910,7 @@ internal class ShellState(
         val newLeaf = TerminalPaneNode.Leaf(newLeafId, listOf(DockTab.terminal(runId)), "terminal:$runId")
         updateTerminalTree(placement, tabId) { it.split(leafId, nextPaneId("split"), axis, newLeaf) }
         focusTerminalLeaf(placement, tabId, newLeafId)
-        lastTerminalPlacement = placement
+        explicitTerminalPlacement = placement
         activeRunId = runId
         terminalRunId = runId
         handledTerminalRunId = runId
@@ -967,7 +1025,7 @@ internal class ShellState(
             terminalRunId = null
             handledTerminalRunId = null
         }
-        restore.focusedTerminalPlacement?.let { lastTerminalPlacement = it }
+        restore.focusedTerminalPlacement?.let { explicitTerminalPlacement = it }
 
         updateWorkspace {
             it.copy(
@@ -1004,7 +1062,7 @@ internal class ShellState(
         activeRunId = runId
         rememberLastProject(run.projectId)
         docks = docks.withTerminalExclusive(
-            placement = lastTerminalPlacement,
+            placement = placementForRun(runId),
             runId = runId,
             newTabId = nextPaneId("terminal-tab"),
             newLeafId = nextPaneId("leaf"),
@@ -1067,6 +1125,7 @@ internal class ShellState(
                 ?.let { clearAndroidAutoForTargetSwitch(it) }
             persistSelectedTarget()
         }
+        clearUnavailableLiveDockTargets(pinnedForDhu)
         return devices
     }
 

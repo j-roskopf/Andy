@@ -21,6 +21,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -131,6 +133,7 @@ fun AndyDropdownTrigger(
     enabled: Boolean = true,
     prefix: @Composable (RowScope.() -> Unit)? = null,
     contentDescription: String? = null,
+    onLabelPositioned: ((Float) -> Unit)? = null,
 ) {
     GhostButton(
         onClick = onClick,
@@ -155,7 +158,17 @@ fun AndyDropdownTrigger(
             fontSize = 12.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .then(
+                    if (onLabelPositioned != null) {
+                        Modifier.onGloballyPositioned { coordinates ->
+                            onLabelPositioned(coordinates.positionInRoot().x)
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
         )
         LucideIcon(
             if (expanded) Lucide.ChevronUp else Lucide.ChevronDown,

@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -486,6 +488,7 @@ internal fun PanePlacementToggle(
     placement: DockPlacement,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val label = buildString {
         append(if (selected) "Hide" else "Show")
@@ -496,6 +499,7 @@ internal fun PanePlacementToggle(
         selected = selected,
         label = label,
         onClick = onClick,
+        modifier = modifier,
     )
 }
 
@@ -518,6 +522,7 @@ private fun PaneToggle(
     selected: Boolean,
     label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -527,7 +532,7 @@ private fun PaneToggle(
         else -> Color.Transparent
     }
     Box(
-        Modifier
+        modifier
             .size(28.dp)
             .clip(RoundedCornerShape(AndyRadius.Control))
             .background(background, RoundedCornerShape(AndyRadius.Control))
@@ -787,6 +792,7 @@ internal fun ShellDockDrawer(
     val active = pane.activeTab
     val agentTasks by services.agentRuns.tasks.collectAsState()
     var addMenuExpanded by remember { mutableStateOf(false) }
+    var addTabAnchorXInRoot by remember { mutableStateOf<Float?>(null) }
     // Live device picker is a ChromeFlyout under the tab strip (same host as the add menu) so
     // Metal/SwingPanel mirrors reflow instead of painting over a Popup dropdown.
     var liveDevicePickerTabId by remember { mutableStateOf<String?>(null) }
@@ -894,6 +900,10 @@ internal fun ShellDockDrawer(
                         onClick = {
                             liveDevicePickerTabId = null
                             addMenuExpanded = !addMenuExpanded
+                        },
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            val next = coordinates.positionInRoot().x
+                            if (addTabAnchorXInRoot != next) addTabAnchorXInRoot = next
                         },
                         icon = { LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(14.dp)) },
                     )
@@ -1028,7 +1038,11 @@ internal fun ShellDockDrawer(
                 )
             }
         }
-        ChromeFlyout(visible = addMenuExpanded) {
+        ChromeFlyout(
+            visible = addMenuExpanded,
+            anchorXInRoot = addTabAnchorXInRoot,
+            preferredContentWidth = 280.dp,
+        ) {
             DockLandingPanel(
                 onSelect = { kind ->
                     addMenuExpanded = false
@@ -1227,6 +1241,7 @@ internal fun DockIconChromeButton(
     label: String,
     onClick: () -> Unit,
     onBleedSurface: Boolean = false,
+    modifier: Modifier = Modifier,
     icon: @Composable () -> Unit,
 ) {
     // On a header that has taken on the terminal theme or the shell canvas, the neutral chrome
@@ -1240,7 +1255,7 @@ internal fun DockIconChromeButton(
     }
     val stroke = if (lifted) Color.White.copy(alpha = 0.12f) else PaneDividerTint
     Box(
-        Modifier
+        modifier
             .size(28.dp)
             .background(fill, RoundedCornerShape(AndyRadius.Control))
             .border(1.dp, stroke, RoundedCornerShape(AndyRadius.Control))

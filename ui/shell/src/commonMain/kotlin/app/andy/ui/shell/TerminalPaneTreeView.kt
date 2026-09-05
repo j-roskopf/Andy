@@ -29,6 +29,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -253,6 +255,7 @@ private fun TerminalLeafView(
     layoutMenu: DockLayoutMenu? = null,
 ) {
     var addMenuExpanded by remember { mutableStateOf(false) }
+    var addTabAnchorXInRoot by remember { mutableStateOf<Float?>(null) }
     Column(
         modifier
             .background(terminalBackground)
@@ -290,6 +293,10 @@ private fun TerminalLeafView(
                                 }
                             },
                             onBleedSurface = true,
+                            modifier = Modifier.onGloballyPositioned { coordinates ->
+                                val next = coordinates.positionInRoot().x
+                                if (addTabAnchorXInRoot != next) addTabAnchorXInRoot = next
+                            },
                         ) {
                             LucideIcon(Lucide.Plus, TextSecondary, Modifier.size(13.dp))
                         }
@@ -343,7 +350,11 @@ private fun TerminalLeafView(
             }
         }
         if (showChrome && addKindMenu) {
-            ChromeFlyout(visible = addMenuExpanded) {
+            ChromeFlyout(
+                visible = addMenuExpanded,
+                anchorXInRoot = addTabAnchorXInRoot,
+                preferredContentWidth = 280.dp,
+            ) {
                 DockLandingPanel(
                     onSelect = { kind ->
                         addMenuExpanded = false

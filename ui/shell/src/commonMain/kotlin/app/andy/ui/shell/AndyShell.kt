@@ -368,11 +368,12 @@ internal fun AndyShell(
                     proxyRunning = proxyRunning,
                     showLocalServers = capabilities.hostAutomation &&
                         state.destination == AndyDestination.Actions,
-                    localServersContent = { expanded, onExpandedChange ->
+                    localServersContent = { expanded, onExpandedChange, onAnchorPositioned ->
                         LocalServersMenu(
                             services = services,
                             expanded = expanded,
                             onExpandedChange = onExpandedChange,
+                            onLabelPositioned = onAnchorPositioned,
                         )
                     },
                     localServersFlyout = { onDismiss ->
