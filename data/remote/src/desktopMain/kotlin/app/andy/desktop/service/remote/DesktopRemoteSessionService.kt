@@ -181,7 +181,9 @@ class DesktopRemoteSessionService(
             _state.update {
                 it.copy(
                     status = RemoteSessionStatus.Local,
-                    target = null,
+                    // Keep the failed target so a Retry reconnect targets this host, not the
+                    // first saved one.
+                    target = trimmed,
                     error = message,
                     hostCapabilities = null,
                 )
@@ -578,7 +580,9 @@ class DesktopRemoteSessionService(
                             _state.update {
                                 it.copy(
                                     status = RemoteSessionStatus.Local,
-                                    target = null,
+                                    // Keep the dropped target so Retry reconnects to this host,
+                                    // not the first saved one.
+                                    target = target,
                                     error = "SSH tunnel to $target dropped. Reconnect to continue remotely.",
                                 )
                             }
