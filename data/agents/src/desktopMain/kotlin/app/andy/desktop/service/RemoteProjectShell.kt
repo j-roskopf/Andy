@@ -19,10 +19,25 @@ internal object RemoteProjectShell {
         val localCwd: String,
     )
 
-    fun launch(endpoint: RemoteShellEndpoint, remoteCwd: String): Launch {
+    fun launch(
+        endpoint: RemoteShellEndpoint,
+        remoteCwd: String,
+        env: Map<String, String> = emptyMap(),
+    ): Launch {
+        // SSH does not forward local env to the remote login shell; emit exports so
+        // action/project overrides (API keys, build settings) reach the remote command.
+        val exports = env.entries.joinToString("; ") { (key, value) ->
+            "export ${shellQuote(key)}=${shellQuote(value)}"
+        }
         val remoteCommand =
-            "cd ${shellQuote(remoteCwd)} 2>/dev/null || cd \"\$HOME\"; " +
-                "exec \"\${SHELL:-/bin/sh}\" -l"
+            buildString {
+                if (exports.isNotEmpty()) {
+                    append(exports)
+                    append("; ")
+                }
+                append("cd ${shellQuote(remoteCwd)} 2>/dev/null || cd \"\$HOME\"; ")
+                append("exec \"\${SHELL:-/bin/sh}\" -l")
+            }
         val argv = buildList {
             add("ssh")
             add("-t")

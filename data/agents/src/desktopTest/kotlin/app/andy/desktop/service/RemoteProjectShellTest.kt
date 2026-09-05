@@ -38,4 +38,21 @@ class RemoteProjectShellTest {
         )
         assertTrue(launch.argv.last().contains("My Project'\\''s App"))
     }
+
+    @Test
+    fun exportsActionEnvIntoRemoteCommand() {
+        val launch = RemoteProjectShell.launch(
+            endpoint = RemoteShellEndpoint("host", "/tmp/c"),
+            remoteCwd = "/Users/joer/Code/X",
+            env = mapOf(
+                "ANDY_API_KEY" to "sk-secret",
+                "BUILD_FLAVOR" to "debug",
+            ),
+        )
+        val remoteCommand = launch.argv.last()
+        assertTrue(remoteCommand.contains("export 'ANDY_API_KEY'='sk-secret'"), remoteCommand)
+        assertTrue(remoteCommand.contains("export 'BUILD_FLAVOR'='debug'"), remoteCommand)
+        // Exports must precede the cd so the login shell starts with them set.
+        assertTrue(remoteCommand.indexOf("export") < remoteCommand.indexOf("cd"), remoteCommand)
+    }
 }

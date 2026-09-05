@@ -131,6 +131,7 @@ class DesktopActionRunServiceTest {
             name = "Project",
             // Path that does not exist locally — previously fell through to ~/.andy-tasks.
             contextDir = "/Users/remote/Code/DoesNotExistHere",
+            env = mapOf("ANDY_API_KEY" to "sk-secret"),
         )
         val runId = service.openShell(project)
         try {
@@ -142,6 +143,7 @@ class DesktopActionRunServiceTest {
             assertTrue(argv.contains("-t"))
             assertTrue(argv.contains("user@remote.host"))
             assertTrue(argv.last().contains("/Users/remote/Code/DoesNotExistHere"))
+            assertTrue(argv.last().contains("export 'ANDY_API_KEY'='sk-secret'"))
             assertEquals("/Users/remote/Code/DoesNotExistHere", service.running.value.single().cwd)
         } finally {
             service.stop(runId)

@@ -212,6 +212,11 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(savedSshTargets = listOf("alice@box", "HostAlias")))
         assertEquals(listOf("alice@box", "HostAlias"), DesktopWorkspaceStore(file).load().savedSshTargets)
 
+        DesktopWorkspaceStore(file).save(saved.copy(hostScreenshotEnabled = true))
+        assertEquals(true, DesktopWorkspaceStore(file).load().hostScreenshotEnabled)
+        DesktopWorkspaceStore(file).save(saved.copy(hostScreenshotEnabled = false))
+        assertEquals(false, DesktopWorkspaceStore(file).load().hostScreenshotEnabled)
+
         // Concurrent ShellState-style save must not wipe targets written via update().
         val store = DesktopWorkspaceStore(file)
         store.update { it.copy(savedSshTargets = listOf("user@remote")) }

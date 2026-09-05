@@ -69,6 +69,7 @@ class DesktopWorkspaceStore(
             mcpServerEnabled = props.getProperty("mcpServerEnabled")?.toBooleanStrictOrNull() ?: false,
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             networkAccessEnabled = props.getProperty("networkAccessEnabled")?.toBooleanStrictOrNull() ?: false,
+            hostScreenshotEnabled = props.getProperty("hostScreenshotEnabled")?.toBooleanStrictOrNull() ?: false,
             networkAccessTailscaleOnly =
                 props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
             networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
@@ -235,6 +236,7 @@ class DesktopWorkspaceStore(
             setProperty("mcpServerEnabled", state.mcpServerEnabled.toString())
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
+            setProperty("hostScreenshotEnabled", state.hostScreenshotEnabled.toString())
             setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
             setProperty("networkAccessToken", state.networkAccessToken)
             setProperty("vapidPublicKey", vapidPublic)

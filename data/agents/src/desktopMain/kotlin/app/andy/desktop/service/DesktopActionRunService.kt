@@ -127,10 +127,9 @@ class DesktopActionRunService(
         // lib load), so it runs off the UI thread and the dock tab appears before it finishes.
         scope.launch(Dispatchers.IO) {
             runCatching {
-                val (command, spawnCwd) = resolveLaunch(remoteCwd)
-                val environment = buildTerminalLaunchEnvironment(
-                    project.env + action.env,
-                )
+                val envOverrides = project.env + action.env
+                val (command, spawnCwd) = resolveLaunch(remoteCwd, envOverrides)
+                val environment = buildTerminalLaunchEnvironment(envOverrides)
                 spawnSession(runId, command, spawnCwd, environment)
             }.fold(
                 onSuccess = { rustTerminal ->
@@ -280,10 +279,10 @@ class DesktopActionRunService(
     }
 
     /** Local shell argv + cwd, or `ssh -t` over the Host-switcher mux when remoted. */
-    private fun resolveLaunch(remoteCwd: String): Pair<List<String>, String> {
+    private fun resolveLaunch(remoteCwd: String, envOverrides: Map<String, String>): Pair<List<String>, String> {
         val endpoint = remoteShell()
         if (endpoint != null) {
-            val launch = RemoteProjectShell.launch(endpoint, remoteCwd)
+            val launch = RemoteProjectShell.launch(endpoint, remoteCwd, envOverrides)
             return launch.argv to launch.localCwd
         }
         return persistentShellCommand() to remoteCwd

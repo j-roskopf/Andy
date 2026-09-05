@@ -104,13 +104,21 @@ class SshPortForwarder(
             }
             return runCatching {
                 val process = ProcessBuilder(cmd).redirectErrorStream(true).start()
-                val output = process.inputStream.bufferedReader().readText()
+                // Drain output on a daemon thread so a stalled control command cannot fill the
+                // pipe and deadlock, and so we can read it after the bounded wait below.
+                val output = java.util.concurrent.CompletableFuture<String>()
+                Thread {
+                    runCatching { output.complete(process.inputStream.bufferedReader().readText()) }
+                        .onFailure { output.completeExceptionally(it) }
+                }.apply { isDaemon = true; start() }
                 val finished = process.waitFor(8, TimeUnit.SECONDS)
+                val text = runCatching { output.get(500, TimeUnit.MILLISECONDS) }.getOrDefault("")
+                if (!finished) process.destroyForcibly()
                 val ok = finished && process.exitValue() == 0
                 if (!ok) {
                     System.err.println(
                         "andy remote: ssh ${extra.joinToString(" ")} failed " +
-                            "(exit=${if (finished) process.exitValue() else "timeout"}): ${output.take(300)}",
+                            "(exit=${if (finished) process.exitValue() else "timeout"}): ${text.take(300)}",
                     )
                 }
                 ok
