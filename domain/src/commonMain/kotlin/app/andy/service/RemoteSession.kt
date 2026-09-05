@@ -20,6 +20,11 @@ data class RemoteSessionState(
     val error: String? = null,
     /** Non-secret saved SSH targets from workspace prefs. */
     val savedTargets: List<String> = emptyList(),
+    /**
+     * Probed once per successful connect — Screen Sharing / VNC / screenshot tools on the
+     * remote host. `null` while local or still connecting.
+     */
+    val hostCapabilities: RemoteHostCapabilities? = null,
 ) {
     val isRemote: Boolean get() = status == RemoteSessionStatus.Connected
 }
@@ -37,6 +42,12 @@ interface RemoteSessionService {
      */
     val remoteActionsConfig: StateFlow<ActionsConfig?>
 
+    /**
+     * Active SSH local forwards: remote port → local port. Empty while local.
+     * UI shows `8080 → 15001` only when the two numbers differ.
+     */
+    val portForwards: StateFlow<Map<Int, Int>>
+
     /** True while [RemoteSessionStatus.Connected] — local-only panes must stay hidden. */
     val isRemote: Boolean get() = state.value.isRemote
 
@@ -47,6 +58,18 @@ interface RemoteSessionService {
     suspend fun removeSavedTarget(target: String)
     /** Persist project edits to the remote host's `~/.andy/actions.toml` while remoted. */
     suspend fun saveRemoteActionsConfig(config: ActionsConfig): Result<Unit>
+
+    /**
+     * Lazily open an SSH local forward to [remotePort] on the connected host.
+     * Returns the bound local port (same number when free, else an allocated fallback).
+     */
+    suspend fun forwardPort(remotePort: Int): Result<Int>
+
+    /**
+     * Forward the remote VNC port and launch the OS VNC client when Screen Sharing is
+     * available. Returns a user-facing message on guidance / copy-URL / error paths.
+     */
+    suspend fun openRemoteScreen(): Result<String>
 }
 
 object UnavailableRemoteSessionService : RemoteSessionService {
@@ -54,6 +77,8 @@ object UnavailableRemoteSessionService : RemoteSessionService {
     override val state: StateFlow<RemoteSessionState> = _state.asStateFlow()
     override val remoteActionsConfig: StateFlow<ActionsConfig?> =
         MutableStateFlow<ActionsConfig?>(null).asStateFlow()
+    override val portForwards: StateFlow<Map<Int, Int>> =
+        MutableStateFlow<Map<Int, Int>>(emptyMap()).asStateFlow()
 
     override suspend fun connect(target: String): Result<Unit> =
         Result.failure(IllegalStateException("SSH remote requires Andy Desktop on macOS or Linux."))
@@ -68,5 +93,11 @@ object UnavailableRemoteSessionService : RemoteSessionService {
     override suspend fun removeSavedTarget(target: String) = Unit
 
     override suspend fun saveRemoteActionsConfig(config: ActionsConfig): Result<Unit> =
+        Result.failure(IllegalStateException("SSH remote requires Andy Desktop on macOS or Linux."))
+
+    override suspend fun forwardPort(remotePort: Int): Result<Int> =
+        Result.failure(IllegalStateException("SSH remote requires Andy Desktop on macOS or Linux."))
+
+    override suspend fun openRemoteScreen(): Result<String> =
         Result.failure(IllegalStateException("SSH remote requires Andy Desktop on macOS or Linux."))
 }

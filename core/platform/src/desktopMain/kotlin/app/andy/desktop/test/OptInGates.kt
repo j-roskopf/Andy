@@ -37,6 +37,14 @@ object OptInGates {
         )
     }
 
+    fun requireSshLoopback() {
+        assumeTrue(
+            "Set ANDY_SSH_LOOPBACK=1 to run SSH ControlMaster loopback forward tests " +
+                "(needs working `ssh 127.0.0.1` without a password prompt; not on PR CI)",
+            envTruthy("ANDY_SSH_LOOPBACK"),
+        )
+    }
+
     fun requireIosSimSmokeUdid(udid: String?) {
         assumeTrue(
             "iOS sim smoke needs ANDY_IOS_SIM_SMOKE=1 and a Booted simulator (not on PR CI; can hang macOS runners)",

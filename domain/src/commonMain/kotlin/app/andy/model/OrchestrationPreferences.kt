@@ -123,3 +123,31 @@ data class OrchestrationPreferences(
             raw?.let { name -> AgentKind.entries.find { it.name.equals(name, ignoreCase = true) } }
     }
 }
+
+/**
+ * Short slash-menu hint listing which orchestration-preference providers a user-invocable
+ * andy skill will consult. Null for non-orchestration skills.
+ *
+ * [skillName] may be a bare name (`andy-handoff`) or a composer token (`/andy-handoff`).
+ */
+fun orchestrationSkillProviderHint(
+    skillName: String,
+    prefs: OrchestrationPreferences = OrchestrationPreferences.Defaults,
+): String? {
+    val normalized = prefs.normalized()
+    fun label(role: OrchestrationProviderRole): String = normalized.agentFor(role).label
+    return when (skillName.composerCommandName().lowercase()) {
+        "andy-handoff" -> "uses ${label(OrchestrationProviderRole.Impl)}"
+        "andy-loop" ->
+            "worker ${label(OrchestrationProviderRole.Impl)} · verifier ${label(OrchestrationProviderRole.Audit)}"
+        "andy-advisor" ->
+            "planning ${label(OrchestrationProviderRole.Planning)} · " +
+                "audit ${label(OrchestrationProviderRole.Audit)} · " +
+                "research ${label(OrchestrationProviderRole.Research)}"
+        "andy-committee" ->
+            "planning ${label(OrchestrationProviderRole.Planning)} · " +
+                "research ${label(OrchestrationProviderRole.Research)} · " +
+                "audit ${label(OrchestrationProviderRole.Audit)}"
+        else -> null
+    }
+}

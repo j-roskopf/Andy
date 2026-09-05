@@ -340,6 +340,7 @@ class DesktopMcpServerService(
         "list_crashes", "get_crash",
         "capture_heap_dump", "get_memory_breakdown", "get_battery_stats",
         "start_screen_recording", "stop_screen_recording", "export_recording",
+        "screenshot_host",
     ) + agentProjectToolNames()
 
     private fun createMcpServer(callerTaskId: String? = null): Server {
@@ -1867,6 +1868,32 @@ class DesktopMcpServerService(
                     CallToolResult(content = listOf(TextContent(text = error.message ?: "Export failed")), isError = true)
                 },
             )
+        }
+
+        mcpServer.registerTool(
+            "screenshot_host",
+            "Capture the whole host desktop as a PNG (not a device/emulator). " +
+                "Disabled by default — enable in Settings → MCP → Allow host screenshots.",
+        ) { _ ->
+            val enabled = workspaceStore.state?.value?.hostScreenshotEnabled == true
+            if (!enabled) {
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = "screenshot_host is disabled. Enable it in Andy Settings → MCP " +
+                                "(Allow host screenshots). This tool captures the full desktop of " +
+                                "the machine running Andy and sends it to the agent model provider.",
+                        ),
+                    ),
+                    isError = true,
+                )
+            } else {
+                val bytes = HostScreenshotCapture.capturePngBytes()
+                val base64 = Base64.getEncoder().encodeToString(bytes)
+                CallToolResult(
+                    content = listOf(ImageContent(data = base64, mimeType = "image/png")),
+                )
+            }
         }
 
     }

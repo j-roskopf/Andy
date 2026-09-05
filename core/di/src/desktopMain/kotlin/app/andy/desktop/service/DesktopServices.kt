@@ -6,6 +6,7 @@ import app.andy.desktop.service.remote.SwappableAgentBackend
 import app.andy.desktop.service.remote.SwappableAutomationService
 import app.andy.desktop.service.remote.SwappableAvdService
 import app.andy.desktop.service.remote.SwappableDeviceService
+import app.andy.desktop.service.remote.SwappableLocalServerService
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.AgentTerminalMode
 import app.andy.desktop.service.agents.AntigravityAdapter
@@ -538,6 +539,16 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         workspaceStore = store,
         selectedSdkPath = { store.state.value.selectedSdkPath },
     )
+    val localLocalServers = DesktopLocalServerService(
+        runner = runner,
+        agentRuns = swappableAgents,
+        actionRuns = actionRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+    val localServers = SwappableLocalServerService(
+        initial = localLocalServers,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
     val remoteSession = DesktopRemoteSessionService(
         workspaceStore = store,
         scope = agentScope,
@@ -547,6 +558,10 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         localAgentBackend = remoteAgents,
         localAutomations = remoteAgents,
         androidBackend = androidBackend,
+        localServers = localServers,
+        localLocalServers = localLocalServers,
+        agentRunsForLocalServers = swappableAgents,
+        actionRunsForLocalServers = actionRuns,
     )
 
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
@@ -565,13 +580,6 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
                 localAttach.reloadTerminalAppearance()
             }
     }
-
-    val localServers = DesktopLocalServerService(
-        runner = runner,
-        agentRuns = swappableAgents,
-        actionRuns = actionRuns,
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    )
 
     val services = AndyServices(
         devices = devices,
@@ -806,6 +814,16 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         selectedSdkPath = { store.state.value.selectedSdkPath },
     )
+    val localLocalServers = DesktopLocalServerService(
+        runner = runner,
+        agentRuns = swappableAgents,
+        actionRuns = actionRuns,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
+    val localServers = SwappableLocalServerService(
+        initial = localLocalServers,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    )
     val remoteSession = DesktopRemoteSessionService(
         workspaceStore = store,
         scope = agentScope,
@@ -815,6 +833,10 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         localAgentBackend = agentRuns,
         localAutomations = automations,
         androidBackend = androidBackend,
+        localServers = localServers,
+        localLocalServers = localLocalServers,
+        agentRunsForLocalServers = swappableAgents,
+        actionRunsForLocalServers = actionRuns,
     )
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
@@ -854,13 +876,6 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
             System.err.println("andy: embedded unix MCP socket failed: ${result.stderr.ifBlank { result.stdout }}")
         }
     }
-
-    val localServers = DesktopLocalServerService(
-        runner = runner,
-        agentRuns = swappableAgents,
-        actionRuns = actionRuns,
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    )
 
     val services = AndyServices(
         devices = devices,

@@ -52,6 +52,12 @@ data class WorkspaceState(
     val proxyUpstreamTrustedCaPath: String? = null,
     val mcpServerEnabled: Boolean = false,
     val mcpServerPort: Int = 8565,
+    /**
+     * When true, the MCP `screenshot_host` tool may capture this machine's whole desktop
+     * and return it to attached agents. Off by default — unlike device screenshots, this
+     * reaches the user's full host screen.
+     */
+    val hostScreenshotEnabled: Boolean = false,
     /** When true, MCP/HTTP binds to 0.0.0.0 so other devices on the user's network can reach Andy. */
     val networkAccessEnabled: Boolean = false,
     /**

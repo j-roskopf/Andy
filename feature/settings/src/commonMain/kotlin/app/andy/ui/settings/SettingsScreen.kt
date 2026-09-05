@@ -271,6 +271,10 @@ fun SettingsScreen(
                     mcpService = services.mcp,
                     devices = services.devices,
                 )
+                HostScreenshotSettingsPanel(
+                    workspaceState = workspaceState,
+                    onUpdateWorkspace = onUpdateWorkspace,
+                )
                 McpToolsPanel(toolNames)
                 McpClientsPanel(
                     mcpService = services.mcp,
@@ -2365,6 +2369,29 @@ private fun McpToolsPanel(toolNames: List<String>) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HostScreenshotSettingsPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+) {
+    SettingsGroup(
+        title = "Host screenshots",
+        description = "The screenshot_host MCP tool captures this machine's whole desktop " +
+            "(not an emulator). Off by default because attached agents can send the image " +
+            "to their model provider.",
+    ) {
+        SettingsToggleRow(
+            label = "Allow host screenshots",
+            checked = workspaceState.hostScreenshotEnabled,
+            description = "When enabled, agents may call screenshot_host. Device screenshots " +
+                "are unaffected.",
+            onCheckedChange = { checked ->
+                onUpdateWorkspace { it.copy(hostScreenshotEnabled = checked) }
+            },
+        )
     }
 }
 

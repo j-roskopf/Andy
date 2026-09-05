@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
+import app.andy.service.RemoteScreenAvailability
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
@@ -194,6 +195,78 @@ internal fun RemoteSessionSidebarControls(
                 onClick = { runSwitch { remoteSession.reconnect() } },
                 enabled = !busy,
             ) { Text("Reconnect current", fontSize = 11.sp) }
+
+            RemoteScreenSection(
+                session = session,
+                busy = busy,
+                onOpenScreen = { onResult ->
+                    runSwitch {
+                        val result = remoteSession.openRemoteScreen()
+                        onResult(
+                            result.getOrElse { error ->
+                                error.message ?: "Could not open remote screen"
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RemoteScreenSection(
+    session: RemoteSessionState,
+    busy: Boolean,
+    onOpenScreen: (onResult: (String) -> Unit) -> Unit,
+) {
+    val caps = session.hostCapabilities
+    val availability = caps?.screenAvailability ?: RemoteScreenAvailability.Unsupported
+    var statusMessage by remember(session.target, availability) { mutableStateOf<String?>(null) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = AndySpace.Space2),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+    ) {
+        Text(
+            "Screen",
+            color = TextSecondary,
+            fontFamily = DisplayFont,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        when (availability) {
+            RemoteScreenAvailability.Available -> {
+                TextButton(
+                    onClick = {
+                        onOpenScreen { statusMessage = it }
+                    },
+                    enabled = !busy,
+                ) { Text("Open remote screen", fontSize = 11.sp) }
+            }
+            RemoteScreenAvailability.NeedsEnabling -> {
+                Text(
+                    caps?.enablementHint
+                        ?: "Enable Screen Sharing on the remote host, then reconnect.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+            RemoteScreenAvailability.Unsupported -> {
+                Text(
+                    caps?.enablementHint
+                        ?: "Remote screen sharing is not available on this host.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                )
+            }
+        }
+        statusMessage?.let { msg ->
+            Text(msg, color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
         }
     }
 }

@@ -99,27 +99,29 @@ class DesktopLocalServerService(
         if (!target.isStoppable) {
             return@withContext CommandResult.failure(target.stopDisabledReason ?: "Cannot stop this process.")
         }
-        val handle = ProcessHandle.of(pid.toLong())
-        if (handle.isEmpty || !handle.get().isAlive) {
+        // Always signal via [runner] so an SSH-backed runner kills the remote pid — never a
+        // local ProcessHandle that happens to share the same number.
+        if (!isProcessAliveViaRunner(pid)) {
             refresh()
             return@withContext CommandResult.failure("Process $pid is not running.")
         }
-        val process = handle.get()
-        process.destroy()
+        runner.run(listOf("kill", "-TERM", pid.toString()), timeoutSeconds = 5)
         delay(STOP_SIGNAL_SETTLE_MS)
-        if (process.isAlive) {
-            process.destroyForcibly()
+        if (isProcessAliveViaRunner(pid)) {
+            runner.run(listOf("kill", "-9", pid.toString()), timeoutSeconds = 5)
             delay(STOP_SIGNAL_SETTLE_MS)
         }
-        if (process.isAlive) {
-            runner.run(listOf("kill", "-9", pid.toString()), timeoutSeconds = 5)
-        }
         refresh()
-        if (ProcessHandle.of(pid.toLong()).map { it.isAlive }.orElse(false)) {
+        if (isProcessAliveViaRunner(pid)) {
             CommandResult.failure("Failed to stop pid $pid")
         } else {
             CommandResult.success("Stopped ${target.displayName} on localhost:$port")
         }
+    }
+
+    private suspend fun isProcessAliveViaRunner(pid: Int): Boolean {
+        val result = runner.run(listOf("kill", "-0", pid.toString()), timeoutSeconds = 3)
+        return result.exitCode == 0
     }
 
     private suspend fun scanOnce(): List<LocalServerProcess> {

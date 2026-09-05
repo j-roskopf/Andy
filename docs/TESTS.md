@@ -109,6 +109,18 @@ Agents whose CLI is missing or not logged in are skipped individually.
 ANDY_AGENT_E2E=1 ./gradlew desktopTest --tests '*AgentRunEndToEndTest*'
 ```
 
+### SSH loopback port forward — `ANDY_SSH_LOOPBACK`
+
+| | |
+| --- | --- |
+| **Why gated** | Needs a working passwordless `ssh 127.0.0.1` (keys / `ssh-agent`) to exercise ControlMaster `-O forward` against a throwaway local listener. |
+| **CI** | **Off**. |
+| **Tests** | `app.andy.desktop.service.remote.SshPortForwarderLoopbackTest` |
+
+```sh
+ANDY_SSH_LOOPBACK=1 ./gradlew desktopTest --tests '*SshPortForwarderLoopbackTest*'
+```
+
 ### ACP lane focused coverage
 
 The default ACP lane is covered without starting a real provider process:
@@ -140,6 +152,7 @@ These are not env-gated; they stay ignored until someone deliberately re-enables
 | `ANDY_DEVICE_SMOKE=1` | No | Online Android device/emulator |
 | `ANDY_DEVICE_NATIVE_SMOKE=1` | No | Online Android + native/GPU presenter |
 | `ANDY_AGENT_E2E=1` | No | Vendor CLIs + login (costs usage) |
+| `ANDY_SSH_LOOPBACK=1` | No | Passwordless `ssh 127.0.0.1` |
 | `@Ignore` catalog / cost cases | No | Manual un-ignore |
 
 ## Proxy knobs (not test gates)

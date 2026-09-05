@@ -1,11 +1,19 @@
 package app.andy.desktop.service.remote
 
 import app.andy.desktop.service.DesktopActionConfigStore
+import app.andy.desktop.service.CommandRunner
+import app.andy.desktop.service.DesktopLocalServerService
 import app.andy.service.WorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.model.ActionsConfig
+import app.andy.service.ActionRunService
+import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
+import app.andy.service.CommandResult
+import app.andy.service.LocalServerService
+import app.andy.service.RemoteHostCapabilities
+import app.andy.service.RemoteScreenAvailability
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
@@ -30,6 +38,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.File
@@ -56,6 +66,10 @@ class DesktopRemoteSessionService(
     private val localAgentBackend: app.andy.service.AgentRunService,
     private val localAutomations: AutomationService,
     private val androidBackend: AndroidBackendSwitcher? = null,
+    private val localServers: SwappableLocalServerService? = null,
+    private val localLocalServers: LocalServerService? = null,
+    private val agentRunsForLocalServers: AgentRunService? = null,
+    private val actionRunsForLocalServers: ActionRunService? = null,
 ) : RemoteSessionService {
     private val json = Json { ignoreUnknownKeys = true }
     private val mutex = Mutex()
@@ -65,9 +79,12 @@ class DesktopRemoteSessionService(
     override val state: StateFlow<RemoteSessionState> = _state.asStateFlow()
     private val _remoteActionsConfig = MutableStateFlow<ActionsConfig?>(null)
     override val remoteActionsConfig: StateFlow<ActionsConfig?> = _remoteActionsConfig.asStateFlow()
+    private val _portForwards = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    override val portForwards: StateFlow<Map<Int, Int>> = _portForwards.asStateFlow()
 
     private val tunnel = AtomicReference<TunnelHandles?>(null)
     private val remoteClient = AtomicReference<McpAgentRunClient?>(null)
+    private var remoteLocalServers: DesktopLocalServerService? = null
     /** Authenticated remotes kept alive while the UI is on Local or another host. */
     private val warmByTarget = java.util.concurrent.ConcurrentHashMap<String, WarmSession>()
     private var watchJob: Job? = null
@@ -78,6 +95,7 @@ class DesktopRemoteSessionService(
         val handles: TunnelHandles,
         val client: McpAgentRunClient,
         val actionsConfig: ActionsConfig,
+        val capabilities: RemoteHostCapabilities? = null,
     ) {
         fun isAlive(): Boolean =
             handles.process.isAlive && handles.localAndyd.exists()
@@ -143,9 +161,16 @@ class DesktopRemoteSessionService(
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
             androidBackend?.deactivateRemote()
+            deactivateLocalServerBackend()
+            publishPortForwards(null)
             _remoteActionsConfig.value = null
             _state.update {
-                it.copy(status = RemoteSessionStatus.Local, target = null, error = message)
+                it.copy(
+                    status = RemoteSessionStatus.Local,
+                    target = null,
+                    error = message,
+                    hostCapabilities = null,
+                )
             }
             return Result.failure(result.exceptionOrNull() ?: IllegalStateException(message))
         }
@@ -228,6 +253,7 @@ class DesktopRemoteSessionService(
             controlPath = controlPath,
             target = target,
             localAdbPort = localAdbPort,
+            portForwarder = SshPortForwarder(target, controlPath),
         )
         tunnel.set(handles)
 
@@ -252,13 +278,25 @@ class DesktopRemoteSessionService(
         agentBackend.switchTo(client)
         automationBackend.switchTo(client)
         activateAndroidBackend(handles)
+        activateLocalServerBackend(handles)
         configureRemoteTerminalBridge(client, localTmux)
 
+        val capabilities = runCatching {
+            RemoteHostCapabilityScanner.probe(target, controlPath)
+        }.getOrElse {
+            RemoteHostCapabilities(localVncClient = LocalVncClient.detect())
+        }
         _remoteActionsConfig.value = loadRemoteActionsConfig(target, controlPath)
 
         addSavedTargetQuiet(target)
+        publishPortForwards(handles)
         _state.update {
-            it.copy(status = RemoteSessionStatus.Connected, target = target, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Connected,
+                target = target,
+                error = null,
+                hostCapabilities = capabilities,
+            )
         }
         startWatch(target, localAndyd, sshProcess)
     }
@@ -272,12 +310,19 @@ class DesktopRemoteSessionService(
         agentBackend.switchTo(warm.client)
         automationBackend.switchTo(warm.client)
         activateAndroidBackend(warm.handles)
+        activateLocalServerBackend(warm.handles)
         configureRemoteTerminalBridge(warm.client, warm.handles.localTmux)
 
         _remoteActionsConfig.value = warm.actionsConfig
         addSavedTargetQuiet(target)
+        publishPortForwards(warm.handles)
         _state.update {
-            it.copy(status = RemoteSessionStatus.Connected, target = target, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Connected,
+                target = target,
+                error = null,
+                hostCapabilities = warm.capabilities,
+            )
         }
         startWatch(target, warm.handles.localAndyd, warm.handles.process)
     }
@@ -291,6 +336,38 @@ class DesktopRemoteSessionService(
         androidBackend?.activateRemote(adbTunnel)
     }
 
+    private fun activateLocalServerBackend(handles: TunnelHandles) {
+        val swappable = localServers ?: return
+        val agents = agentRunsForLocalServers ?: return
+        val actions = actionRunsForLocalServers ?: return
+        val probes = SshRemoteProbes(handles.target, handles.controlPath)
+        val sshRunner = CommandRunner(executor = { command, _ ->
+            val result = probes.sshExec(command)
+            CommandResult(result.exitCode, result.stdout, result.stderr)
+        })
+        val remote = DesktopLocalServerService(
+            runner = sshRunner,
+            agentRuns = agents,
+            actionRuns = actions,
+            scope = scope,
+        )
+        remoteLocalServers?.dispose()
+        remoteLocalServers = remote
+        swappable.switchTo(remote)
+    }
+
+    private fun deactivateLocalServerBackend() {
+        val swappable = localServers ?: return
+        val local = localLocalServers ?: return
+        remoteLocalServers?.dispose()
+        remoteLocalServers = null
+        swappable.switchTo(local)
+    }
+
+    private fun publishPortForwards(handles: TunnelHandles?) {
+        _portForwards.value = handles?.portForwarder?.mapping().orEmpty()
+    }
+
     private fun parkActiveIfAny() {
         watchJob?.cancel()
         watchJob = null
@@ -302,11 +379,17 @@ class DesktopRemoteSessionService(
         }
         client.setSshProbeTarget(null)
         val actions = _remoteActionsConfig.value ?: ActionsConfig()
+        val capabilities = _state.value.hostCapabilities
         // Replace any stale warm entry for this host.
-        warmByTarget.put(handles.target, WarmSession(handles, client, actions))?.let { stale ->
+        warmByTarget.put(
+            handles.target,
+            WarmSession(handles, client, actions, capabilities),
+        )?.let { stale ->
             if (stale.handles !== handles) destroyHandles(stale.handles)
         }
         clearRemoteTerminalBridge()
+        deactivateLocalServerBackend()
+        publishPortForwards(null)
     }
 
     private fun configureRemoteTerminalBridge(client: McpAgentRunClient, localTmux: File) {
@@ -335,6 +418,7 @@ class DesktopRemoteSessionService(
     }
 
     private fun destroyHandles(handles: TunnelHandles) {
+        runCatching { handles.portForwarder.releaseAll() }
         handles.process.destroy()
         runCatching {
             if (!handles.process.waitFor(2, TimeUnit.SECONDS)) {
@@ -352,6 +436,66 @@ class DesktopRemoteSessionService(
         runCatching {
             writeRemoteActionsConfig(handles.target, handles.controlPath, config)
             _remoteActionsConfig.value = config
+        }
+    }
+
+    override suspend fun forwardPort(remotePort: Int): Result<Int> = mutex.withLock {
+        val handles = tunnel.get()
+            ?: return Result.failure(IllegalStateException("Not connected to a remote host"))
+        runCatching {
+            val local = handles.portForwarder.forward(remotePort)
+            publishPortForwards(handles)
+            local
+        }
+    }
+
+    override suspend fun openRemoteScreen(): Result<String> = mutex.withLock {
+        val handles = tunnel.get()
+            ?: return Result.failure(IllegalStateException("Not connected to a remote host"))
+        val caps = _state.value.hostCapabilities
+            ?: return Result.failure(IllegalStateException("Remote host capabilities are unknown"))
+        when (caps.screenAvailability) {
+            RemoteScreenAvailability.NeedsEnabling ->
+                return Result.success(
+                    caps.enablementHint
+                        ?: "Enable Screen Sharing / a VNC server on the remote host, then reconnect.",
+                )
+            RemoteScreenAvailability.Unsupported ->
+                return Result.success(
+                    "Remote screen sharing is not available on this host. " +
+                        (caps.enablementHint ?: "No VNC server path was detected."),
+                )
+            RemoteScreenAvailability.Available -> Unit
+        }
+        runCatching {
+            val localPort = handles.portForwarder.forward(caps.vncPort)
+            publishPortForwards(handles)
+            val vncUrl = "vnc://127.0.0.1:$localPort"
+            val client = caps.localVncClient
+            if (client == null) {
+                copyToClipboard(vncUrl)
+                "No VNC client found on this machine. Copied $vncUrl to the clipboard — " +
+                    "open it with your Screen Sharing / VNC app."
+            } else {
+                val argv = LocalVncClient.launchArgv(client, vncUrl)
+                val process = ProcessBuilder(argv).redirectErrorStream(true).start()
+                // Don't wait forever — Screen Sharing.app stays running.
+                val exitedQuickly = process.waitFor(800, TimeUnit.MILLISECONDS)
+                if (exitedQuickly && process.exitValue() != 0) {
+                    val err = process.inputStream.bufferedReader().readText().take(200)
+                    copyToClipboard(vncUrl)
+                    "Could not launch VNC client (${err.ifBlank { "exit ${process.exitValue()}" }}). " +
+                        "Copied $vncUrl to the clipboard."
+                } else {
+                    "Opening remote screen via $vncUrl"
+                }
+            }
+        }
+    }
+
+    private fun copyToClipboard(text: String) {
+        runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
         }
     }
 
@@ -398,6 +542,8 @@ class DesktopRemoteSessionService(
         } else {
             remoteClient.getAndSet(null)?.setSshProbeTarget(null)
             teardownTunnelOnly()
+            deactivateLocalServerBackend()
+            publishPortForwards(null)
         }
         _remoteActionsConfig.value = null
         clearRemoteTerminalBridge()
@@ -405,9 +551,15 @@ class DesktopRemoteSessionService(
             agentBackend.switchTo(localAgentBackend)
             automationBackend.switchTo(localAutomations)
             androidBackend?.deactivateRemote()
+            deactivateLocalServerBackend()
         }
         _state.update {
-            it.copy(status = RemoteSessionStatus.Local, target = null, error = null)
+            it.copy(
+                status = RemoteSessionStatus.Local,
+                target = null,
+                error = null,
+                hostCapabilities = null,
+            )
         }
     }
 
@@ -638,5 +790,6 @@ class DesktopRemoteSessionService(
         val controlPath: File,
         val target: String,
         val localAdbPort: Int,
+        val portForwarder: SshPortForwarder,
     )
 }

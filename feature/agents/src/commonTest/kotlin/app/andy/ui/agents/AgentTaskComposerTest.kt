@@ -26,6 +26,23 @@ class AgentTaskComposerTest {
     }
 
     @Test
+    fun orchestrationSlashMenuDescriptionKeepsFirstSentenceOnly() {
+        assertEquals(
+            "Hand off the current task to another agent with full context.",
+            orchestrationSlashMenuDescription(
+                "Hand off the current task to another agent with full context. Use when the user says \"handoff\".",
+            ),
+        )
+        assertEquals(
+            "Run an agent loop until an exit condition is met, worker/verifier cycle.",
+            orchestrationSlashMenuDescription(
+                "Run an agent loop until an exit condition is met, worker/verifier cycle. Use for \"loop\".",
+            ),
+        )
+        assertEquals("Short", orchestrationSlashMenuDescription("Short"))
+    }
+
+    @Test
     fun parsesOnlyFiniteNonNegativeBudgets() {
         assertEquals(2.5, " 2.50 ".toMaxBudgetUsd())
         assertEquals(0.0, "0".toMaxBudgetUsd())

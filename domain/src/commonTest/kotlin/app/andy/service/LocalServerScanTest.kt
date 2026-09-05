@@ -362,4 +362,27 @@ class LocalServerScanTest {
         assertEquals("http://localhost:8080", server.browserUrl)
         assertNull(LocalServerProcess(pid = 12, ports = emptyList(), displayName = "Unknown").browserUrl)
     }
+
+    @Test
+    fun parseLinuxLsofTcpListenOutput() {
+        // Linux lsof -F often reports IPv6 dual-stack and bare command names.
+        val output = """
+            p2211
+            cnode
+            n*:5173
+            p2211
+            cnode
+            n[::1]:5173
+            p3344
+            cjava
+            n127.0.0.1:8080
+        """.trimIndent()
+        val listeners = LocalServerScan.parseLsofTcpListenOutput(output)
+        assertEquals(3, listeners.size)
+        assertEquals(2211, listeners[0].pid)
+        assertEquals("node", listeners[0].command)
+        assertEquals(5173, listeners[0].port)
+        assertEquals(8080, listeners[2].port)
+        assertEquals("java", listeners[2].command)
+    }
 }
