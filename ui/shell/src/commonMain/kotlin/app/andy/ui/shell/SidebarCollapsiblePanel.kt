@@ -33,6 +33,9 @@ import app.andy.ui.theme.TextSecondary
 
 /**
  * Bottom-sidebar section: single-line disclosure (`▾ Host · Local`) and optional top divider.
+ *
+ * [detailLeading] replaces the `·` separator with a mark — the host panel uses it for
+ * connection state so the collapsed header still carries status.
  */
 @Composable
 internal fun SidebarCollapsiblePanel(
@@ -43,6 +46,7 @@ internal fun SidebarCollapsiblePanel(
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     showTopDivider: Boolean = false,
+    detailLeading: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier.fillMaxWidth()) {
@@ -73,12 +77,16 @@ internal fun SidebarCollapsiblePanel(
                 fontSize = 11.sp,
                 maxLines = 1,
             )
-            Text(
-                "·",
-                color = Border.copy(alpha = 0.7f),
-                fontFamily = DisplayFont,
-                fontSize = 11.sp,
-            )
+            if (detailLeading != null) {
+                detailLeading()
+            } else {
+                Text(
+                    "·",
+                    color = Border.copy(alpha = 0.7f),
+                    fontFamily = DisplayFont,
+                    fontSize = 11.sp,
+                )
+            }
             Text(
                 detail,
                 color = detailColor,

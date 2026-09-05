@@ -31,6 +31,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -69,6 +71,7 @@ internal fun LocalServersMenu(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onLabelPositioned: ((Float) -> Unit)? = null,
 ) {
     val servers by services.localServers.servers.collectAsState()
 
@@ -84,6 +87,7 @@ internal fun LocalServersMenu(
         selected = expanded,
         onClick = { onExpandedChange(!expanded) },
         modifier = modifier,
+        onLabelPositioned = onLabelPositioned,
     )
 }
 
@@ -151,6 +155,7 @@ private fun LocalServersTrigger(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLabelPositioned: ((Float) -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -170,6 +175,15 @@ private fun LocalServersTrigger(
             fontFamily = DisplayFont,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
+            modifier = Modifier.then(
+                if (onLabelPositioned != null) {
+                    Modifier.onGloballyPositioned { coordinates ->
+                        onLabelPositioned(coordinates.positionInRoot().x)
+                    }
+                } else {
+                    Modifier
+                },
+            ),
         )
         Text(
             count.toString(),

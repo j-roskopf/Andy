@@ -21,11 +21,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -88,7 +91,8 @@ internal fun TopChrome(
     localServersContent: @Composable (
         expanded: Boolean,
         onExpandedChange: (Boolean) -> Unit,
-    ) -> Unit = { _, _ -> },
+        onAnchorPositioned: (Float) -> Unit,
+    ) -> Unit = { _, _, _ -> },
     localServersFlyout: @Composable (onDismiss: () -> Unit) -> Unit = {},
     rightPaneOpen: Boolean = false,
     bottomPaneOpen: Boolean = false,
@@ -109,6 +113,8 @@ internal fun TopChrome(
         actionProject?.actions?.firstOrNull { it.id == selectedActionId } ?: actionProject?.actions?.firstOrNull()
     }
     var flyout by remember { mutableStateOf<ChromeFlyoutKind?>(null) }
+    val flyoutAnchorXs = remember { mutableStateMapOf<ChromeFlyoutKind, Float>() }
+    val dockLandingAnchorXs = remember { mutableStateMapOf<DockPlacement, Float>() }
 
     // Dock landing is owned by ShellState (placement icons); keep local flyouts exclusive with it.
     val effectiveFlyout = if (dockLandingFor != null) ChromeFlyoutKind.DockLanding else flyout
@@ -116,6 +122,16 @@ internal fun TopChrome(
     // branch would otherwise collapse to empty and jump shut).
     var renderedFlyout by remember { mutableStateOf<ChromeFlyoutKind?>(null) }
     if (effectiveFlyout != null) renderedFlyout = effectiveFlyout
+    var renderedDockLandingFor by remember { mutableStateOf<DockPlacement?>(null) }
+    if (dockLandingFor != null) renderedDockLandingFor = dockLandingFor
+
+    fun updateFlyoutAnchor(kind: ChromeFlyoutKind, xInRoot: Float) {
+        if (flyoutAnchorXs[kind] != xInRoot) flyoutAnchorXs[kind] = xInRoot
+    }
+
+    fun updateDockLandingAnchor(placement: DockPlacement, xInRoot: Float) {
+        if (dockLandingAnchorXs[placement] != xInRoot) dockLandingAnchorXs[placement] = xInRoot
+    }
 
     fun openFlyout(kind: ChromeFlyoutKind) {
         if (dockLandingFor != null) onDismissDockLanding()
@@ -158,10 +174,14 @@ internal fun TopChrome(
                     if (showLocalServers) {
                         localServersContent(
                             effectiveFlyout == ChromeFlyoutKind.LocalServers,
-                        ) { expanded ->
-                            if (expanded) openFlyout(ChromeFlyoutKind.LocalServers)
-                            else if (flyout == ChromeFlyoutKind.LocalServers) flyout = null
-                        }
+                            { expanded ->
+                                if (expanded) openFlyout(ChromeFlyoutKind.LocalServers)
+                                else if (flyout == ChromeFlyoutKind.LocalServers) flyout = null
+                            },
+                            { xInRoot ->
+                                updateFlyoutAnchor(ChromeFlyoutKind.LocalServers, xInRoot)
+                            },
+                        )
                     }
                     if (destination != AndyDestination.Network && proxyRunning) {
                         ProxyToolbarIndicator(onClick = onProxyClick)
@@ -174,6 +194,7 @@ internal fun TopChrome(
                             onToggleFlyout = ::openFlyout,
                             onSelectionChange = onActionSelectionChange,
                             onRunAction = onRunAction,
+                            onAnchorPositioned = ::updateFlyoutAnchor,
                         )
                     }
                     if (selectedDevice?.kind == DeviceKind.Emulator && selectedDevice.state == DeviceConnectionState.Online) {
@@ -202,6 +223,9 @@ internal fun TopChrome(
                         deviceLabels = deviceLabels,
                         expandedFlyout = effectiveFlyout,
                         onToggleFlyout = ::openFlyout,
+                        onAnchorPositioned = { xInRoot ->
+                            updateFlyoutAnchor(ChromeFlyoutKind.DevicePicker, xInRoot)
+                        },
                     )
                     if (destination == AndyDestination.Actions) {
                         ProjectPaneToggle(
@@ -216,6 +240,9 @@ internal fun TopChrome(
                             flyout = null
                             onPlacementIconClick(DockPlacement.Bottom)
                         },
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            updateDockLandingAnchor(DockPlacement.Bottom, coordinates.positionInRoot().x)
+                        },
                     )
                     PanePlacementToggle(
                         placement = DockPlacement.Right,
@@ -224,6 +251,9 @@ internal fun TopChrome(
                             flyout = null
                             onPlacementIconClick(DockPlacement.Right)
                         },
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            updateDockLandingAnchor(DockPlacement.Right, coordinates.positionInRoot().x)
+                        },
                     )
                 }
             },
@@ -231,10 +261,21 @@ internal fun TopChrome(
 
         ChromeFlyout(
             visible = effectiveFlyout != null,
-            contentAlignment = if (renderedFlyout == ChromeFlyoutKind.DockLanding) {
-                Alignment.End
-            } else {
-                Alignment.Start
+            anchorXInRoot = when (renderedFlyout) {
+                ChromeFlyoutKind.DockLanding -> dockLandingAnchorXs[renderedDockLandingFor]
+                else -> renderedFlyout?.let(flyoutAnchorXs::get)
+            },
+            preferredContentWidth = when (renderedFlyout) {
+                ChromeFlyoutKind.LocalServers -> 420.dp
+                ChromeFlyoutKind.DockLanding -> 280.dp
+                ChromeFlyoutKind.DevicePicker -> 260.dp
+                ChromeFlyoutKind.ActionProjectPicker -> 260.dp
+                ChromeFlyoutKind.ActionPicker -> 300.dp
+                null -> 320.dp
+            },
+            contentAnchorInset = when (renderedFlyout) {
+                ChromeFlyoutKind.ActionPicker -> AndySpace.Space2 + 16.dp + AndySpace.Space3
+                else -> AndySpace.Space2
             },
             contentKey = renderedFlyout,
         ) {
@@ -323,6 +364,7 @@ private fun ActionRunnerSelector(
     onToggleFlyout: (ChromeFlyoutKind) -> Unit,
     onSelectionChange: (projectId: String, actionId: String?) -> Unit,
     onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onAnchorPositioned: (ChromeFlyoutKind, Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -340,6 +382,9 @@ private fun ActionRunnerSelector(
                 Spacer(Modifier.width(AndySpace.Space2))
             },
             contentDescription = "Select project",
+            onLabelPositioned = { xInRoot ->
+                onAnchorPositioned(ChromeFlyoutKind.ActionProjectPicker, xInRoot)
+            },
         )
 
         AndyDropdownTrigger(
@@ -357,6 +402,9 @@ private fun ActionRunnerSelector(
                 Spacer(Modifier.width(AndySpace.Space2))
             },
             contentDescription = "Select action",
+            onLabelPositioned = { xInRoot ->
+                onAnchorPositioned(ChromeFlyoutKind.ActionPicker, xInRoot)
+            },
         )
 
         TextButton(
@@ -427,6 +475,7 @@ private fun DevicePickerMenu(
     deviceLabels: Map<String, String>,
     expandedFlyout: ChromeFlyoutKind?,
     onToggleFlyout: (ChromeFlyoutKind) -> Unit,
+    onAnchorPositioned: (Float) -> Unit,
 ) {
     val label = selectedIosTarget?.let { deviceLabels[it.udid] ?: it.displayName }
         ?: selectedDevice?.let { deviceLabels[it.serial] ?: it.displayName }
@@ -441,6 +490,7 @@ private fun DevicePickerMenu(
             Spacer(Modifier.width(AndySpace.Space1))
         },
         contentDescription = "Select device",
+        onLabelPositioned = onAnchorPositioned,
     )
 }
 

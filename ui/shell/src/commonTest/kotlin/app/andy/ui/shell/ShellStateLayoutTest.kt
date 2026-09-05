@@ -2,7 +2,10 @@ package app.andy.ui.shell
 
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
+import app.andy.model.AndroidDevice
 import app.andy.model.ActionsConfig
+import app.andy.model.DeviceConnectionState
+import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
@@ -15,9 +18,11 @@ import app.andy.model.SavedDockTabKind
 import app.andy.model.SavedTerminalNode
 import app.andy.model.SavedTerminalSession
 import app.andy.service.ActionRunService
+import app.andy.service.DeviceService
 import app.andy.service.IosDeviceService
 import app.andy.service.PlatformCapabilities
 import app.andy.service.UnavailableActionRunService
+import app.andy.service.UnavailableDeviceService
 import app.andy.service.UnavailableIosDeviceService
 import app.andy.service.createUnavailableAndyServices
 import kotlinx.coroutines.CoroutineScope
@@ -124,6 +129,50 @@ class ShellStateLayoutTest {
         // Focused run must be updated to the fresh run, not prior
         assertEquals("run-restored", state.terminalRunId)
         assertEquals("run-restored", state.activeRunId)
+    }
+
+    @Test
+    fun actionRunTerminalDefaultsToBottomDock() {
+        val state = ShellState(createUnavailableAndyServices(), CoroutineScope(EmptyCoroutineContext))
+
+        // No placement picked by the user and nothing terminal-shaped on the right: use the bottom.
+        state.focusTerminalRun("run-1")
+
+        assertTrue(state.docks.right.tabs.isEmpty())
+        assertEquals(listOf(DockTabKind.Terminal), state.docks.bottom.tabs.map { it.kind })
+        assertTrue(state.docks.bottom.visible)
+
+        // A second run joins the terminal already in the bottom dock rather than flipping sides.
+        state.focusTerminalRun("run-2")
+        assertTrue(state.docks.right.tabs.isEmpty())
+        assertEquals(2, state.docks.bottom.tabs.size)
+    }
+
+    @Test
+    fun actionRunTerminalFollowsRightDockTerminals() {
+        val state = ShellState(createUnavailableAndyServices(), CoroutineScope(EmptyCoroutineContext))
+
+        // A placement the user picked by hand keeps later action runs with it.
+        state.focusTerminalRun("run-1", DockPlacement.Right)
+        state.focusTerminalRun("run-2")
+
+        assertEquals(2, state.docks.right.tabs.size)
+        assertTrue(state.docks.bottom.tabs.isEmpty())
+    }
+
+    @Test
+    fun rerunOfBottomTerminalStaysInBottomDock() {
+        val state = ShellState(createUnavailableAndyServices(), CoroutineScope(EmptyCoroutineContext))
+
+        state.focusTerminalRun("run-bottom", DockPlacement.Bottom)
+        // Right now holds a terminal too, so the auto placement would otherwise be Right —
+        // an existing home for the run wins over it.
+        state.focusTerminalRun("run-right", DockPlacement.Right)
+
+        state.focusTerminalRun("run-bottom")
+
+        assertNotNull(state.docks.bottom.tabOwningRun("run-bottom"))
+        assertNull(state.docks.right.tabOwningRun("run-bottom"))
     }
 
     @Test
@@ -239,6 +288,38 @@ class ShellStateLayoutTest {
     }
 
     @Test
+    fun refreshClearsDisconnectedLiveDockTargetAndReleasesMirrorHold() = runBlocking {
+        val deviceService = MutableDeviceService(listOf(onlineDevice("device-1")))
+        val state = ShellState(
+            createUnavailableAndyServices().copy(devices = deviceService),
+            CoroutineScope(EmptyCoroutineContext),
+        )
+        val held = mutableListOf<String>()
+        val released = mutableListOf<String>()
+        state.onLiveMirrorHold = held::add
+        state.onLiveMirrorRelease = released::add
+
+        state.refreshDevicesNow()
+        state.openNewLiveTab(DockPlacement.Right)
+        val tab = state.docks.right.tabs.single()
+
+        assertEquals("device-1", tab.targetId)
+        assertEquals(listOf("device-1"), held)
+
+        deviceService.current = emptyList()
+        state.refreshDevicesNow()
+
+        val clearedTab = state.docks.right.tabs.single()
+        val clearedLeaf = clearedTab.liveTree!!.findLeaf(clearedTab.focusedLiveLeafId!!)
+        assertNull(state.selectedSerial)
+        assertNull(clearedTab.targetId)
+        assertNull(clearedTab.title)
+        assertNull(clearedLeaf!!.targetId)
+        assertNull(clearedLeaf.title)
+        assertEquals(listOf("device-1"), released)
+    }
+
+    @Test
     fun setLiveTabTargetRejectsSecondSameKindIosTarget() = runBlocking {
         val iosDevices = object : IosDeviceService by UnavailableIosDeviceService {
             override suspend fun listTargets() = listOf(
@@ -307,4 +388,17 @@ class ShellStateLayoutTest {
         val emptyDocksMenu = menu.copy(canSave = false, atLimit = false)
         assertFalse(emptyDocksMenu.isSaveActionEnabled)
     }
+
+    private class MutableDeviceService(
+        var current: List<AndroidDevice>,
+    ) : DeviceService by UnavailableDeviceService {
+        override suspend fun listDevices(): List<AndroidDevice> = current
+    }
+
+    private fun onlineDevice(serial: String) = AndroidDevice(
+        serial = serial,
+        displayName = serial,
+        kind = DeviceKind.Physical,
+        state = DeviceConnectionState.Online,
+    )
 }

@@ -90,7 +90,40 @@ internal object ScreenshotServices {
             projectWorkflows = ScreenshotProjectWorkflows,
             kanban = ScreenshotKanban,
             dhu = ScreenshotDhu,
+            remoteSession = if (scenario == AndyScreenshotScenario.HostRemoteConnected) {
+                ScreenshotRemoteSession
+            } else {
+                UnavailableRemoteSessionService
+            },
         )
+    }
+
+    /** Connected SSH host with screen sharing up — drives the sidebar host panel. */
+    private object ScreenshotRemoteSession : RemoteSessionService {
+        private val _state = MutableStateFlow(
+            RemoteSessionState(
+                status = RemoteSessionStatus.Connected,
+                target = "ada@garden-box",
+                savedTargets = listOf("ada@garden-box", "ada@build-rack"),
+                hostCapabilities = RemoteHostCapabilities(
+                    os = RemoteHostOs.Mac,
+                    vncServerListening = true,
+                    localVncClient = "/System/Library/CoreServices/Screen Sharing.app",
+                ),
+            ),
+        )
+        override val state: StateFlow<RemoteSessionState> = _state
+        override val remoteActionsConfig: StateFlow<ActionsConfig?> = MutableStateFlow(null)
+        override val portForwards: StateFlow<Map<Int, Int>> = MutableStateFlow(emptyMap())
+
+        override suspend fun connect(target: String, rememberPassword: Boolean) = Result.success(Unit)
+        override suspend fun disconnect() = Unit
+        override suspend fun reconnect(rememberPassword: Boolean) = Result.success(Unit)
+        override suspend fun addSavedTarget(target: String) = Unit
+        override suspend fun removeSavedTarget(target: String) = Unit
+        override suspend fun saveRemoteActionsConfig(config: ActionsConfig) = Result.success(Unit)
+        override suspend fun forwardPort(remotePort: Int) = Result.success(remotePort)
+        override suspend fun openRemoteScreen() = Result.success("Opened Screen Sharing")
     }
 
     private object ScreenshotDhu : DhuService {

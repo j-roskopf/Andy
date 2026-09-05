@@ -54,6 +54,7 @@ internal enum class AndyScreenshotScenario(
     RecordingsExport("desktop-recordings-export.png", AndyDestination.Recordings),
     SettingsMcp("desktop-settings-mcp.png", AndyDestination.Settings),
     SettingsNetworkAccess("desktop-settings-network-access.png", AndyDestination.Settings),
+    HostRemoteConnected("desktop-host-remote-connected.png", AndyDestination.Devices),
     MirrorPopOut("desktop-mirror-pop-out.png"),
 }
 
