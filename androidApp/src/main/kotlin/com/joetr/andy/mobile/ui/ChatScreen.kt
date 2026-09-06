@@ -108,7 +108,14 @@ fun ChatScreen(
             client.observeChat(chatId).collect { batch ->
                 batch.chat?.let { chat = it }
                 if (batch.events.isNotEmpty()) {
-                    events = (events + batch.events).coalesceStreams()
+                    // The server sends replaceFrom to avoid duplicating history the client
+                    // already loaded over REST, and to coalesce rewritten/edited events.
+                    val base = if (batch.replaceFrom != null) {
+                        events.take(batch.replaceFrom)
+                    } else {
+                        events
+                    }
+                    events = (base + batch.events).coalesceStreams()
                 }
                 when {
                     batch.clearUserInput -> pendingInput = null

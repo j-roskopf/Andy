@@ -883,27 +883,8 @@ private fun LivePanel(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Codec", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("h264" to "H.264", "h265" to "H.265").forEach { (id, label) ->
-                ChoicePill(
-                    label = label,
-                    selected = workspace.mirrorCodec == id,
-                    contentDescription = "$label codec",
-                    onClick = {
-                        applyMirrorSettings(
-                            update = update,
-                            maxSize = workspace.mirrorMaxSize,
-                            bitRate = workspace.mirrorBitRate,
-                            maxFps = workspace.mirrorMaxFps,
-                            codec = id,
-                        )
-                    },
-                )
-            }
-        }
         Text(
-            "H.265 often needs less bandwidth at the same visual quality; stay on H.264 if a device rejects it.",
+            "Streams use the H.264 codec; the mirror decoder only supports H.264 today.",
             color = TextSecondary,
             fontSize = 11.sp,
             lineHeight = 15.sp,

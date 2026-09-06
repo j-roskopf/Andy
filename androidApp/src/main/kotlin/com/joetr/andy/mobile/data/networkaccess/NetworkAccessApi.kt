@@ -33,6 +33,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
@@ -274,11 +275,13 @@ class NetworkAccessClient(
             else -> runCatching { json.decodeFromJsonElement(UserInputRequestDto.serializer(), el) }.getOrNull()
         }
         val clearUserInput = obj.containsKey("userInputRequest") && obj["userInputRequest"] is JsonNull
+        val replaceFrom = (obj["replaceFrom"] as? JsonPrimitive)?.intOrNull
         return ChatWsBatch(
             chat = chat,
             events = events,
             userInputRequest = userInput,
             clearUserInput = clearUserInput,
+            replaceFrom = replaceFrom,
         )
     }
 
@@ -338,6 +341,8 @@ data class ChatWsBatch(
     val events: List<ChatEventDto> = emptyList(),
     val userInputRequest: UserInputRequestDto? = null,
     val clearUserInput: Boolean = false,
+    /** Index into the full transcript this batch replaces from; null means append. */
+    val replaceFrom: Int? = null,
 )
 
 class NetworkAccessException(

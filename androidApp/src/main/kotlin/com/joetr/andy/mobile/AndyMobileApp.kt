@@ -262,6 +262,7 @@ fun AndyMobileApp(
                                             context = context,
                                             baseUrl = host.resolvedNetworkAccessBaseUrl(),
                                             sessionToken = token,
+                                            masterToken = repository.networkAccessToken(host.id).orEmpty(),
                                             hostName = host.displayName,
                                         )
                                     }

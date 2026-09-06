@@ -20,6 +20,7 @@ import androidx.security.crypto.MasterKey
 import com.joetr.andy.MainActivity
 import com.joetr.andy.R
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
+import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,14 +71,15 @@ class AttentionPushService : Service() {
                 val baseUrl = intent.getStringExtra(EXTRA_BASE_URL).orEmpty()
                 val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
                 val hostName = intent.getStringExtra(EXTRA_HOST_NAME).orEmpty().ifBlank { "Andy host" }
+                val masterToken = intent.getStringExtra(EXTRA_MASTER_TOKEN).orEmpty()
                 if (baseUrl.isBlank() || token.isBlank()) {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                persistSession(this, baseUrl, token, hostName)
+                persistSession(this, baseUrl, token, masterToken, hostName)
                 hostLabel = hostName
                 startAsForeground(combinedStatus())
-                connect(baseUrl, token)
+                connect(baseUrl, token, masterToken)
                 return START_STICKY
             }
             else -> {
@@ -87,7 +89,7 @@ class AttentionPushService : Service() {
                 }
                 hostLabel = session.hostName
                 startAsForeground(combinedStatus())
-                connect(session.baseUrl, session.token)
+                connect(session.baseUrl, session.token, session.masterToken)
                 return START_STICKY
             }
         }
@@ -101,19 +103,45 @@ class AttentionPushService : Service() {
         super.onDestroy()
     }
 
-    private fun connect(baseUrl: String, token: String) {
+    override fun onTimeout(startId: Int) {
+        // Android 15+ dataSync foreground services are capped at a 6h/24h budget. Stop
+        // cleanly instead of letting the system kill us with a RemoteServiceException so
+        // no spurious crash is reported. The user can reopen Projects to start listening
+        // again (or we resume via onStartCommand when restarted).
+        Log.w(TAG, "dataSync foreground service timed out (6h budget exhausted); stopping listener")
+        stopSelf(startId)
+    }
+
+    private fun connect(baseUrl: String, token: String, masterToken: String) {
         listenJob?.cancel()
         client?.close()
         tracker.reset()
         val next = NetworkAccessClient(baseUrl, longLived = true).also { it.sessionToken = token }
         client = next
         listenJob = scope.launch {
-            launch { pushLoop(next) }
-            launch { pullLoop(next) }
+            launch { pushLoop(next, masterToken) }
+            launch { pullLoop(next, masterToken) }
         }
     }
 
-    private suspend fun pushLoop(client: NetworkAccessClient) {
+    /**
+     * The chat-scoped session token expires server-side after ~24h. When a request is rejected
+     * as unauthorized, re-login with the persisted Network Access master token to mint a fresh
+     * session token so the listener keeps delivering alerts without a manual re-sign-in.
+     */
+    private suspend fun renewSession(client: NetworkAccessClient, masterToken: String): Boolean {
+        if (masterToken.isBlank()) return false
+        // loginWithToken mints a fresh chat-scoped session token and updates client.sessionToken.
+        return runCatching {
+            client.loginWithToken(masterToken)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun isUnauthorized(e: Throwable): Boolean =
+        (e as? NetworkAccessException)?.unauthorized == true
+
+    private suspend fun pushLoop(client: NetworkAccessClient, masterToken: String) {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive) {
             try {
@@ -133,11 +161,16 @@ class AttentionPushService : Service() {
                 publishStatus()
             } catch (e: Exception) {
                 Log.w(TAG, "attention push failed: ${e.message}", e)
-                val short = e.message?.take(48)?.replace('\n', ' ').orEmpty()
-                pushStatus.set(
-                    if (short.isBlank()) "push down · retrying"
-                    else "push down · $short",
-                )
+                if (isUnauthorized(e) && renewSession(client, masterToken)) {
+                    pushStatus.set("push re-signed-in")
+                    backoffMs = 1_000L
+                } else {
+                    val short = e.message?.take(48)?.replace('\n', ' ').orEmpty()
+                    pushStatus.set(
+                        if (short.isBlank()) "push down · retrying"
+                        else "push down · $short",
+                    )
+                }
                 publishStatus()
             }
             if (!currentCoroutineContext().isActive) break
@@ -146,7 +179,7 @@ class AttentionPushService : Service() {
         }
     }
 
-    private suspend fun pullLoop(client: NetworkAccessClient) {
+    private suspend fun pullLoop(client: NetworkAccessClient, masterToken: String) {
         while (currentCoroutineContext().isActive) {
             val result = runCatching {
                 val chats = client.listChats()
@@ -164,7 +197,11 @@ class AttentionPushService : Service() {
                 publishStatus()
             }.onFailure { e ->
                 Log.w(TAG, "attention pull failed: ${e.message}")
-                pullStatus.set("pull down")
+                if (isUnauthorized(e) && renewSession(client, masterToken)) {
+                    pullStatus.set("pull re-signed-in")
+                } else {
+                    pullStatus.set("pull down")
+                }
                 publishStatus()
             }
             delay(PULL_INTERVAL_MS)
@@ -286,8 +323,9 @@ class AttentionPushService : Service() {
         private const val TAG = "AndyAttention"
         const val ACTION_START = "com.joetr.andy.attention.START"
         const val ACTION_STOP = "com.joetr.andy.attention.STOP"
-        const val EXTRA_BASE_URL = "base_url"
+        private const val EXTRA_BASE_URL = "base_url"
         const val EXTRA_TOKEN = "token"
+        private const val EXTRA_MASTER_TOKEN = "master_token"
         const val EXTRA_HOST_NAME = "host_name"
 
         private const val LISTENING_CHANNEL_ID = "andy_attention_listening"
@@ -295,6 +333,7 @@ class AttentionPushService : Service() {
         private const val PREFS = "andy_attention_push"
         private const val KEY_BASE = "base_url"
         private const val KEY_TOKEN = "token"
+        private const val KEY_MASTER_TOKEN = "master_token"
         private const val KEY_HOST = "host_name"
         private const val PULL_INTERVAL_MS = 1_500L
         private const val DEDUPE_MS = 5_000L
@@ -302,11 +341,12 @@ class AttentionPushService : Service() {
         @Volatile
         var viewingChatId: String? = null
 
-        fun start(context: Context, baseUrl: String, sessionToken: String, hostName: String) {
+        fun start(context: Context, baseUrl: String, sessionToken: String, masterToken: String, hostName: String) {
             val intent = Intent(context, AttentionPushService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_BASE_URL, baseUrl)
                 putExtra(EXTRA_TOKEN, sessionToken)
+                putExtra(EXTRA_MASTER_TOKEN, masterToken)
                 putExtra(EXTRA_HOST_NAME, hostName)
             }
             ContextCompat.startForegroundService(context, intent)
@@ -329,10 +369,11 @@ class AttentionPushService : Service() {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
 
-        private fun persistSession(context: Context, baseUrl: String, token: String, hostName: String) {
+        private fun persistSession(context: Context, baseUrl: String, token: String, masterToken: String, hostName: String) {
             prefs(context).edit()
                 .putString(KEY_BASE, baseUrl)
                 .putString(KEY_TOKEN, token)
+                .putString(KEY_MASTER_TOKEN, masterToken)
                 .putString(KEY_HOST, hostName)
                 .apply()
         }
@@ -346,9 +387,10 @@ class AttentionPushService : Service() {
             val base = p.getString(KEY_BASE, null)?.takeIf { it.isNotBlank() } ?: return null
             val token = p.getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
             val host = p.getString(KEY_HOST, null).orEmpty().ifBlank { "Andy host" }
-            return Session(base, token, host)
+            val master = p.getString(KEY_MASTER_TOKEN, null).orEmpty()
+            return Session(base, token, master, host)
         }
 
-        private data class Session(val baseUrl: String, val token: String, val hostName: String)
+        private data class Session(val baseUrl: String, val token: String, val masterToken: String, val hostName: String)
     }
 }
