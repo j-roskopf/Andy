@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- White silhouette for the status bar / notification shade. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2C6.48,2 2,6.15 2,11.25c0,2.95 1.5,5.58 3.85,7.3L5,22l4.05,-1.7c0.95,0.27 1.94,0.4 2.95,0.4 5.52,0 10,-4.15 10,-9.25S17.52,2 12,2zM8.5,12.25c-0.69,0 -1.25,-0.56 -1.25,-1.25S7.81,9.75 8.5,9.75s1.25,0.56 1.25,1.25 -0.56,1.25 -1.25,1.25zM12,12.25c-0.69,0 -1.25,-0.56 -1.25,-1.25S11.31,9.75 12,9.75s1.25,0.56 1.25,1.25 -0.56,1.25 -1.25,1.25zM15.5,12.25c-0.69,0 -1.25,-0.56 -1.25,-1.25s0.56,-1.25 1.25,-1.25 1.25,0.56 1.25,1.25 -0.56,1.25 -1.25,1.25z" />
+</vector>

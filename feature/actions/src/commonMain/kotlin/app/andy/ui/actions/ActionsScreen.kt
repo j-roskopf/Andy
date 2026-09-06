@@ -251,9 +251,9 @@ private fun ProjectCockpit(
     var expandedActionId by remember { mutableStateOf<String?>(null) }
     val projectSessionVisibleLimits = remember { mutableStateMapOf<String, Int>() }
     var viewingArchivedForProjectId by remember { mutableStateOf<String?>(null) }
-    val collapsedProjectIds = workspaceState.collapsedProjectChatIds
-    fun updateCollapsedProjectIds(transform: (Set<String>) -> Set<String>) {
-        onUpdateWorkspace { it.copy(collapsedProjectChatIds = transform(it.collapsedProjectChatIds)) }
+    val expandedProjectIds = workspaceState.expandedProjectChatIds
+    fun updateExpandedProjectIds(transform: (Set<String>) -> Set<String>) {
+        onUpdateWorkspace { it.copy(expandedProjectChatIds = transform(it.expandedProjectChatIds)) }
     }
     val project = config.projects.firstOrNull { it.id == selectedProjectId }
     val loadedProjectWorkflow = project?.let { workflowProjects[it.id] }
@@ -547,7 +547,7 @@ private fun ProjectCockpit(
                             val sessions = chatLists.active
                             val archivedSessions = chatLists.archived
                             val viewingArchived = viewingArchivedForProjectId == item.id
-                            val sessionsCollapsed = !searchActive && item.id in collapsedProjectIds
+                            val sessionsCollapsed = !searchActive && item.id !in expandedProjectIds
                             val pinPriority = workspaceState.agentPinPriorityChats && !viewingArchived
                             val sourceSessions = when {
                                 entry.searchSessions != null -> entry.searchSessions
@@ -580,18 +580,18 @@ private fun ProjectCockpit(
                                     visibleSessions.size < sessions.size,
                                 onToggleProject = {
                                     if (item.id == selectedProjectId) {
-                                        updateCollapsedProjectIds { ids ->
-                                            if (sessionsCollapsed) ids - item.id else ids + item.id
+                                        updateExpandedProjectIds { ids ->
+                                            if (sessionsCollapsed) ids + item.id else ids - item.id
                                         }
                                     } else {
-                                        updateCollapsedProjectIds { it - item.id }
+                                        updateExpandedProjectIds { it + item.id }
                                         selectProject(item.id)
                                         selectedWorkflowTaskId = null
                                         canvas = ProjectCanvas.Chat
                                     }
                                 },
                                 onOpenSession = { task ->
-                                    updateCollapsedProjectIds { it - item.id }
+                                    updateExpandedProjectIds { it + item.id }
                                     selectProject(item.id)
                                     selectedTaskId = task.id
                                     canvas = ProjectCanvas.Chat
@@ -613,7 +613,7 @@ private fun ProjectCockpit(
                                     projectSessionVisibleLimits.remove(item.id)
                                 },
                                 onNewChat = {
-                                    updateCollapsedProjectIds { it - item.id }
+                                    updateExpandedProjectIds { it + item.id }
                                     viewingArchivedForProjectId = null
                                     selectProject(item.id)
                                     selectedTaskId = null

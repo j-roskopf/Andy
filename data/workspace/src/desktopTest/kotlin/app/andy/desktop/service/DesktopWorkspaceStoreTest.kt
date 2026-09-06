@@ -197,11 +197,11 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(disabledDestinations = emptySet()))
         assertEquals(emptySet(), DesktopWorkspaceStore(file).load().disabledDestinations)
 
-        DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = setOf("project-a", "project-b")))
-        assertEquals(setOf("project-a", "project-b"), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
+        DesktopWorkspaceStore(file).save(saved.copy(expandedProjectChatIds = setOf("project-a", "project-b")))
+        assertEquals(setOf("project-a", "project-b"), DesktopWorkspaceStore(file).load().expandedProjectChatIds)
 
-        DesktopWorkspaceStore(file).save(saved.copy(collapsedProjectChatIds = emptySet()))
-        assertEquals(emptySet(), DesktopWorkspaceStore(file).load().collapsedProjectChatIds)
+        DesktopWorkspaceStore(file).save(saved.copy(expandedProjectChatIds = emptySet()))
+        assertEquals(emptySet(), DesktopWorkspaceStore(file).load().expandedProjectChatIds)
 
         DesktopWorkspaceStore(file).save(saved.copy(collapsedWorkflowTaskIds = setOf("spec-a", "spec-b")))
         assertEquals(setOf("spec-a", "spec-b"), DesktopWorkspaceStore(file).load().collapsedWorkflowTaskIds)

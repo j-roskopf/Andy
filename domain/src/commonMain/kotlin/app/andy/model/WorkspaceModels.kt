@@ -107,6 +107,14 @@ data class WorkspaceState(
      * pollers add guest CPU load.
      */
     val autoBugCaptureEnabled: Boolean = false,
+    /** Longest edge for scrcpy capture; 0 keeps native device resolution. */
+    val mirrorMaxSize: Int = 1080,
+    /** Target video bitrate in bits/sec for Live mirroring. */
+    val mirrorBitRate: Int = 8_000_000,
+    /** Cap on scrcpy frame rate. */
+    val mirrorMaxFps: Int = 60,
+    /** Scrcpy video codec: `h264` (default) or `h265`. */
+    val mirrorCodec: String = "h264",
     val appsListPaneWidth: Float = 520f,
     val appsDetailsPaneHeight: Float = 350f,
     val performanceProcessesPaneWidth: Float = 760f,
@@ -164,8 +172,8 @@ data class WorkspaceState(
     val agentAdoptProviderSessionTitles: Boolean = true,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
-    /** Project ids whose chat lists are collapsed in the Projects sidebar. */
-    val collapsedProjectChatIds: Set<String> = emptySet(),
+    /** Project ids whose chat lists are expanded in the Projects sidebar. Collapsed by default. */
+    val expandedProjectChatIds: Set<String> = emptySet(),
     /**
      * Spec task ids whose child builds are collapsed in the Task workflows list.
      * Specs default to expanded; an id present here means the user collapsed it.

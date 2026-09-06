@@ -803,6 +803,111 @@ private fun LivePanel(
             description = "Starts the rolling window whenever a mirror is visible. Turn on to use the Bug button in Live.",
         )
     }
+
+    val sizePresets = listOf(540, 720, 1080, 1440, 0)
+    val sizeLabels = listOf("540", "720", "1080", "1440", "Native")
+    val selectedSize = sizePresets.indexOf(workspace.mirrorMaxSize).takeIf { it >= 0 } ?: 2
+    val bitRateMbps = (workspace.mirrorBitRate / 1_000_000f).let { value ->
+        if (value == value.toInt().toFloat()) value.toInt().toString() else ((value * 10).toInt() / 10f).toString()
+    }
+    SettingsGroup(
+        title = "Stream quality",
+        description = "Defaults for Live / Design / Inspector mirroring. Lower max edge and bitrate " +
+            "cut encode and decode cost when the stream feels heavy. Changes apply on the next reconnect.",
+    ) {
+        Text("Max edge", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            sizeLabels.forEachIndexed { index, label ->
+                ChoicePill(
+                    label = label,
+                    selected = selectedSize == index,
+                    contentDescription = "Max edge $label",
+                    onClick = {
+                        val maxSize = sizePresets[index]
+                        val bitRate = when (maxSize) {
+                            540 -> 2_000_000
+                            720 -> 4_000_000
+                            1080 -> 8_000_000
+                            1440 -> 12_000_000
+                            else -> 16_000_000
+                        }
+                        applyMirrorSettings(
+                            update = update,
+                            maxSize = maxSize,
+                            bitRate = bitRate,
+                            maxFps = workspace.mirrorMaxFps,
+                            codec = workspace.mirrorCodec,
+                        )
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Bitrate (Mbps)", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(2, 4, 8, 12, 16).forEach { mbps ->
+                ChoicePill(
+                    label = "$mbps",
+                    selected = bitRateMbps == mbps.toString(),
+                    contentDescription = "$mbps megabits per second",
+                    onClick = {
+                        applyMirrorSettings(
+                            update = update,
+                            maxSize = workspace.mirrorMaxSize,
+                            bitRate = mbps * 1_000_000,
+                            maxFps = workspace.mirrorMaxFps,
+                            codec = workspace.mirrorCodec,
+                        )
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("Max FPS", color = TextSecondary, fontFamily = MonoFont, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(24, 30, 60, 90).forEach { fps ->
+                ChoicePill(
+                    label = "$fps",
+                    selected = workspace.mirrorMaxFps == fps,
+                    contentDescription = "$fps frames per second",
+                    onClick = {
+                        applyMirrorSettings(
+                            update = update,
+                            maxSize = workspace.mirrorMaxSize,
+                            bitRate = workspace.mirrorBitRate,
+                            maxFps = fps,
+                            codec = workspace.mirrorCodec,
+                        )
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Streams use the H.264 codec; the mirror decoder only supports H.264 today.",
+            color = TextSecondary,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+    }
+}
+
+private fun applyMirrorSettings(
+    update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    maxSize: Int,
+    bitRate: Int,
+    maxFps: Int,
+    codec: String,
+) {
+    update {
+        it.copy(
+            mirrorMaxSize = maxSize,
+            mirrorBitRate = bitRate,
+            mirrorMaxFps = maxFps,
+            mirrorCodec = codec,
+        )
+    }
 }
 
 @Composable

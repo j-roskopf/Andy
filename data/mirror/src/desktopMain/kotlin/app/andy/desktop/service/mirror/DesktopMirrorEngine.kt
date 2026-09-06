@@ -1158,6 +1158,7 @@ class DesktopMirrorEngine(
             "max_size=${config.maxSize}",
             "video_bit_rate=${config.bitRate}",
             "max_fps=${config.maxFps}",
+            "video_codec=h264",
             "log_level=info",
         ) + codecOptions
         var frameNumber = 0L

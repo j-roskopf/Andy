@@ -365,6 +365,7 @@ internal fun AndyShell(
                     selectedActionId = state.workspaceState.lastActionId,
                     onActionSelectionChange = state::rememberActionSelection,
                     onRunAction = { project, action -> state.runAction(project, action) },
+                    onRefreshActions = state::refreshActionsConfig,
                     proxyRunning = proxyRunning,
                     showLocalServers = capabilities.hostAutomation &&
                         state.destination == AndyDestination.Actions,

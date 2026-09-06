@@ -17,6 +17,15 @@ cwd = ""
 env = { }
 
 [[actions]]
+id = "act-android"
+projectId = "andy"
+name = "Android"
+icon = "run"
+command = "export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; export PATH=\"$ANDROID_HOME/platform-tools:$PATH\"; ./gradlew :androidApp:installDebug && adb shell monkey -p com.joetr.andy -c android.intent.category.LAUNCHER 1"
+cwd = ""
+env = { }
+
+[[actions]]
 id = "act-test"
 projectId = "andy"
 name = "Test"

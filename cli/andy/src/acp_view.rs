@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -302,6 +302,11 @@ async fn run_loop(
                         other => return Ok(other),
                     }
                 }
+                Event::Mouse(mouse) => {
+                    if let Some(delta) = mouse_scroll_delta(mouse.kind) {
+                        apply_scroll_delta(state, delta);
+                    }
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             }
@@ -483,10 +488,10 @@ async fn handle_key(
                 "conversation only".into()
             });
         }
-        MappedKey::ScrollUp => state.scroll = state.scroll.saturating_add(1),
-        MappedKey::ScrollDown => state.scroll = state.scroll.saturating_sub(1),
-        MappedKey::PageUp => state.scroll = state.scroll.saturating_add(10),
-        MappedKey::PageDown => state.scroll = state.scroll.saturating_sub(10),
+        MappedKey::ScrollUp => apply_scroll_delta(state, 1),
+        MappedKey::ScrollDown => apply_scroll_delta(state, -1),
+        MappedKey::PageUp => apply_scroll_delta(state, 10),
+        MappedKey::PageDown => apply_scroll_delta(state, -10),
         MappedKey::Backspace => {
             state.input.pop();
         }
@@ -709,6 +714,27 @@ fn queue_panel_height(queued: &[QueuedFollowUp]) -> u16 {
         .saturating_add(2) // borders
 }
 
+/// Lines moved per mouse-wheel notch (and per Termux/iSH touch-synthesized wheel event).
+const MOUSE_SCROLL_LINES: i16 = 3;
+
+/// Wheel / touch-synthesized scroll → delta for [`ViewState::scroll`].
+/// Positive moves toward the end of the transcript (later content).
+fn mouse_scroll_delta(kind: MouseEventKind) -> Option<i16> {
+    match kind {
+        MouseEventKind::ScrollDown => Some(MOUSE_SCROLL_LINES),
+        MouseEventKind::ScrollUp => Some(-MOUSE_SCROLL_LINES),
+        _ => None,
+    }
+}
+
+fn apply_scroll_delta(state: &mut ViewState, delta: i16) {
+    if delta >= 0 {
+        state.scroll = state.scroll.saturating_add(delta as u16);
+    } else {
+        state.scroll = state.scroll.saturating_sub(delta.unsigned_abs());
+    }
+}
+
 /// Pure key → action mapping for the ACP composer/viewer (unit-tested).
 fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -751,7 +777,8 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
             MappedKey::Exit
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => MappedKey::Stop,
-        KeyCode::Char('i')
+        // Ctrl-+ (and Ctrl-= on US layouts where + is Shift-=) — avoid letter chords.
+        KeyCode::Char('+') | KeyCode::Char('=')
             if key.modifiers.contains(KeyModifiers::CONTROL) && state.composer_enabled =>
         {
             MappedKey::PickImage
@@ -1647,6 +1674,28 @@ mod tests {
     }
 
     #[test]
+    fn mouse_wheel_maps_to_transcript_scroll_delta() {
+        assert_eq!(
+            mouse_scroll_delta(MouseEventKind::ScrollDown),
+            Some(MOUSE_SCROLL_LINES)
+        );
+        assert_eq!(
+            mouse_scroll_delta(MouseEventKind::ScrollUp),
+            Some(-MOUSE_SCROLL_LINES)
+        );
+        assert_eq!(mouse_scroll_delta(MouseEventKind::Moved), None);
+    }
+
+    #[test]
+    fn apply_scroll_delta_moves_toward_end_and_clamps_at_top() {
+        let mut state = empty_state();
+        apply_scroll_delta(&mut state, MOUSE_SCROLL_LINES);
+        assert_eq!(state.scroll, MOUSE_SCROLL_LINES as u16);
+        apply_scroll_delta(&mut state, -MOUSE_SCROLL_LINES * 2);
+        assert_eq!(state.scroll, 0);
+    }
+
+    #[test]
     fn subscribe_batch_clears_loading_transcript() {
         let mut state = empty_state();
         state.loading_transcript = true;
@@ -1754,27 +1803,31 @@ mod tests {
     }
 
     #[test]
-    fn plain_s_and_i_insert_into_composer() {
+    fn plain_s_and_plus_insert_into_composer() {
         let state = empty_state();
         assert_eq!(
             map_key_action(&state, press(KeyCode::Char('s'))),
             MappedKey::Insert('s')
         );
         assert_eq!(
-            map_key_action(&state, press(KeyCode::Char('i'))),
-            MappedKey::Insert('i')
+            map_key_action(&state, press(KeyCode::Char('+'))),
+            MappedKey::Insert('+')
         );
     }
 
     #[test]
-    fn ctrl_s_stops_and_ctrl_i_picks_image() {
+    fn ctrl_s_stops_and_ctrl_plus_picks_image() {
         let state = empty_state();
         assert_eq!(
             map_key_action(&state, ctrl(KeyCode::Char('s'))),
             MappedKey::Stop
         );
         assert_eq!(
-            map_key_action(&state, ctrl(KeyCode::Char('i'))),
+            map_key_action(&state, ctrl(KeyCode::Char('+'))),
+            MappedKey::PickImage
+        );
+        assert_eq!(
+            map_key_action(&state, ctrl(KeyCode::Char('='))),
             MappedKey::PickImage
         );
     }

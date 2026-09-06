@@ -28,6 +28,7 @@ import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
 import app.andy.service.AndyServices
 import app.andy.service.DhuSessionPhase
+import app.andy.service.MirrorVideoConfig
 import app.andy.service.OpenAgentTaskRequest
 import app.andy.service.OpenInvestigationRequest
 import app.andy.service.TargetCapabilities
@@ -35,6 +36,7 @@ import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.controls.ensureEmulatorOrientation
 import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
+import app.andy.ui.live.LiveMirrorSettings
 import app.andy.ui.logcat.LogcatState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -1137,6 +1139,10 @@ internal class ShellState(
     }
 
     /** Re-reads global + repo action configs so newly added project actions appear. */
+    fun refreshActionsConfig() {
+        scope.launch { refreshActionsConfigNow() }
+    }
+
     private suspend fun refreshActionsConfigNow() {
         if (!services.capabilities.hostAutomation) return
         // While SSH-remoted, projects come from remoteActionsConfig — never clobber with local.
@@ -1253,6 +1259,14 @@ internal class ShellState(
         val saved = services.workspaceStore.load()
         workspaceState = saved
         startupTargetId = saved.selectedDeviceSerial
+        LiveMirrorSettings.update(
+            MirrorVideoConfig(
+                maxSize = saved.mirrorMaxSize,
+                bitRate = saved.mirrorBitRate,
+                maxFps = saved.mirrorMaxFps,
+                codec = saved.mirrorCodec,
+            ),
+        )
         if (services.capabilities.hostAutomation) {
             actionsConfig = services.actionConfig.load()
         }
@@ -1357,6 +1371,21 @@ internal class ShellState(
         val previous = workspaceState
         val updated = transform(previous).copy(selectedDeviceSerial = activeTargetId)
         workspaceState = updated
+        if (
+            updated.mirrorMaxSize != previous.mirrorMaxSize ||
+            updated.mirrorBitRate != previous.mirrorBitRate ||
+            updated.mirrorMaxFps != previous.mirrorMaxFps ||
+            updated.mirrorCodec != previous.mirrorCodec
+        ) {
+            LiveMirrorSettings.update(
+                LiveMirrorSettings.config.value.copy(
+                    maxSize = updated.mirrorMaxSize,
+                    bitRate = updated.mirrorBitRate,
+                    maxFps = updated.mirrorMaxFps,
+                    codec = updated.mirrorCodec,
+                ),
+            )
+        }
         scope.launch {
             // Preserve saved SSH targets written by RemoteSessionService so a sidebar toggle
             // (or any other ShellState save) does not wipe the Host list.
