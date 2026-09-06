@@ -123,7 +123,9 @@ internal fun Application.installWebChatRoutes(
                     ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 val code = body.requiredString("code")?.trim().orEmpty()
                 val master = body.requiredString("token")?.trim().orEmpty()
-                val password = body.requiredString("password")?.trim().orEmpty()
+                // Verify verbatim: desktop Settings hashes the exact entered password (no trim),
+                // and clients send it raw. Trimming here would lock out passwords with spaces.
+                val password = body.requiredString("password").orEmpty()
                 val expectedMaster = networkAccess.masterTokenProvider().trim()
                 val passwordHash = networkAccess.masterPasswordHashProvider().trim()
                 val sessionToken = when {

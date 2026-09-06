@@ -75,7 +75,10 @@ class AndroidAppUpdateService(
         }.onSuccess { result ->
             onMessage(result.message)
             mutableState.value = when (result) {
-                is UpdateInstallResult.Started -> AppUpdateState.Installing(update, result.message)
+                // Handed off to the system installer; the PackageInstaller receiver can be
+                // cancelled or fail (e.g. signature mismatch), so stay retryable rather than
+                // parking in Installing forever.
+                is UpdateInstallResult.Started,
                 is UpdateInstallResult.OpenedReleasePage,
                 is UpdateInstallResult.RequiresUserAction,
                 -> AppUpdateState.Available(update)

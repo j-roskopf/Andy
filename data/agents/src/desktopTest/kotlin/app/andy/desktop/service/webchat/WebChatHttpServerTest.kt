@@ -687,6 +687,43 @@ class WebChatHttpServerTest {
     }
 
     @Test
+    fun passwordLoginPreservesExactWhitespace() = runBlocking {
+        val password = "  padded password  "
+        val hash = mcp.hashNetworkAccessPassword(password)
+        workspaceStore.save(
+            workspaceStore.load().copy(
+                networkAccessEnabled = true,
+                networkAccessPasswordHash = hash,
+            ),
+        )
+        val client = HttpClient(CIO) {
+            install(io.ktor.client.plugins.HttpTimeout) {
+                requestTimeoutMillis = 5_000
+            }
+        }
+        try {
+            val trimmed = client.post("http://127.0.0.1:$port/api/auth/login") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"password":"${password.trim()}"}""")
+            }
+            assertEquals(HttpStatusCode.Unauthorized, trimmed.status)
+            val exact = client.post("http://127.0.0.1:$port/api/auth/login") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"password":"$password"}""")
+            }
+            assertEquals(HttpStatusCode.OK, exact.status)
+        } finally {
+            workspaceStore.save(
+                workspaceStore.load().copy(
+                    networkAccessEnabled = false,
+                    networkAccessPasswordHash = "",
+                ),
+            )
+            client.close()
+        }
+    }
+
+    @Test
     fun masterTokenGrantsApiWhenNetworkAccessOn() = runBlocking {
         workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
         val client = HttpClient(CIO)
