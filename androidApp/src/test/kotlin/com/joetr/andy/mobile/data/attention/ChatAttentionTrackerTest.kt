@@ -77,6 +77,24 @@ class ChatAttentionTrackerTest {
     }
 
     @Test
+    fun finishedAtThenStatusDoneDoesNotDoubleNotify() {
+        val tracker = ChatAttentionTracker(nowMillis = { 1_000L })
+        tracker.onChatsChanged(listOf(chat(status = "Working", finishedAtMillis = 0)))
+        assertEquals(
+            listOf(ChatAttentionKind.Done),
+            tracker.onChatsChanged(
+                listOf(chat(status = "Working", finishedAtMillis = 99)),
+            ).map { it.kind },
+        )
+        // Host often latches finishedAt before the status string becomes "Done".
+        assertTrue(
+            tracker.onChatsChanged(
+                listOf(chat(status = "Done", finishedAtMillis = 99)),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
     fun notificationTitlePrefersTruncatedPrompt() {
         val long = "x".repeat(80)
         assertEquals(

@@ -44,6 +44,11 @@ class ChatAttentionTracker(
 
     /**
      * @return attention events that should surface as OS notifications.
+     *
+     * Only fires when a chat **enters** an attention kind (or gets a new Blocked
+     * input request). Status-string churn after `finishedAt` latches (e.g. blank →
+     * "Done") must not re-alert — that was re-firing the same completion after
+     * reconnects / config changes.
      */
     fun onChatsChanged(chats: List<ChatDto>): List<ChatAttentionEvent> {
         if (!seeded) {
@@ -56,20 +61,13 @@ class ChatAttentionTracker(
             val next = track(chat)
             val prior = previous.put(chat.id, next)
             val kind = attentionKind(chat) ?: continue
-            val isNew = prior == null
-            val statusChanged = prior != null && prior.status != next.status
-            val newlyFinished =
-                prior != null &&
-                    prior.finishedAtMillis == 0L &&
-                    next.finishedAtMillis > 0L &&
-                    kind == ChatAttentionKind.Done
+            val priorKind = prior?.let { attentionKindFromTracked(it) }
             val newInputRequest =
                 kind == ChatAttentionKind.Blocked &&
                     next.inputRequestId != null &&
                     next.inputRequestId != prior?.inputRequestId
-            // New chat already in an attention state (finished between polls), or a
-            // real transition / new input request / finishedAt latch.
-            if (!isNew && !statusChanged && !newInputRequest && !newlyFinished) continue
+            // New / first-seen attention state, or a fresh input request while blocked.
+            if (priorKind == kind && !newInputRequest) continue
             val dedupeKey = when {
                 kind == ChatAttentionKind.Blocked && next.inputRequestId != null ->
                     "${chat.id}:Blocked:${next.inputRequestId}"
@@ -85,6 +83,18 @@ class ChatAttentionTracker(
         }
         previous.keys.retainAll(chats.map { it.id }.toSet())
         return events
+    }
+
+    private fun attentionKindFromTracked(tracked: Tracked): ChatAttentionKind? {
+        val status = tracked.status
+        return when {
+            status.equals("Done", ignoreCase = true) -> ChatAttentionKind.Done
+            status.equals("Error", ignoreCase = true) -> ChatAttentionKind.Error
+            status.equals("Blocked", ignoreCase = true) || tracked.inputRequestId != null ->
+                ChatAttentionKind.Blocked
+            tracked.finishedAtMillis > 0L -> ChatAttentionKind.Done
+            else -> null
+        }
     }
 
     private fun tryMarkNotified(key: String): Boolean {

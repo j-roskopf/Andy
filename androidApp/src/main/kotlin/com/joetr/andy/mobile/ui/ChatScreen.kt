@@ -358,7 +358,9 @@ private fun PermissionCard(
     onSubmit: (Map<String, String>) -> Unit,
 ) {
     val tokens = andyTokens()
+    val permissionPrompt = request.origin.equals("AcpPermission", ignoreCase = true)
     var answers by remember(request.id) { mutableStateOf(mapOf<String, String>()) }
+    var otherSelected by remember(request.id) { mutableStateOf(mapOf<String, Boolean>()) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -379,7 +381,7 @@ private fun PermissionCard(
             ) {
                 StatusDot(variant = StatusDotVariant.Warning)
                 Text(
-                    "Needs your input",
+                    if (permissionPrompt) "Permission required" else "Needs your input",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
@@ -392,17 +394,55 @@ private fun PermissionCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = tokens.palette.textSecondary,
                 )
+                if (question.header.isNotBlank() && question.question.isNotBlank()) {
+                    Text(
+                        question.question,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = tokens.palette.textPrimary,
+                    )
+                }
                 if (question.options.isNotEmpty()) {
                     question.options.forEach { option ->
-                        val selected = answers[question.id] == option.label
+                        val selected = otherSelected[question.id] != true &&
+                            answers[question.id] == option.label
                         OutlinedButton(
-                            onClick = { answers = answers + (question.id to option.label) },
+                            onClick = {
+                                otherSelected = otherSelected + (question.id to false)
+                                answers = answers + (question.id to option.label)
+                                if (permissionPrompt && request.questions.size == 1) {
+                                    onSubmit(mapOf(question.id to option.label))
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             shape = AndyShape.Interactive,
                         ) {
                             Text(
                                 option.label + if (selected) " ✓" else "",
                                 color = if (selected) tokens.accent else tokens.palette.textPrimary,
+                            )
+                        }
+                    }
+                    if (!permissionPrompt) {
+                        val otherOn = otherSelected[question.id] == true
+                        OutlinedButton(
+                            onClick = {
+                                otherSelected = otherSelected + (question.id to true)
+                                answers = answers + (question.id to "")
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = AndyShape.Interactive,
+                        ) {
+                            Text(
+                                "Other" + if (otherOn) " ✓" else "",
+                                color = if (otherOn) tokens.accent else tokens.palette.textPrimary,
+                            )
+                        }
+                        if (otherOn) {
+                            MobileField(
+                                label = "Your answer",
+                                value = answers[question.id].orEmpty(),
+                                onValueChange = { answers = answers + (question.id to it) },
+                                placeholder = question.question,
                             )
                         }
                     }
@@ -415,13 +455,15 @@ private fun PermissionCard(
                     )
                 }
             }
-            Button(
-                onClick = { onSubmit(answers) },
-                enabled = request.questions.all { answers[it.id].orEmpty().isNotBlank() },
-                shape = AndyShape.Interactive,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Submit")
+            if (!permissionPrompt || request.questions.any { it.options.isEmpty() } || request.questions.size > 1) {
+                Button(
+                    onClick = { onSubmit(answers) },
+                    enabled = request.questions.all { answers[it.id].orEmpty().isNotBlank() },
+                    shape = AndyShape.Interactive,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Submit")
+                }
             }
         }
     }

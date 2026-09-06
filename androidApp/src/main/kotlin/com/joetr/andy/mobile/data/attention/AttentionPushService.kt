@@ -43,6 +43,8 @@ class AttentionPushService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var client: NetworkAccessClient? = null
     private var listenJob: Job? = null
+    private var connectedBaseUrl: String? = null
+    private var connectedToken: String? = null
     private lateinit var notifications: AndroidChatNotificationService
     private val tracker = ChatAttentionTracker()
     private val notifyMutex = Mutex()
@@ -64,6 +66,8 @@ class AttentionPushService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 clearSession(this)
+                connectedBaseUrl = null
+                connectedToken = null
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -71,15 +75,14 @@ class AttentionPushService : Service() {
                 val baseUrl = intent.getStringExtra(EXTRA_BASE_URL).orEmpty()
                 val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
                 val hostName = intent.getStringExtra(EXTRA_HOST_NAME).orEmpty().ifBlank { "Andy host" }
-                val masterToken = intent.getStringExtra(EXTRA_MASTER_TOKEN).orEmpty()
                 if (baseUrl.isBlank() || token.isBlank()) {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                persistSession(this, baseUrl, token, masterToken, hostName)
+                persistSession(this, baseUrl, token, hostName)
                 hostLabel = hostName
                 startAsForeground(combinedStatus())
-                connect(baseUrl, token, masterToken)
+                connect(baseUrl, token)
                 return START_STICKY
             }
             else -> {
@@ -89,7 +92,7 @@ class AttentionPushService : Service() {
                 }
                 hostLabel = session.hostName
                 startAsForeground(combinedStatus())
-                connect(session.baseUrl, session.token, session.masterToken)
+                connect(session.baseUrl, session.token)
                 return START_STICKY
             }
         }
@@ -99,6 +102,8 @@ class AttentionPushService : Service() {
         listenJob?.cancel()
         client?.close()
         client = null
+        connectedBaseUrl = null
+        connectedToken = null
         scope.cancel()
         super.onDestroy()
     }
@@ -112,36 +117,37 @@ class AttentionPushService : Service() {
         stopSelf(startId)
     }
 
-    private fun connect(baseUrl: String, token: String, masterToken: String) {
+    private fun connect(baseUrl: String, token: String) {
+        // ProjectsScreen remounts (tab switch, activity recreate) call start() again.
+        // Reconnecting resets the pull tracker and can re-alert the same completion.
+        if (listenJob?.isActive == true &&
+            connectedBaseUrl == baseUrl &&
+            connectedToken == token
+        ) {
+            startAsForeground(combinedStatus())
+            return
+        }
         listenJob?.cancel()
         client?.close()
-        tracker.reset()
+        val sameHost = connectedBaseUrl == baseUrl
+        if (!sameHost) {
+            tracker.reset()
+            recentKeys.clear()
+        }
+        connectedBaseUrl = baseUrl
+        connectedToken = token
         val next = NetworkAccessClient(baseUrl, longLived = true).also { it.sessionToken = token }
         client = next
         listenJob = scope.launch {
-            launch { pushLoop(next, masterToken) }
-            launch { pullLoop(next, masterToken) }
+            launch { pushLoop(next) }
+            launch { pullLoop(next) }
         }
-    }
-
-    /**
-     * The chat-scoped session token expires server-side after ~24h. When a request is rejected
-     * as unauthorized, re-login with the persisted Network Access master token to mint a fresh
-     * session token so the listener keeps delivering alerts without a manual re-sign-in.
-     */
-    private suspend fun renewSession(client: NetworkAccessClient, masterToken: String): Boolean {
-        if (masterToken.isBlank()) return false
-        // loginWithToken mints a fresh chat-scoped session token and updates client.sessionToken.
-        return runCatching {
-            client.loginWithToken(masterToken)
-            true
-        }.getOrDefault(false)
     }
 
     private fun isUnauthorized(e: Throwable): Boolean =
         (e as? NetworkAccessException)?.unauthorized == true
 
-    private suspend fun pushLoop(client: NetworkAccessClient, masterToken: String) {
+    private suspend fun pushLoop(client: NetworkAccessClient) {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive) {
             try {
@@ -161,9 +167,8 @@ class AttentionPushService : Service() {
                 publishStatus()
             } catch (e: Exception) {
                 Log.w(TAG, "attention push failed: ${e.message}", e)
-                if (isUnauthorized(e) && renewSession(client, masterToken)) {
-                    pushStatus.set("push re-signed-in")
-                    backoffMs = 1_000L
+                if (isUnauthorized(e)) {
+                    pushStatus.set("push session expired · sign in again")
                 } else {
                     val short = e.message?.take(48)?.replace('\n', ' ').orEmpty()
                     pushStatus.set(
@@ -179,7 +184,7 @@ class AttentionPushService : Service() {
         }
     }
 
-    private suspend fun pullLoop(client: NetworkAccessClient, masterToken: String) {
+    private suspend fun pullLoop(client: NetworkAccessClient) {
         while (currentCoroutineContext().isActive) {
             val result = runCatching {
                 val chats = client.listChats()
@@ -197,8 +202,8 @@ class AttentionPushService : Service() {
                 publishStatus()
             }.onFailure { e ->
                 Log.w(TAG, "attention pull failed: ${e.message}")
-                if (isUnauthorized(e) && renewSession(client, masterToken)) {
-                    pullStatus.set("pull re-signed-in")
+                if (isUnauthorized(e)) {
+                    pullStatus.set("pull session expired · sign in again")
                 } else {
                     pullStatus.set("pull down")
                 }
@@ -235,12 +240,21 @@ class AttentionPushService : Service() {
         if (event.chatId == viewingChatId) return
         val key = "${event.chatId}:${event.kind.name}"
         val now = System.currentTimeMillis()
+        // Terminal kinds stay suppressed much longer — host push can re-emit Done when
+        // scrape confidence latches, and pull can see finishedAt then status separately.
+        val windowMs = when (event.kind) {
+            ChatAttentionKind.Done, ChatAttentionKind.Error -> TERMINAL_DEDUPE_MS
+            ChatAttentionKind.Blocked -> DEDUPE_MS
+        }
         notifyMutex.withLock {
             val last = recentKeys[key]
-            if (last != null && now - last < DEDUPE_MS) return
+            if (last != null && now - last < windowMs) return
             recentKeys[key] = now
             if (recentKeys.size > 200) {
-                recentKeys.entries.removeIf { now - it.value > DEDUPE_MS }
+                recentKeys.entries.removeIf { (k, at) ->
+                    val ttl = if (k.endsWith(":Blocked")) DEDUPE_MS else TERMINAL_DEDUPE_MS
+                    now - at > ttl
+                }
             }
         }
         if (!canPostNotifications()) {
@@ -325,7 +339,6 @@ class AttentionPushService : Service() {
         const val ACTION_STOP = "com.joetr.andy.attention.STOP"
         private const val EXTRA_BASE_URL = "base_url"
         const val EXTRA_TOKEN = "token"
-        private const val EXTRA_MASTER_TOKEN = "master_token"
         const val EXTRA_HOST_NAME = "host_name"
 
         private const val LISTENING_CHANNEL_ID = "andy_attention_listening"
@@ -333,20 +346,20 @@ class AttentionPushService : Service() {
         private const val PREFS = "andy_attention_push"
         private const val KEY_BASE = "base_url"
         private const val KEY_TOKEN = "token"
-        private const val KEY_MASTER_TOKEN = "master_token"
         private const val KEY_HOST = "host_name"
         private const val PULL_INTERVAL_MS = 1_500L
         private const val DEDUPE_MS = 5_000L
+        /** Suppress repeat Done/Error alerts for the same chat (push + pull + confidence). */
+        private const val TERMINAL_DEDUPE_MS = 60 * 60_000L
 
         @Volatile
         var viewingChatId: String? = null
 
-        fun start(context: Context, baseUrl: String, sessionToken: String, masterToken: String, hostName: String) {
+        fun start(context: Context, baseUrl: String, sessionToken: String, hostName: String) {
             val intent = Intent(context, AttentionPushService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_BASE_URL, baseUrl)
                 putExtra(EXTRA_TOKEN, sessionToken)
-                putExtra(EXTRA_MASTER_TOKEN, masterToken)
                 putExtra(EXTRA_HOST_NAME, hostName)
             }
             ContextCompat.startForegroundService(context, intent)
@@ -369,12 +382,12 @@ class AttentionPushService : Service() {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
 
-        private fun persistSession(context: Context, baseUrl: String, token: String, masterToken: String, hostName: String) {
+        private fun persistSession(context: Context, baseUrl: String, token: String, hostName: String) {
             prefs(context).edit()
                 .putString(KEY_BASE, baseUrl)
                 .putString(KEY_TOKEN, token)
-                .putString(KEY_MASTER_TOKEN, masterToken)
                 .putString(KEY_HOST, hostName)
+                .remove("master_token")
                 .apply()
         }
 
@@ -387,10 +400,9 @@ class AttentionPushService : Service() {
             val base = p.getString(KEY_BASE, null)?.takeIf { it.isNotBlank() } ?: return null
             val token = p.getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
             val host = p.getString(KEY_HOST, null).orEmpty().ifBlank { "Andy host" }
-            val master = p.getString(KEY_MASTER_TOKEN, null).orEmpty()
-            return Session(base, token, master, host)
+            return Session(base, token, host)
         }
 
-        private data class Session(val baseUrl: String, val token: String, val masterToken: String, val hostName: String)
+        private data class Session(val baseUrl: String, val token: String, val hostName: String)
     }
 }

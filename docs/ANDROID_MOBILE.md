@@ -8,13 +8,14 @@ Andy Desktop on a Mac or Linux laptop. It is not a reskin of the desktop shell.
 1. **Hosts** — save Tailscale MagicDNS / `100.x` addresses, VNC port, Network Access URL, and secrets (encrypted on device).
 2. **Screen** — connect directly to the host’s VNC server (default `:5900`) with touchpad gestures + soft keyboard.
 3. **Projects** — Network Access parity: token auth, project-grouped chats, transcript, follow-ups, new ACP chat.
+4. **Settings** — about this build, and self-update from GitHub Releases (`Andy-*.apk`).
 
 ## Smoke path
 
 ### On the laptop (Andy Desktop / andyd)
 
 1. Keep **andyd** running (standalone launchd/systemd or GUI left open — see [ANDYD.md](ANDYD.md)).
-2. Enable **Network Access** in Settings → MCP, copy the access token.
+2. Enable **Network Access** in Settings → MCP. Optionally set a **master password** so phones/browsers can sign in without copying the access token.
 3. Prefer **Tailscale only** + Serve:
 
 ```sh
@@ -33,10 +34,11 @@ tailscale serve --bg 8565
 
 1. Build/install: `./gradlew :androidApp:installDebug`
 2. **Hosts → Add** — display name + MagicDNS or `100.x` address.
-3. Optional: Network Access URL (`https://host.ts.net` or `http://100.x.y.z:8565`), paste the token, and VNC password
+3. Optional: Network Access URL (`https://host.ts.net` or `http://100.x.y.z:8565`) and VNC password
    (macOS username optional — leave blank for VNC password-only).
 4. **Screen** — open a live session. See [Screen gestures](#screen-gestures).
-5. **Projects** — connect with the token, browse chats, open / reply / start new.
+5. **Projects** — sign in with master password, access token, or login code; browse chats, open / reply / start new.
+   Sessions last 7 days; the phone stores only the session token (not the password).
 
 ## Screen gestures
 
@@ -120,3 +122,15 @@ after updating so the host serves `/ws/attention`.
 - Multi-monitor display splitting is inferred from the framebuffer aspect ratio and assumes
   equal-width monitors.
 - Desktop remote-screen SSH handoff and webchat are unchanged.
+
+## Settings and self-update
+
+The **Settings** tab shows the installed build (`andy.versionName`) and can check
+[GitHub Releases](https://github.com/j-roskopf/Andy/releases) for a newer `Andy-*.apk`.
+
+1. Tap **Check for updates** (the app also checks once on launch).
+2. When an update is available, tap **Update** to download the APK and open Android’s installer.
+3. If prompted, allow Andy to install unknown apps (Settings → Install unknown apps), then tap **Update** again.
+
+Sideloaded updates require a release build signed with the same key as the installed app.
+Debug installs cannot update over a release APK (and vice versa) without uninstalling first.

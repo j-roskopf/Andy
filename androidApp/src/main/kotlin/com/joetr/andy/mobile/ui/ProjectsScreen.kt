@@ -56,6 +56,7 @@ import app.andy.ui.components.Card
 import app.andy.ui.components.CardVariant
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.IconButton
+import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
 import app.andy.ui.components.TextButton
@@ -123,9 +124,8 @@ fun ProjectsScreen(
     }
 
     val scope = rememberCoroutineScope()
-    var authTokenInput by remember {
-        mutableStateOf(repository.networkAccessToken(host.id).orEmpty())
-    }
+    var authModePassword by remember { mutableStateOf(true) }
+    var authCredentialInput by remember { mutableStateOf("") }
     var signedIn by remember { mutableStateOf(networkClient?.sessionToken != null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -144,6 +144,7 @@ fun ProjectsScreen(
             error = e.message
             if (e.unauthorized) {
                 signedIn = false
+                repository.saveNetworkAccessSession(host.id, null)
                 onSignedOut()
             }
         } catch (e: Exception) {
@@ -153,25 +154,51 @@ fun ProjectsScreen(
         }
     }
 
+    suspend fun completeLogin(client: NetworkAccessClient) {
+        val session = client.sessionToken
+        if (session.isNullOrBlank()) throw NetworkAccessException("Login failed")
+        repository.saveNetworkAccessSession(host.id, session)
+        onClientReady(client)
+        refresh(client)
+    }
+
     LaunchedEffect(host.id) {
-        authTokenInput = repository.networkAccessToken(host.id).orEmpty()
-        val stored = authTokenInput
-        if (stored.isNotBlank()) {
-            val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
-            try {
-                client.loginWithToken(stored)
-                onClientReady(client)
-                refresh(client)
-            } catch (e: Exception) {
-                signedIn = false
-                error = e.message
-                onSignedOut()
-                client.close()
+        authCredentialInput = ""
+        val storedSession = repository.networkAccessSession(host.id)
+        val legacyToken = repository.legacyNetworkAccessToken(host.id)
+        when {
+            !storedSession.isNullOrBlank() -> {
+                val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
+                client.sessionToken = storedSession
+                try {
+                    onClientReady(client)
+                    refresh(client)
+                } catch (e: Exception) {
+                    signedIn = false
+                    error = e.message
+                    repository.saveNetworkAccessSession(host.id, null)
+                    onSignedOut()
+                    client.close()
+                }
             }
-        } else {
-            signedIn = false
-            groups = emptyList()
-            onSignedOut()
+            !legacyToken.isNullOrBlank() -> {
+                val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
+                try {
+                    client.loginWithToken(legacyToken)
+                    completeLogin(client)
+                } catch (e: Exception) {
+                    signedIn = false
+                    error = e.message
+                    repository.clearLegacyNetworkAccessToken(host.id)
+                    onSignedOut()
+                    client.close()
+                }
+            }
+            else -> {
+                signedIn = false
+                groups = emptyList()
+                onSignedOut()
+            }
         }
     }
 
@@ -237,7 +264,7 @@ fun ProjectsScreen(
                                 modifier = Modifier.size(18.dp),
                             )
                             Text(
-                                "Network Access Token",
+                                "Sign in",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontFamily = DisplayFont,
                                 fontWeight = FontWeight.SemiBold,
@@ -245,15 +272,40 @@ fun ProjectsScreen(
                             )
                         }
                         Text(
-                            "Sign in with the Network Access token from Andy Desktop → Settings → MCP to view your active chats.",
+                            "Use your master password, or a Network Access token / one-time login code from Andy Desktop → Settings → MCP.",
                             color = tokens.palette.textSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            OutlinedButton(
+                                onClick = { authModePassword = true },
+                                shape = AndyShape.Interactive,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    "Password",
+                                    color = if (authModePassword) tokens.accent else tokens.palette.textSecondary,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { authModePassword = false },
+                                shape = AndyShape.Interactive,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    "Token / code",
+                                    color = if (!authModePassword) tokens.accent else tokens.palette.textSecondary,
+                                )
+                            }
+                        }
                         MobileField(
-                            label = "Access token",
-                            value = authTokenInput,
-                            onValueChange = { authTokenInput = it },
-                            placeholder = "Bearer token",
+                            label = if (authModePassword) "Master password" else "Access token or login code",
+                            value = authCredentialInput,
+                            onValueChange = { authCredentialInput = it },
+                            placeholder = if (authModePassword) "Memorable password" else "Token or code",
                             password = true,
                         )
                         error?.let {
@@ -266,10 +318,18 @@ fun ProjectsScreen(
                                     error = null
                                     try {
                                         val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
-                                        client.loginWithToken(authTokenInput)
-                                        repository.saveNetworkAccessToken(host.id, authTokenInput)
-                                        onClientReady(client)
-                                        refresh(client)
+                                        if (authModePassword) {
+                                            client.loginWithPassword(authCredentialInput)
+                                        } else {
+                                            val value = authCredentialInput.trim()
+                                            if (value.length <= 24) {
+                                                client.loginWithCode(value)
+                                            } else {
+                                                client.loginWithToken(value)
+                                            }
+                                        }
+                                        authCredentialInput = ""
+                                        completeLogin(client)
                                     } catch (e: Exception) {
                                         signedIn = false
                                         error = e.message ?: "Login failed"
@@ -279,7 +339,7 @@ fun ProjectsScreen(
                                     }
                                 }
                             },
-                            enabled = authTokenInput.isNotBlank() && !loading,
+                            enabled = authCredentialInput.isNotBlank() && !loading,
                             shape = AndyShape.Interactive,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -298,6 +358,7 @@ fun ProjectsScreen(
                         onClick = {
                             signedIn = false
                             networkClient?.sessionToken = null
+                            repository.saveNetworkAccessSession(host.id, null)
                             onSignedOut()
                         },
                     ) {

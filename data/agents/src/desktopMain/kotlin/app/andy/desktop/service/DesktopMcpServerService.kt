@@ -26,6 +26,7 @@ import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
 import app.andy.desktop.service.proxy.resolveNetworkAccessHosts
 import app.andy.desktop.service.webchat.AttentionHub
+import app.andy.desktop.service.webchat.NetworkAccessPasswordHasher
 import app.andy.desktop.service.webchat.NetworkAccessSessionStore
 import app.andy.desktop.service.webchat.AuthFailureLimiter
 import app.andy.desktop.service.webchat.NetworkAccessAuthPlugin
@@ -119,10 +120,16 @@ class DesktopMcpServerService(
         return networkAccessSessions.createLoginCode()
     }
 
-    /** Clears chat sessions and login codes (e.g. after master token rotation). */
+    /** Clears login codes and sessions (e.g. after master token or password rotation). */
     override fun invalidateNetworkAccessSessions() {
         networkAccessSessions.clearAll()
     }
+
+    override fun hashNetworkAccessPassword(password: String): String =
+        NetworkAccessPasswordHasher.hash(password)
+
+    override fun verifyNetworkAccessPassword(password: String, hash: String): Boolean =
+        NetworkAccessPasswordHasher.verify(password, hash)
 
     fun startUnixSocketBlocking(socketPath: File): CommandResult {
         return try {
@@ -228,6 +235,11 @@ class DesktopMcpServerService(
                         runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
                             .getOrElse { WorkspaceState() }
                             .networkAccessToken
+                    },
+                    masterPasswordHashProvider = {
+                        runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                            .getOrElse { WorkspaceState() }
+                            .networkAccessPasswordHash
                     },
                 )
                 installWebChatRoutes(

@@ -32,6 +32,9 @@ use crate::slash::{
     complete_command, menu_height, merge_commands_with_skills, native_commands_for_agent,
     render_menu, SlashCommand, SlashMenuAction, SlashMenuState,
 };
+use crate::user_input::{
+    self, option_label_at, parse_user_input_request, PendingUserInput, PermissionChoice,
+};
 use crate::viewer_chrome::{self, Lane};
 
 const DETAIL_TRUNCATE_LINES: usize = 40;
@@ -62,6 +65,8 @@ struct LiveSnapshot {
     queued_follow_ups: Vec<QueuedFollowUp>,
     /// True when workspace delivery mode is Queue (vs Immediate inject).
     prefer_queue: bool,
+    /// Pending permission / ask-user from chat.status (authoritative while Blocked).
+    user_input_request: Option<PendingUserInput>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +85,11 @@ struct ViewState {
     image_paths: Vec<String>,
     scroll: u16,
     expanded_tools: std::collections::HashSet<usize>,
-    pending_permission: Option<AgentEvent>,
+    pending_input: Option<PendingUserInput>,
+    /// Selected answers for multi-question Artifact prompts (grill-me).
+    pending_answers: std::collections::HashMap<String, String>,
+    /// Focused question index for multi-question prompts.
+    pending_focus: usize,
     composer_enabled: bool,
     /// False once `chat.subscribe` ends (terminal/done) so a later resume can reopen it.
     subscribe_open: bool,
@@ -152,7 +161,9 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             image_paths: Vec::new(),
             scroll: 0,
             expanded_tools: std::collections::HashSet::new(),
-            pending_permission: None,
+            pending_input: None,
+            pending_answers: std::collections::HashMap::new(),
+            pending_focus: 0,
             // Done/Idle chats remain continuable (resume); only hard failures lock the composer.
             composer_enabled: !matches!(meta.status.as_str(), "Error" | "Failed" | "Stopped"),
             subscribe_open: true,
@@ -175,7 +186,9 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             // reconnect / continue-after-Done does not duplicate events.
             state.events.clear();
             state.expanded_tools.clear();
-            state.pending_permission = None;
+            state.pending_input = None;
+            state.pending_answers.clear();
+            state.pending_focus = 0;
             state.subscribe_open = true;
             state.connection_issue = None;
             state.connection_error = None;
@@ -328,19 +341,32 @@ fn apply_subscribe_message(state: &mut ViewState, msg: SubscribeMessage) {
             }
             for raw in batch.events {
                 let event = AgentEvent::from_wire(&raw);
-                if let AgentEvent::Permission { request_id, .. } = &event {
-                    state.pending_permission = Some(event.clone());
-                    let _ = request_id;
+                if let AgentEvent::Permission {
+                    request_id,
+                    tool_name,
+                    question,
+                    options,
+                    ..
+                } = &event
+                {
+                    state.pending_input = Some(PendingUserInput::from_permission_event(
+                        request_id.clone(),
+                        tool_name.clone(),
+                        question.clone(),
+                        options.clone(),
+                    ));
+                    state.pending_answers.clear();
+                    state.pending_focus = 0;
                 }
                 if let AgentEvent::PermissionResolved { request_id, .. } = &event {
-                    if let Some(AgentEvent::Permission {
-                        request_id: pending_id,
-                        ..
-                    }) = &state.pending_permission
+                    if state
+                        .pending_input
+                        .as_ref()
+                        .is_some_and(|p| p.request_id == *request_id)
                     {
-                        if pending_id == request_id {
-                            state.pending_permission = None;
-                        }
+                        state.pending_input = None;
+                        state.pending_answers.clear();
+                        state.pending_focus = 0;
                     }
                 }
                 match &event {
@@ -419,7 +445,7 @@ async fn handle_key(
     key: KeyEvent,
 ) -> Result<LoopAction> {
     if state.composer_enabled
-        && state.pending_permission.is_none()
+        && state.pending_input.is_none()
         && state.connection_issue.is_none()
     {
         let commands = available_slash_commands(meta, state);
@@ -489,14 +515,51 @@ async fn handle_key(
             });
         }
         MappedKey::ScrollUp => apply_scroll_delta(state, 1),
-        MappedKey::ScrollDown => apply_scroll_delta(state, -1),
+        MappedKey::ScrollDown => {
+            if let Some(pending) = &state.pending_input {
+                if !pending.is_permission() && !pending.questions.is_empty() {
+                    state.pending_focus = (state.pending_focus + 1) % pending.questions.len();
+                    state.input.clear();
+                } else {
+                    apply_scroll_delta(state, -1);
+                }
+            } else {
+                apply_scroll_delta(state, -1);
+            }
+        }
         MappedKey::PageUp => apply_scroll_delta(state, 10),
         MappedKey::PageDown => apply_scroll_delta(state, -10),
         MappedKey::Backspace => {
             state.input.pop();
         }
         MappedKey::Submit => {
-            if state.composer_enabled {
+            if let Some(pending) = state.pending_input.clone() {
+                if !pending.is_permission() {
+                    // Freeform / multi-question: Enter submits when every question is answered.
+                    if !state.input.trim().is_empty() {
+                        if let Some(q) = pending.questions.get(state.pending_focus) {
+                            state
+                                .pending_answers
+                                .insert(q.id.clone(), state.input.trim().to_string());
+                            state.input.clear();
+                        }
+                    }
+                    if pending.questions.iter().all(|q| {
+                        state
+                            .pending_answers
+                            .get(&q.id)
+                            .is_some_and(|a| !a.trim().is_empty())
+                    }) {
+                        user_input::respond(client, &meta.id, &pending, &state.pending_answers)
+                            .await?;
+                        state.pending_input = None;
+                        state.pending_answers.clear();
+                        state.pending_focus = 0;
+                    } else if state.pending_focus + 1 < pending.questions.len() {
+                        state.pending_focus += 1;
+                    }
+                }
+            } else if state.composer_enabled {
                 let resubscribe = submit_follow_up(client, meta, state).await?;
                 if resubscribe {
                     return Ok(LoopAction::Retry);
@@ -504,31 +567,56 @@ async fn handle_key(
             }
         }
         MappedKey::Insert(c) => {
-            if state.composer_enabled {
+            if state.pending_input.is_some() {
+                // Digits select numbered options for decision prompts.
+                if let Some(pending) = state.pending_input.clone() {
+                    if !pending.is_permission() && c.is_ascii_digit() {
+                        if let Some(digit) = c.to_digit(10).map(|d| d as usize) {
+                            if digit > 0 {
+                                if let Some(q) = pending.questions.get(state.pending_focus) {
+                                    if let Some(label) = option_label_at(q, digit) {
+                                        state.pending_answers.insert(q.id.clone(), label);
+                                        state.input.clear();
+                                        if pending.questions.len() == 1 {
+                                            user_input::respond(
+                                                client,
+                                                &meta.id,
+                                                &pending,
+                                                &state.pending_answers,
+                                            )
+                                            .await?;
+                                            state.pending_input = None;
+                                            state.pending_answers.clear();
+                                            state.pending_focus = 0;
+                                        } else if state.pending_focus + 1 < pending.questions.len() {
+                                            state.pending_focus += 1;
+                                        }
+                                        return Ok(LoopAction::Continue);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                state.input.push(c);
+            } else if state.composer_enabled {
                 state.input.push(c);
             }
         }
         MappedKey::Permission(choice) => {
-            if let Some(AgentEvent::Permission {
-                request_id,
-                options,
-                ..
-            }) = state.pending_permission.clone()
-            {
-                respond_permission(client, &meta.id, &request_id, &options, choice).await?;
-                state.pending_permission = None;
+            if let Some(pending) = state.pending_input.clone() {
+                if pending.is_permission() {
+                    user_input::respond_permission_choice(client, &meta.id, &pending, choice)
+                        .await?;
+                    state.pending_input = None;
+                    state.pending_answers.clear();
+                    state.pending_focus = 0;
+                }
             }
         }
         MappedKey::None => {}
     }
     Ok(LoopAction::Continue)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionChoice {
-    Yes,
-    No,
-    Always,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -629,6 +717,7 @@ fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
             .get("messageDeliveryMode")
             .and_then(|s| s.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("Queue")),
+        user_input_request: parse_user_input_request(v.get("userInputRequest")),
     }
 }
 
@@ -669,6 +758,33 @@ async fn refresh_live_state(client: &mut McpClient, task_id: &str, state: &mut V
         state.composer_enabled = !matches!(state.status.as_str(), "Error" | "Failed" | "Stopped");
     }
     state.queued_follow_ups = snap.queued_follow_ups;
+    apply_user_input_from_status(state, snap.user_input_request);
+}
+
+/// Hydrate or clear the interactive input prompt from chat.status.
+fn apply_user_input_from_status(state: &mut ViewState, request: Option<PendingUserInput>) {
+    match request {
+        Some(pending) => {
+            let same = state
+                .pending_input
+                .as_ref()
+                .is_some_and(|p| p.request_id == pending.request_id);
+            state.pending_input = Some(pending);
+            if !same {
+                state.pending_answers.clear();
+                state.pending_focus = 0;
+            }
+        }
+        None => {
+            // Leave in-flight event-stream permissions alone while still Blocked;
+            // clear once the daemon has left the waiting state without a request.
+            if state.pending_input.is_some() && !matches!(state.status.as_str(), "Blocked") {
+                state.pending_input = None;
+                state.pending_answers.clear();
+                state.pending_focus = 0;
+            }
+        }
+    }
 }
 
 fn is_active_status(status: &str) -> bool {
@@ -676,11 +792,17 @@ fn is_active_status(status: &str) -> bool {
 }
 
 /// Transcript presence line mirroring the desktop Working orb.
-fn presence_label(status: &str) -> Option<&'static str> {
+fn presence_label(status: &str, pending: Option<&PendingUserInput>) -> Option<String> {
     match status {
-        "Working" => Some("Working"),
-        "Blocked" => Some("Blocked — waiting"),
-        "Stopping" => Some("Stopping"),
+        "Working" => Some("Working".into()),
+        "Blocked" => {
+            if let Some(pending) = pending {
+                Some(format!("Blocked — {}", pending.summary_line()))
+            } else {
+                Some("Blocked — waiting".into())
+            }
+        }
+        "Stopping" => Some("Stopping".into()),
         _ => None,
     }
 }
@@ -693,11 +815,27 @@ fn presence_spinner(started: Instant) -> char {
 
 /// Fixed footer line for Working/Blocked/Stopping — rendered outside the
 /// scrollable transcript so long backlogs do not hide the presence signal.
-fn presence_line(status: &str, started: Instant) -> Option<Line<'static>> {
-    let label = presence_label(status)?;
+fn presence_line(
+    status: &str,
+    started: Instant,
+    pending: Option<&PendingUserInput>,
+) -> Option<Line<'static>> {
+    let label = presence_label(status, pending)?;
+    // Keep presence to one row; long delete paths truncate rather than wrap.
+    let max = 120usize;
+    let display = if label.chars().count() > max {
+        let truncated: String = label.chars().take(max.saturating_sub(1)).collect();
+        format!("{truncated}…")
+    } else {
+        format!("{label}…")
+    };
     Some(Line::from(Span::styled(
-        format!("  {} {label}…", presence_spinner(started)),
-        Style::default().fg(Color::DarkGray),
+        format!("  {} {display}", presence_spinner(started)),
+        Style::default().fg(if pending.is_some() {
+            Color::Magenta
+        } else {
+            Color::DarkGray
+        }),
     )))
 }
 
@@ -753,20 +891,44 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
         };
     }
 
-    if state.pending_permission.is_some() {
+    if let Some(pending) = &state.pending_input {
+        if pending.is_permission() {
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y')
+                    if modifiers_allow_typing(key.modifiers) =>
+                {
+                    MappedKey::Permission(PermissionChoice::Yes)
+                }
+                KeyCode::Char('n') | KeyCode::Char('N')
+                    if modifiers_allow_typing(key.modifiers) =>
+                {
+                    MappedKey::Permission(PermissionChoice::No)
+                }
+                KeyCode::Char('a') | KeyCode::Char('A')
+                    if modifiers_allow_typing(key.modifiers) =>
+                {
+                    MappedKey::Permission(PermissionChoice::Always)
+                }
+                KeyCode::Esc | KeyCode::Char('q') if modifiers_allow_typing(key.modifiers) => {
+                    MappedKey::Exit
+                }
+                _ => MappedKey::None,
+            };
+        }
+        // Artifact / grill-me: digits, typing, Enter handled via Insert/Submit below.
         return match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') if modifiers_allow_typing(key.modifiers) => {
-                MappedKey::Permission(PermissionChoice::Yes)
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') if modifiers_allow_typing(key.modifiers) => {
-                MappedKey::Permission(PermissionChoice::No)
-            }
-            KeyCode::Char('a') | KeyCode::Char('A') if modifiers_allow_typing(key.modifiers) => {
-                MappedKey::Permission(PermissionChoice::Always)
-            }
-            KeyCode::Esc | KeyCode::Char('q') if modifiers_allow_typing(key.modifiers) => {
+            KeyCode::Esc if state.input.is_empty() && modifiers_allow_typing(key.modifiers) => {
                 MappedKey::Exit
             }
+            KeyCode::Char('q')
+                if state.input.is_empty() && modifiers_allow_typing(key.modifiers) =>
+            {
+                MappedKey::Exit
+            }
+            KeyCode::Tab if modifiers_allow_typing(key.modifiers) => MappedKey::ScrollDown,
+            KeyCode::Backspace => MappedKey::Backspace,
+            KeyCode::Enter => MappedKey::Submit,
+            KeyCode::Char(c) if modifiers_allow_typing(key.modifiers) => MappedKey::Insert(c),
             _ => MappedKey::None,
         };
     }
@@ -797,64 +959,6 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
         KeyCode::Enter => MappedKey::Submit,
         KeyCode::Char(c) if modifiers_allow_typing(key.modifiers) => MappedKey::Insert(c),
         _ => MappedKey::None,
-    }
-}
-
-async fn respond_permission(
-    client: &mut McpClient,
-    task_id: &str,
-    request_id: &str,
-    options: &[(String, String)],
-    choice: PermissionChoice,
-) -> Result<()> {
-    let label = pick_permission_label(options, choice).unwrap_or_else(|| match choice {
-        PermissionChoice::Yes => "Allow".into(),
-        PermissionChoice::No => "Reject".into(),
-        PermissionChoice::Always => "Allow always".into(),
-    });
-    client
-        .call_tool(
-            "chat.respond",
-            json!({
-                "taskId": task_id,
-                "requestId": request_id,
-                "answers": { request_id: label }
-            }),
-        )
-        .await
-        .context("chat.respond")?;
-    Ok(())
-}
-
-fn pick_permission_label(options: &[(String, String)], choice: PermissionChoice) -> Option<String> {
-    let ranked_needles: &[&str] = match choice {
-        PermissionChoice::Yes => &["allow_once", "allow once"],
-        PermissionChoice::No => &["reject_once", "reject once", "reject", "deny"],
-        PermissionChoice::Always => &["allow_always", "allow always", "always"],
-    };
-    for needle in ranked_needles {
-        for (label, description) in options {
-            let blob = format!("{label} {description}").to_lowercase();
-            if blob.contains(needle) {
-                return Some(label.clone());
-            }
-        }
-    }
-    match choice {
-        PermissionChoice::Yes => options
-            .iter()
-            .find(|(label, description)| {
-                let blob = format!("{label} {description}").to_lowercase();
-                blob.contains("allow") && !blob.contains("always")
-            })
-            .map(|(label, _)| label.clone())
-            .or_else(|| options.first().map(|(label, _)| label.clone())),
-        PermissionChoice::No => options.last().map(|(label, _)| label.clone()),
-        PermissionChoice::Always => options
-            .iter()
-            .find(|(_, description)| description.to_lowercase().contains("always"))
-            .map(|(label, _)| label.clone())
-            .or_else(|| options.first().map(|(label, _)| label.clone())),
     }
 }
 
@@ -1001,7 +1105,7 @@ fn draw(
             Constraint::Length(menu_height(&state.slash_menu)),
             Constraint::Length(3),
             Constraint::Length(
-                if state.pending_permission.is_some()
+                if state.pending_input.is_some()
                     || state.connection_issue == Some(ConnectionIssue::Lost)
                 {
                     4
@@ -1033,7 +1137,11 @@ fn draw(
     let transcript_inner = transcript_block.inner(chunks[1]);
     frame.render_widget(transcript_block, chunks[1]);
 
-    let presence = presence_line(&state.status, state.presence_started);
+    let presence = presence_line(
+        &state.status,
+        state.presence_started,
+        state.pending_input.as_ref(),
+    );
     let presence_h = if presence.is_some() { 1u16 } else { 0 };
     let transcript_parts = Layout::default()
         .direction(Direction::Vertical)
@@ -1086,13 +1194,21 @@ fn draw(
     };
     let will_queue = !state.queued_follow_ups.is_empty()
         || (state.prefer_queue && is_active_status(&state.status));
-    let composer_title = if will_queue {
+    let composer_title = if let Some(pending) = &state.pending_input {
+        if pending.is_permission() {
+            " Permission "
+        } else {
+            " Decision "
+        }
+    } else if will_queue {
         " Follow-up · will queue "
     } else {
         " Follow-up "
     };
     let composer = if let Some(err) = &state.connection_error {
         format!(" {err} ")
+    } else if let Some(pending) = &state.pending_input {
+        format_pending_composer(pending, state)
     } else if !state.composer_enabled {
         " (composer disabled) ".to_string()
     } else {
@@ -1110,24 +1226,64 @@ fn draw(
 
     let footer = if state.connection_issue == Some(ConnectionIssue::Lost) {
         " Lost connection to andyd — press r to retry, q/Esc to quit ".to_string()
-    } else if let Some(AgentEvent::Permission {
-        tool_name,
-        question,
-        ..
-    }) = &state.pending_permission
-    {
-        format!(" Permission: {tool_name} — {question}  [y]es [n]o [a]lways-allow ")
+    } else if let Some(pending) = &state.pending_input {
+        if pending.is_permission() {
+            format!(
+                " Permission: {}  [y]es [n]o [a]lways-allow ",
+                pending.summary_line()
+            )
+        } else {
+            format!(
+                " Decision: {}  ·  1/2/3 choose · type+Enter · Tab next ",
+                pending.summary_line()
+            )
+        }
     } else {
         viewer_chrome::format_status_line(Lane::Acp, state.status_flash.as_deref())
     };
     frame.render_widget(Paragraph::new(footer), chunks[5]);
 }
 
+fn format_pending_composer(pending: &PendingUserInput, state: &ViewState) -> String {
+    if pending.is_permission() {
+        return format!(" {}  ·  [y]es [n]o [a]lways ", pending.summary_line());
+    }
+    let q = pending
+        .questions
+        .get(state.pending_focus)
+        .or_else(|| pending.questions.first());
+    let Some(q) = q else {
+        return " Needs your input ".into();
+    };
+    let selected = state
+        .pending_answers
+        .get(&q.id)
+        .map(|s| format!(" selected={s}"))
+        .unwrap_or_default();
+    let opts = q
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| format!("{}.{}", i + 1, o.label))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if state.input.is_empty() {
+        format!(" {} · {}{} ", q.question, opts, selected)
+    } else {
+        format!(" {} · draft: {} ", q.question, state.input)
+    }
+}
+
 /// Conversation-only visibility (default). Mirrors the GUI hiding AvailableCommands /
 /// Raw / ContextUsage, and also drops tools/thinking/plan/mode noise for the TUI.
+/// Permission prompts stay visible — they are the reason a chat is Blocked.
 fn event_visible_in_conversation(event: &AgentEvent) -> bool {
     match event {
-        AgentEvent::User { .. } | AgentEvent::Assistant { .. } | AgentEvent::Error { .. } => true,
+        AgentEvent::User { .. }
+        | AgentEvent::Assistant { .. }
+        | AgentEvent::Error { .. }
+        | AgentEvent::Permission { .. }
+        | AgentEvent::PermissionResolved { .. } => true,
         // Failed completion with no separate Error event still needs a signal.
         AgentEvent::Result { success: false, .. } => true,
         _ => false,
@@ -1587,7 +1743,9 @@ mod tests {
             image_paths: Vec::new(),
             scroll: 0,
             expanded_tools: Default::default(),
-            pending_permission: None,
+            pending_input: None,
+            pending_answers: Default::default(),
+            pending_focus: 0,
             composer_enabled: true,
             subscribe_open: true,
             connection_issue: None,
@@ -1656,6 +1814,22 @@ mod tests {
             used_tokens: 1,
             window_tokens: 2,
         }));
+        assert!(event_visible_in_conversation(&AgentEvent::Permission {
+            at_millis: 11,
+            request_id: "r".into(),
+            tool_name: "delete".into(),
+            question: "Delete foo?".into(),
+            options: vec![],
+        }));
+        assert!(event_visible_in_conversation(
+            &AgentEvent::PermissionResolved {
+                at_millis: 12,
+                request_id: "r".into(),
+                option_id: "1".into(),
+                allowed: true,
+                note: None,
+            }
+        ));
     }
 
     #[test]
@@ -1839,11 +2013,11 @@ mod tests {
             ("Allow once".into(), "allow_once".into()),
         ];
         assert_eq!(
-            pick_permission_label(&options, PermissionChoice::Yes).as_deref(),
+            user_input::pick_permission_label(&options, PermissionChoice::Yes).as_deref(),
             Some("Allow once")
         );
         assert_eq!(
-            pick_permission_label(&options, PermissionChoice::Always).as_deref(),
+            user_input::pick_permission_label(&options, PermissionChoice::Always).as_deref(),
             Some("Allow always")
         );
     }
@@ -2063,11 +2237,30 @@ mod tests {
     /// nested kotlin snippet, and the table) as distinct lines.
     #[test]
     fn presence_label_for_active_statuses() {
-        assert_eq!(presence_label("Working"), Some("Working"));
-        assert_eq!(presence_label("Blocked"), Some("Blocked — waiting"));
-        assert_eq!(presence_label("Stopping"), Some("Stopping"));
-        assert_eq!(presence_label("Done"), None);
-        assert_eq!(presence_label("Idle"), None);
+        assert_eq!(
+            presence_label("Working", None).as_deref(),
+            Some("Working")
+        );
+        assert_eq!(
+            presence_label("Blocked", None).as_deref(),
+            Some("Blocked — waiting")
+        );
+        let pending = PendingUserInput::from_permission_event(
+            "r".into(),
+            "delete".into(),
+            "Delete tmp.txt?".into(),
+            vec![],
+        );
+        assert_eq!(
+            presence_label("Blocked", Some(&pending)).as_deref(),
+            Some("Blocked — delete: Delete tmp.txt?")
+        );
+        assert_eq!(
+            presence_label("Stopping", None).as_deref(),
+            Some("Stopping")
+        );
+        assert_eq!(presence_label("Done", None), None);
+        assert_eq!(presence_label("Idle", None), None);
     }
 
     #[test]
@@ -2084,6 +2277,7 @@ mod tests {
         let snap = parse_live_snapshot(&v);
         assert_eq!(snap.status, "Working");
         assert!(snap.prefer_queue);
+        assert!(snap.user_input_request.is_none());
         assert_eq!(
             snap.queued_follow_ups,
             vec![
@@ -2101,6 +2295,88 @@ mod tests {
             "messageDeliveryMode": "Immediate"
         }));
         assert!(!immediate.prefer_queue);
+    }
+
+    #[test]
+    fn parse_live_snapshot_reads_user_input_request() {
+        let v = json!({
+            "status": "Blocked",
+            "userInputRequest": {
+                "id": "acp-permission-task-1",
+                "origin": "AcpPermission",
+                "questions": [{
+                    "id": "acp-permission-task-1",
+                    "header": "delete",
+                    "question": "Delete /tmp/foo.txt?",
+                    "options": [
+                        { "label": "Allow", "description": "allow_once · 1" },
+                        { "label": "Reject", "description": "reject_once · 2" }
+                    ]
+                }]
+            }
+        });
+        let snap = parse_live_snapshot(&v);
+        let pending = snap.user_input_request.expect("userInputRequest");
+        assert!(pending.is_permission());
+        assert_eq!(pending.request_id, "acp-permission-task-1");
+        assert_eq!(pending.questions[0].header, "delete");
+        assert_eq!(pending.questions[0].question, "Delete /tmp/foo.txt?");
+        assert_eq!(pending.questions[0].options.len(), 2);
+        assert_eq!(pending.questions[0].options[0].label, "Allow");
+    }
+
+    #[test]
+    fn status_user_input_hydrates_and_clears_pending_permission() {
+        let mut state = empty_state();
+        state.status = "Blocked".into();
+        let pending = PendingUserInput::from_permission_event(
+            "r1".into(),
+            "delete".into(),
+            "Delete me?".into(),
+            vec![("Allow".into(), "allow_once · 1".into())],
+        );
+        apply_user_input_from_status(&mut state, Some(pending.clone()));
+        assert_eq!(state.pending_input, Some(pending));
+
+        // Still Blocked with no request in this poll — keep event-stream permission.
+        apply_user_input_from_status(&mut state, None);
+        assert!(state.pending_input.is_some());
+
+        // Left Blocked without a request — clear.
+        state.status = "Working".into();
+        apply_user_input_from_status(&mut state, None);
+        assert!(state.pending_input.is_none());
+    }
+
+    #[test]
+    fn status_hydrates_grill_me_artifact_request() {
+        let v = json!({
+            "status": "Blocked",
+            "userInputRequest": {
+                "id": "q-1",
+                "origin": "Artifact",
+                "questions": [{
+                    "id": "platform_scope",
+                    "header": "",
+                    "question": "Which platforms should v1 ship on?",
+                    "options": [
+                        { "label": "Desktop only (Recommended)" },
+                        { "label": "Desktop and web" }
+                    ]
+                }]
+            }
+        });
+        let snap = parse_live_snapshot(&v);
+        let pending = snap.user_input_request.expect("artifact request");
+        assert!(!pending.is_permission());
+        assert_eq!(pending.questions[0].id, "platform_scope");
+        let mut state = empty_state();
+        state.status = "Blocked".into();
+        apply_user_input_from_status(&mut state, Some(pending));
+        assert!(state
+            .pending_input
+            .as_ref()
+            .is_some_and(|p| !p.is_permission()));
     }
 
     #[test]
@@ -2145,7 +2421,7 @@ mod tests {
 
     #[test]
     fn presence_line_renders_outside_transcript() {
-        let line = presence_line("Working", Instant::now()).expect("presence");
+        let line = presence_line("Working", Instant::now(), None).expect("presence");
         let plain: String = line
             .spans
             .iter()

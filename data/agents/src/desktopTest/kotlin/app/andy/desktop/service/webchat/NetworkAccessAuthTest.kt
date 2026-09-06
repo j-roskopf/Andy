@@ -85,7 +85,7 @@ class NetworkAccessAuthTest {
     }
 
     @Test
-    fun chatSessionCannotAccessMcpScope() {
+    fun fullSessionCanAccessMcpScope() {
         val store = NetworkAccessSessionStore()
         val session = store.exchangeMasterToken("master-secret-value", "master-secret-value")!!
         val limiter = AuthFailureLimiter(10, 60_000, 60_000) { 0L }
@@ -99,8 +99,7 @@ class NetworkAccessAuthTest {
                 sessionStore = store,
             ),
         )
-        assertEquals(
-            HttpStatusCode.Forbidden,
+        assertNull(
             evaluateNetworkAccessAuth(
                 "192.168.1.20",
                 session,
@@ -110,6 +109,17 @@ class NetworkAccessAuthTest {
                 sessionStore = store,
             ),
         )
+    }
+
+    @Test
+    fun passwordExchangeMintsFullSession() {
+        val hash = NetworkAccessPasswordHasher.hash("correct-horse-battery")
+        val store = NetworkAccessSessionStore()
+        assertNull(store.exchangeMasterPassword("wrong-password-xx", hash))
+        val session = store.exchangeMasterPassword("correct-horse-battery", hash)
+        assertTrue(session != null)
+        val resolved = store.resolveAuth(session, expectedMaster = "unrelated-master")
+        assertEquals(NetworkAccessScope.FULL, resolved?.scope)
     }
 
     @Test

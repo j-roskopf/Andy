@@ -90,6 +90,14 @@ class NetworkAccessClient(
         return parseLogin(response)
     }
 
+    suspend fun loginWithPassword(password: String): LoginResponse {
+        val response = rawRequest(HttpMethod.Post, "/api/auth/login", authed = false) {
+            contentType(ContentType.Application.Json)
+            setBody("""{"password":${json.encodeToString(password)}}""")
+        }
+        return parseLogin(response)
+    }
+
     suspend fun loginWithCode(code: String): LoginResponse {
         val response = rawRequest(HttpMethod.Post, "/api/auth/login", authed = false) {
             contentType(ContentType.Application.Json)

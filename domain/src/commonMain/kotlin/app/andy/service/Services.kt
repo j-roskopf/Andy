@@ -939,6 +939,9 @@ sealed interface MirrorInput {
 /** Lifetime of QR / manual login codes before they expire server-side. */
 const val NetworkLoginCodeTtlMillis = 60_000L
 
+/** Lifetime of Network Access sessions minted by /api/auth/login (password, token, or code). */
+const val NetworkAccessSessionTtlMillis = 7L * 24 * 60 * 60_000L
+
 /** Refresh login codes this long before expiry so Settings never shows a stale code. */
 const val NetworkLoginCodeRefreshLeadMillis = 5_000L
 
@@ -992,13 +995,19 @@ interface McpServerService {
         get() = NetworkLoginCodeTtlMillis
 
     /**
-     * Short-lived single-use code for QR sign-in (exchanged for a chat-scoped session on the web client).
+     * Short-lived single-use code for QR sign-in (exchanged for a full-scope session on the web client).
      * Empty when the HTTP server is not running.
      */
     fun createNetworkLoginCode(): String = ""
 
-    /** Drops in-memory web login codes and chat sessions (e.g. after master token rotation). */
+    /** Drops in-memory web login codes and sessions (e.g. after master token / password rotation). */
     fun invalidateNetworkAccessSessions() {}
+
+    /** Argon2id hash of a Network Access master password (never store plaintext). */
+    fun hashNetworkAccessPassword(password: String): String = ""
+
+    /** Constant-time verify of [password] against a stored [hash] from [hashNetworkAccessPassword]. */
+    fun verifyNetworkAccessPassword(password: String, hash: String): Boolean = false
 }
 
 enum class MirrorTouchAction { Down, Move, Up }

@@ -73,9 +73,6 @@ fun HostEditorScreen(
     }
     var networkUrl by remember { mutableStateOf(existing?.networkAccessBaseUrl.orEmpty()) }
     var notes by remember { mutableStateOf(existing?.notes.orEmpty()) }
-    var accessToken by remember {
-        mutableStateOf(existing?.id?.let { repository.networkAccessToken(it) }.orEmpty())
-    }
     var vncUsername by remember { mutableStateOf(existing?.vncUsername.orEmpty()) }
     var vncPassword by remember {
         mutableStateOf(existing?.id?.let { repository.vncPassword(it) }.orEmpty())
@@ -147,12 +144,10 @@ fun HostEditorScreen(
                 onValueChange = { networkUrl = it },
                 placeholder = "https://laptop.tailnet.ts.net or http://100.x.y.z:8565",
             )
-            MobileField(
-                label = "Network Access token",
-                value = accessToken,
-                onValueChange = { accessToken = it },
-                placeholder = "Settings → MCP → Network Access",
-                password = true,
+            Text(
+                "Sign in from Projects with your master password, access token, or login code — credentials are not stored on the host.",
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.palette.textSecondary,
             )
             MobileField(
                 label = "macOS username (optional)",
@@ -236,7 +231,6 @@ fun HostEditorScreen(
                     )
                     scope.launch {
                         repository.upsert(host)
-                        repository.saveNetworkAccessToken(host.id, accessToken)
                         repository.saveVncPassword(host.id, vncPassword)
                         repository.selectHost(host.id)
                         onDone()

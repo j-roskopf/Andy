@@ -704,6 +704,9 @@ internal object ScreenshotServices {
         override fun generateNetworkAccessToken() = "screenshot-network-access-token-0123456789abcdef"
 
         override fun createNetworkLoginCode() = "screenshot-login-code"
+        override fun hashNetworkAccessPassword(password: String) = "screenshot-hash-$password"
+        override fun verifyNetworkAccessPassword(password: String, hash: String) =
+            hash == "screenshot-hash-$password"
     }
 
     private object ScreenshotActionConfig : ActionConfigStore {

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarDefaults
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.andy.service.AppUpdateState
 import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.theme.AndyMotion
 import app.andy.ui.theme.AndySurfaceMode
@@ -54,17 +56,20 @@ import com.joetr.andy.mobile.data.HostRepository
 import com.joetr.andy.mobile.data.attention.AndroidChatNotificationService
 import com.joetr.andy.mobile.data.attention.AttentionPushService
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
+import com.joetr.andy.mobile.data.updates.AndroidAppUpdateService
 import com.joetr.andy.mobile.ui.ChatScreen
 import com.joetr.andy.mobile.ui.HostEditorScreen
 import com.joetr.andy.mobile.ui.HostsScreen
 import com.joetr.andy.mobile.ui.NewChatScreen
 import com.joetr.andy.mobile.ui.ProjectsScreen
 import com.joetr.andy.mobile.ui.ScreenViewerScreen
+import com.joetr.andy.mobile.ui.SettingsScreen
 
 enum class MobileTab(val label: String, val icon: ImageVector) {
     Hosts("Hosts", Icons.Outlined.Computer),
     Screen("Screen", Icons.Outlined.DesktopWindows),
     Projects("Projects", Icons.Outlined.ChatBubbleOutline),
+    Settings("Settings", Icons.Outlined.Settings),
 }
 
 sealed interface MobileRoute {
@@ -93,6 +98,8 @@ fun AndyMobileApp(
 ) {
     val context = LocalContext.current
     val repository = remember { HostRepository(context) }
+    val updateService = remember { AndroidAppUpdateService(context) }
+    val updateState by updateService.state.collectAsStateWithLifecycle()
     var route by remember { mutableStateOf<MobileRoute>(MobileRoute.Tabs) }
     var tab by remember { mutableStateOf(MobileTab.Hosts) }
     var networkClient by remember { mutableStateOf<NetworkAccessClient?>(null) }
@@ -102,6 +109,7 @@ fun AndyMobileApp(
     var screenKeyboardOpen by remember { mutableStateOf(false) }
     val viewingChatId = (route as? MobileRoute.Chat)?.chatId
     val notifications = remember { AndroidChatNotificationService(context) }
+    val updateAvailable = updateState is AppUpdateState.Available
     // Only suppress alerts while the chat is actually on-screen in the foreground.
     // Backgrounding with the chat route still open must still notify (desktop does).
     LifecycleResumeEffect(viewingChatId) {
@@ -112,6 +120,10 @@ fun AndyMobileApp(
                 AttentionPushService.viewingChatId = null
             }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        updateService.checkForUpdates()
     }
 
     LaunchedEffect(pendingOpenChatId) {
@@ -132,6 +144,7 @@ fun AndyMobileApp(
         onDispose {
             // Leave AttentionPushService running — it outlives the activity for background alerts.
             networkClient?.close()
+            updateService.close()
         }
     }
 
@@ -205,7 +218,13 @@ fun AndyMobileApp(
                                                     selectedIconColor = tokens.accent,
                                                     selectedTextColor = tokens.palette.textPrimary,
                                                     indicatorColor = tokens.accentSubtle,
-                                                    unselectedIconColor = tokens.palette.textTertiary,
+                                                    unselectedIconColor = if (
+                                                        item == MobileTab.Settings && updateAvailable
+                                                    ) {
+                                                        tokens.accent
+                                                    } else {
+                                                        tokens.palette.textTertiary
+                                                    },
                                                     unselectedTextColor = tokens.palette.textTertiary,
                                                 ),
                                             )
@@ -262,7 +281,6 @@ fun AndyMobileApp(
                                             context = context,
                                             baseUrl = host.resolvedNetworkAccessBaseUrl(),
                                             sessionToken = token,
-                                            masterToken = repository.networkAccessToken(host.id).orEmpty(),
                                             hostName = host.displayName,
                                         )
                                     }
@@ -272,6 +290,10 @@ fun AndyMobileApp(
                                 onOpenChat = { route = MobileRoute.Chat(it) },
                                 onNewChat = { route = MobileRoute.NewChat },
                                 onNeedHost = { tab = MobileTab.Hosts },
+                            )
+                            MobileTab.Settings -> SettingsScreen(
+                                modifier = contentModifier,
+                                updates = updateService,
                             )
                         }
                     }

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -72,6 +73,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -2167,6 +2170,192 @@ private fun McpServerPanel(
 }
 
 @Composable
+private fun NetworkAccessMasterPasswordSection(
+    passwordHash: String,
+    accessToken: String,
+    mcpService: McpServerService,
+    onPasswordHashChange: (String) -> Unit,
+) {
+    var mode by remember { mutableStateOf("idle") } // idle | set | change | clear | recover
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var recoveryToken by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val hasPassword = passwordHash.isNotBlank()
+
+    fun resetFields() {
+        currentPassword = ""
+        newPassword = ""
+        confirmPassword = ""
+        recoveryToken = ""
+        error = null
+    }
+
+    Text("Master password", color = TextSecondary, fontSize = 12.sp)
+    Text(
+        if (hasPassword) {
+            "Set — type this on Android/web instead of fetching the access token. Optional; token and QR still work."
+        } else {
+            "Optional memorable password for remote login without copying the access token."
+        },
+        color = TextSecondary,
+        fontSize = 12.sp,
+    )
+    if (newPassword.isNotBlank() && newPassword.length < 12) {
+        Text(
+            "Short passwords are easier to guess — 12+ characters recommended.",
+            color = Rust,
+            fontSize = 12.sp,
+        )
+    }
+    error?.let {
+        Text(it, color = Rust, fontSize = 12.sp)
+    }
+    Spacer(Modifier.height(6.dp))
+    when (mode) {
+        "idle" -> {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!hasPassword) {
+                    OutlinedButton(onClick = { resetFields(); mode = "set" }) {
+                        Text("Set password")
+                    }
+                } else {
+                    OutlinedButton(onClick = { resetFields(); mode = "change" }) {
+                        Text("Change")
+                    }
+                    OutlinedButton(onClick = { resetFields(); mode = "clear" }) {
+                        Text("Clear")
+                    }
+                    OutlinedButton(onClick = { resetFields(); mode = "recover" }) {
+                        Text("Forgot password…")
+                    }
+                }
+            }
+        }
+        "set" -> {
+            PasswordField("New password", newPassword) { newPassword = it }
+            Spacer(Modifier.height(6.dp))
+            PasswordField("Confirm", confirmPassword) { confirmPassword = it }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        when {
+                            newPassword.isEmpty() -> error = "Enter a password"
+                            newPassword != confirmPassword -> error = "Passwords do not match"
+                            else -> {
+                                onPasswordHashChange(mcpService.hashNetworkAccessPassword(newPassword))
+                                resetFields()
+                                mode = "idle"
+                            }
+                        }
+                    },
+                ) { Text("Save") }
+                OutlinedButton(onClick = { resetFields(); mode = "idle" }) { Text("Cancel") }
+            }
+        }
+        "change" -> {
+            PasswordField("Current password", currentPassword) { currentPassword = it }
+            Spacer(Modifier.height(6.dp))
+            PasswordField("New password", newPassword) { newPassword = it }
+            Spacer(Modifier.height(6.dp))
+            PasswordField("Confirm", confirmPassword) { confirmPassword = it }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        when {
+                            !mcpService.verifyNetworkAccessPassword(currentPassword, passwordHash) ->
+                                error = "Current password is incorrect"
+                            newPassword.isEmpty() -> error = "Enter a new password"
+                            newPassword != confirmPassword -> error = "Passwords do not match"
+                            else -> {
+                                onPasswordHashChange(mcpService.hashNetworkAccessPassword(newPassword))
+                                resetFields()
+                                mode = "idle"
+                            }
+                        }
+                    },
+                ) { Text("Save") }
+                OutlinedButton(onClick = { resetFields(); mode = "idle" }) { Text("Cancel") }
+            }
+        }
+        "clear" -> {
+            PasswordField("Current password", currentPassword) { currentPassword = it }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        if (!mcpService.verifyNetworkAccessPassword(currentPassword, passwordHash)) {
+                            error = "Current password is incorrect"
+                        } else {
+                            onPasswordHashChange("")
+                            resetFields()
+                            mode = "idle"
+                        }
+                    },
+                ) { Text("Clear password") }
+                OutlinedButton(onClick = { resetFields(); mode = "idle" }) { Text("Cancel") }
+            }
+        }
+        "recover" -> {
+            Text(
+                "Paste the access token from above to clear or replace a forgotten password.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            PasswordField("Access token", recoveryToken) { recoveryToken = it }
+            Spacer(Modifier.height(6.dp))
+            PasswordField("New password (optional)", newPassword) { newPassword = it }
+            Spacer(Modifier.height(6.dp))
+            PasswordField("Confirm new password", confirmPassword) { confirmPassword = it }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        val tokenOk = accessToken.isNotBlank() &&
+                            recoveryToken.trim() == accessToken.trim()
+                        when {
+                            !tokenOk -> error = "Access token does not match"
+                            newPassword.isNotEmpty() && newPassword != confirmPassword ->
+                                error = "Passwords do not match"
+                            newPassword.isNotEmpty() -> {
+                                onPasswordHashChange(mcpService.hashNetworkAccessPassword(newPassword))
+                                resetFields()
+                                mode = "idle"
+                            }
+                            else -> {
+                                onPasswordHashChange("")
+                                resetFields()
+                                mode = "idle"
+                            }
+                        }
+                    },
+                ) { Text(if (newPassword.isNotEmpty()) "Set new password" else "Clear password") }
+                OutlinedButton(onClick = { resetFields(); mode = "idle" }) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PasswordField(label: String, value: String, onValueChange: (String) -> Unit) {
+    Text(label, color = TextSecondary, fontSize = 12.sp)
+    TextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
+        colors = fieldColors(),
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+    )
+}
+
+@Composable
 private fun NetworkAccessPanel(
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
@@ -2293,8 +2482,8 @@ private fun NetworkAccessPanel(
         if (workspaceState.networkAccessEnabled) {
             Spacer(Modifier.height(10.dp))
             Text(
-                "Anyone who has the access token can control Andy via MCP (device, shell, files). " +
-                    "QR codes use one-time login codes that grant chat-only sessions on the phone.",
+                "Anyone who has the access token or master password can control Andy via MCP (device, shell, files). " +
+                    "QR codes and login codes mint full-scope sessions (expires in $loginCodeCountdownLabel while shown).",
                 color = Rust,
                 fontSize = 12.sp,
             )
@@ -2366,6 +2555,16 @@ private fun NetworkAccessPanel(
                     Text("Regenerate")
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            NetworkAccessMasterPasswordSection(
+                passwordHash = workspaceState.networkAccessPasswordHash,
+                accessToken = workspaceState.networkAccessToken,
+                mcpService = mcpService,
+                onPasswordHashChange = { hash ->
+                    mcpService.invalidateNetworkAccessSessions()
+                    onUpdateWorkspace { it.copy(networkAccessPasswordHash = hash) }
+                },
+            )
             Spacer(Modifier.height(8.dp))
             Text(
                 if (workspaceState.networkAccessTailscaleOnly) "Open on this Mac" else "Open on another device",

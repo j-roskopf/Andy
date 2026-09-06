@@ -94,4 +94,6 @@ dependencies {
     debugImplementation(compose.uiTooling)
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.coroutines.test)
+    testImplementation(libs.ktor.client.mock)
 }

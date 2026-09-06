@@ -73,6 +73,7 @@ class DesktopWorkspaceStore(
             networkAccessTailscaleOnly =
                 props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
             networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
+            networkAccessPasswordHash = props.getProperty("networkAccessPasswordHash").orEmpty(),
             vapidPublicKey = props.getProperty("vapidPublicKey").orEmpty(),
             vapidPrivateKey = props.getProperty("vapidPrivateKey").orEmpty(),
             tintId = AndyTint.fromId(props.getProperty("tintId").orEmpty()).id,
@@ -243,6 +244,7 @@ class DesktopWorkspaceStore(
             setProperty("hostScreenshotEnabled", state.hostScreenshotEnabled.toString())
             setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
             setProperty("networkAccessToken", state.networkAccessToken)
+            setProperty("networkAccessPasswordHash", state.networkAccessPasswordHash)
             setProperty("vapidPublicKey", vapidPublic)
             setProperty("vapidPrivateKey", vapidPrivate)
             setProperty("tintId", state.tintId)
