@@ -123,9 +123,13 @@ internal fun Application.installWebChatRoutes(
                     ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
                 val code = body.requiredString("code")?.trim().orEmpty()
                 val master = body.requiredString("token")?.trim().orEmpty()
+                val password = body.requiredString("password")?.trim().orEmpty()
                 val expectedMaster = networkAccess.masterTokenProvider().trim()
+                val passwordHash = networkAccess.masterPasswordHashProvider().trim()
                 val sessionToken = when {
                     code.isNotEmpty() -> networkAccess.sessionStore.exchangeLoginCode(code)
+                    password.isNotEmpty() ->
+                        networkAccess.sessionStore.exchangeMasterPassword(password, passwordHash)
                     master.isNotEmpty() && expectedMaster.isNotEmpty() ->
                         networkAccess.sessionStore.exchangeMasterToken(master, expectedMaster)
                     else -> null
@@ -140,7 +144,7 @@ internal fun Application.installWebChatRoutes(
                     buildJsonObject {
                         put("sessionToken", sessionToken)
                         put("expiresAtMillis", expiresAtMillis)
-                        put("scope", "chat")
+                        put("scope", "full")
                     }.toString(),
                     ContentType.Application.Json,
                 )
@@ -247,8 +251,10 @@ internal fun Application.installWebChatRoutes(
                         status = HttpStatusCode.ServiceUnavailable,
                     )
                 // Temporary chats never leave this desktop session — see excludingTemporary.
+                // ACP chats are fully interactive; Terminal chats appear only while they need
+                // a decision (grill-me / question.json) so mobile+web can answer them.
                 val chats = agents.tasks.value.excludingTemporary()
-                    .filter { it.lane == AgentLaneKind.Acp && !it.archived }
+                    .filter { !it.archived && it.isNetworkAccessVisible() }
                     .sortedByDescending { it.createdAtMillis }
                 call.respondText(buildJsonArray { chats.forEach { add(it.toChatJson()) } }.toString(), ContentType.Application.Json)
             }
@@ -343,7 +349,7 @@ internal fun Application.installWebChatRoutes(
                         """{"error":"chat not found"}""",
                         status = HttpStatusCode.NotFound,
                     )
-                if (task.lane != AgentLaneKind.Acp) {
+                if (!task.isNetworkAccessVisible()) {
                     return@get call.respondText(
                         """{"error":"this chat isn't supported in the web client yet — use `andy attach` over SSH"}""",
                         status = HttpStatusCode.Conflict,
@@ -369,7 +375,11 @@ internal fun Application.installWebChatRoutes(
                 if (task.lane != AgentLaneKind.Acp) {
                     return@post call.respondJsonError(
                         HttpStatusCode.Conflict,
-                        "this chat isn't supported in the web client yet — use `andy attach` over SSH",
+                        if (task.userInputRequest != null) {
+                            "answer the pending decision above — follow-up chat needs an ACP-lane session"
+                        } else {
+                            "this chat isn't supported in the web client yet — use `andy attach` over SSH"
+                        },
                     )
                 }
                 val body = call.receiveJsonObject()
@@ -401,7 +411,7 @@ internal fun Application.installWebChatRoutes(
                 val id = call.parameters["id"].orEmpty()
                 val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
                     ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
-                if (task.lane != AgentLaneKind.Acp) {
+                if (!task.isNetworkAccessVisible()) {
                     return@post call.respondJsonError(
                         HttpStatusCode.Conflict,
                         "this chat isn't supported in the web client yet — use `andy attach` over SSH",
@@ -680,7 +690,7 @@ internal fun Application.installWebChatRoutes(
                 close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "chat not found"))
                 return@webSocket
             }
-            if (task.lane != AgentLaneKind.Acp) {
+            if (!task.isNetworkAccessVisible()) {
                 close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "terminal-lane unsupported"))
                 return@webSocket
             }
@@ -789,6 +799,9 @@ internal fun Application.installWebChatRoutes(
         }
     }
 }
+
+private fun app.andy.model.AgentTask.isNetworkAccessVisible(): Boolean =
+    lane == AgentLaneKind.Acp || userInputRequest != null
 
 private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject {
     put("id", id)

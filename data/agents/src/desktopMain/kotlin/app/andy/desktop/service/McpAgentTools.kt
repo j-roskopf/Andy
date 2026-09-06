@@ -210,20 +210,7 @@ fun Server.registerAgentProjectTools(
                         put("automationNotifyFailedOnly", task.automationNotifyFailedOnly)
                         put("automationSuppressOsNotify", task.automationSuppressOsNotify)
                         task.userInputRequest?.let { request ->
-                            put("userInputRequest", buildJsonObject {
-                                put("id", request.id)
-                                put("origin", request.origin.name)
-                                put("questions", buildJsonArray {
-                                    request.questions.forEach { question ->
-                                        add(buildJsonObject {
-                                            put("id", question.id)
-                                            put("header", question.header)
-                                            put("question", question.question)
-                                            put("options", buildJsonArray { question.options.forEach { option -> add(buildJsonObject { put("label", option.label); put("description", option.description) }) } })
-                                        })
-                                    }
-                                })
-                            })
+                            put("userInputRequest", userInputRequestJson(request))
                         }
                         put("planMode", task.planMode)
                         if (task.queuedFollowUps.isNotEmpty()) {
@@ -1094,6 +1081,11 @@ fun Server.registerAgentProjectTools(
                         },
                     )
                 }
+                // ACP CLI hydrate: status alone only showed "Blocked"; include the pending
+                // permission/question so attach can render y/n/a without waiting on subscribe.
+                task?.userInputRequest?.let { request ->
+                    put("userInputRequest", userInputRequestJson(request))
+                }
             }.toString(),
         )
     }
@@ -1336,6 +1328,40 @@ internal fun inheritedAutonomy(
     return inheritedParentTask(agentRuns, explicitCallerTaskId, sessionCallerTaskId)?.autonomy
         ?: AgentAutonomy.Standard
 }
+
+/** Wire shape shared by [chat.list] and [chat.status] for pending permission / ask-user. */
+internal fun userInputRequestJson(request: AgentUserInputRequest): JsonObject =
+    buildJsonObject {
+        put("id", request.id)
+        put("origin", request.origin.name)
+        put(
+            "questions",
+            buildJsonArray {
+                request.questions.forEach { question ->
+                    add(
+                        buildJsonObject {
+                            put("id", question.id)
+                            put("header", question.header)
+                            put("question", question.question)
+                            put(
+                                "options",
+                                buildJsonArray {
+                                    question.options.forEach { option ->
+                                        add(
+                                            buildJsonObject {
+                                                put("label", option.label)
+                                                put("description", option.description)
+                                            },
+                                        )
+                                    }
+                                },
+                            )
+                        },
+                    )
+                }
+            },
+        )
+    }
 
 /** Resolves the task that owns an MCP session, preferring an explicit caller id. */
 internal fun inheritedParentTask(

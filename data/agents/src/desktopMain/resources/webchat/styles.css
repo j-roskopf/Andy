@@ -203,6 +203,26 @@ button.option {
   padding: 24px;
 }
 .auth-card h1 { margin: 0 0 8px; }
+.auth-modes {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.auth-mode {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  min-height: var(--tap);
+}
+.auth-mode.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 
 .field {
   display: flex;

@@ -55,6 +55,7 @@ class AndroidChatNotificationService(
             .setStyle(NotificationCompat.BigTextStyle().bigText(event.title))
             .setContentIntent(pending)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()

@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class LoginResponse(
     val sessionToken: String,
     val expiresAtMillis: Long = 0L,
-    val scope: String = "chat",
+    val scope: String = "full",
 )
 
 @Serializable

@@ -664,7 +664,10 @@
     box.classList.remove("hidden");
     const questions = pendingInput.questions;
     const answers = {};
-    box.innerHTML = `<h2>Needs your input</h2><div id="permission-questions"></div>
+    const otherOn = {};
+    const permissionPrompt = (pendingInput.origin || "") === "AcpPermission";
+    const title = permissionPrompt ? "Permission required" : "Needs your input";
+    box.innerHTML = `<h2>${escapeHtml(title)}</h2><div id="permission-questions"></div>
       <button id="permission-submit" type="button" class="primary" disabled>Submit</button>`;
     const root = $("permission-questions");
     const submit = $("permission-submit");
@@ -680,7 +683,7 @@
     questions.forEach((q, index) => {
       const block = document.createElement("div");
       block.className = "permission-question";
-      const heading = q.header || (questions.length > 1 ? `Question ${index + 1}` : "Needs your input");
+      const heading = q.header || (questions.length > 1 ? `Question ${index + 1}` : title);
       block.innerHTML = `<h3>${escapeHtml(heading)}</h3>
         <p>${escapeHtml(q.question || "")}</p>
         <div class="permission-options"></div>`;
@@ -702,11 +705,14 @@
           btn.className = "option";
           btn.innerHTML = `<strong>${escapeHtml(opt.label || "")}</strong><div class="muted">${escapeHtml(opt.description || "")}</div>`;
           btn.addEventListener("click", () => {
+            otherOn[q.id] = false;
             answers[q.id] = opt.label || "";
             opts.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
             btn.classList.add("selected");
-            // Single option-only question: submit immediately (matches desktop permission UX).
-            if (questions.length === 1) {
+            const otherBox = opts.querySelector(".permission-other");
+            if (otherBox) otherBox.remove();
+            // Single option-only permission: submit immediately (matches desktop permission UX).
+            if (permissionPrompt && questions.length === 1) {
               respond(pendingInput.id, { [q.id]: answers[q.id] });
               return;
             }
@@ -714,6 +720,33 @@
           });
           opts.appendChild(btn);
         });
+        if (!permissionPrompt) {
+          const otherBtn = document.createElement("button");
+          otherBtn.type = "button";
+          otherBtn.className = "option";
+          otherBtn.innerHTML = `<strong>Other</strong><div class="muted">Enter a different answer.</div>`;
+          otherBtn.addEventListener("click", () => {
+            otherOn[q.id] = true;
+            answers[q.id] = "";
+            opts.querySelectorAll(".option").forEach((el) => el.classList.remove("selected"));
+            otherBtn.classList.add("selected");
+            let otherBox = opts.querySelector(".permission-other");
+            if (!otherBox) {
+              otherBox = document.createElement("textarea");
+              otherBox.className = "permission-other";
+              otherBox.rows = 2;
+              otherBox.placeholder = "Your answer";
+              otherBox.addEventListener("input", () => {
+                answers[q.id] = otherBox.value;
+                syncSubmit();
+              });
+              opts.appendChild(otherBox);
+            }
+            otherBox.focus();
+            syncSubmit();
+          });
+          opts.appendChild(otherBtn);
+        }
       }
       root.appendChild(block);
     });
@@ -726,10 +759,13 @@
       if (Object.values(payload).some((v) => !v)) return;
       respond(pendingInput.id, payload);
     });
-    // Hide Submit for the single option-only quick path; keep it for multi / freeform.
-    const onlySingleOptionQuestion =
-      questions.length === 1 && Array.isArray(questions[0].options) && questions[0].options.length > 0;
-    submit.hidden = onlySingleOptionQuestion;
+    // Hide Submit for single permission option-only quick path; keep it for grill-me / freeform.
+    const onlySinglePermissionOption =
+      permissionPrompt &&
+      questions.length === 1 &&
+      Array.isArray(questions[0].options) &&
+      questions[0].options.length > 0;
+    submit.hidden = onlySinglePermissionOption;
     syncSubmit();
   }
 
@@ -1021,17 +1057,29 @@
   }
 
   $("token-save").addEventListener("click", async () => {
-    const value = $("token-input").value.trim();
-    if (!value) {
-      $("auth-error").textContent = "Token or login code required";
-      $("auth-error").classList.remove("hidden");
-      return;
-    }
+    const mode = document.body.dataset.authMode || "password";
     $("auth-error").classList.add("hidden");
     try {
-      const body = value.length <= 24 ? { code: value } : { token: value };
-      await exchangeLogin(body);
-      $("token-input").value = "";
+      if (mode === "password") {
+        const value = $("password-input").value;
+        if (!value) {
+          $("auth-error").textContent = "Password required";
+          $("auth-error").classList.remove("hidden");
+          return;
+        }
+        await exchangeLogin({ password: value });
+        $("password-input").value = "";
+      } else {
+        const value = $("token-input").value.trim();
+        if (!value) {
+          $("auth-error").textContent = "Token or login code required";
+          $("auth-error").classList.remove("hidden");
+          return;
+        }
+        const body = value.length <= 24 ? { code: value } : { token: value };
+        await exchangeLogin(body);
+        $("token-input").value = "";
+      }
       location.hash = "#/";
       routeFromHash();
     } catch (err) {
@@ -1040,8 +1088,23 @@
     }
   });
 
+  function setAuthMode(mode) {
+    document.body.dataset.authMode = mode;
+    const passwordMode = mode === "password";
+    $("auth-mode-password").classList.toggle("active", passwordMode);
+    $("auth-mode-token").classList.toggle("active", !passwordMode);
+    $("auth-mode-password").setAttribute("aria-selected", passwordMode ? "true" : "false");
+    $("auth-mode-token").setAttribute("aria-selected", passwordMode ? "false" : "true");
+    $("auth-password-field").classList.toggle("hidden", !passwordMode);
+    $("auth-token-field").classList.toggle("hidden", passwordMode);
+  }
+
+  $("auth-mode-password").addEventListener("click", () => setAuthMode("password"));
+  $("auth-mode-token").addEventListener("click", () => setAuthMode("token"));
+  setAuthMode("password");
+
   $("btn-forget").addEventListener("click", () => {
-    if (confirm("Log out of Andy on this device? You'll need the access token again.")) {
+    if (confirm("Log out of Andy on this device? You'll need to sign in again.")) {
       forgetToken().catch(() => {});
     }
   });

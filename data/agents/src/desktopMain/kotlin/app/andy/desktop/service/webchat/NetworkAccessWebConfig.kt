@@ -1,5 +1,7 @@
 package app.andy.desktop.service.webchat
 
+import app.andy.service.NetworkAccessSessionTtlMillis
+
 /** Wiring for web-chat security features (sessions, login rate limits). */
 internal data class NetworkAccessWebConfig(
     val sessionStore: NetworkAccessSessionStore = NetworkAccessSessionStore(),
@@ -10,5 +12,7 @@ internal data class NetworkAccessWebConfig(
         clock = { System.currentTimeMillis() },
     ),
     val masterTokenProvider: () -> String = { "" },
-    val sessionTtlMillis: Long = 24 * 60 * 60_000L,
+    /** Argon2id hash from workspace; empty means password login is disabled. */
+    val masterPasswordHashProvider: () -> String = { "" },
+    val sessionTtlMillis: Long = NetworkAccessSessionTtlMillis,
 )

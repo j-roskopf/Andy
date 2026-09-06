@@ -16,6 +16,9 @@ import kotlinx.serialization.json.Json
 /**
  * Persists non-secret host metadata in encrypted prefs and keeps Network Access /
  * VNC secrets in separate encrypted keys — never logged.
+ *
+ * Network Access stores only the exchanged session token (not the master password or
+ * long-lived access token). Legacy `na_token_*` values are migrated once via login.
  */
 class HostRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -68,8 +71,12 @@ class HostRepository(context: Context) {
         }
     }
 
-    fun networkAccessToken(hostId: String): String? =
-        prefs.getString(tokenKey(hostId), null)?.takeIf { it.isNotBlank() }
+    fun networkAccessSession(hostId: String): String? =
+        prefs.getString(sessionKey(hostId), null)?.takeIf { it.isNotBlank() }
+
+    /** Legacy master token storage — migrate once via login, then clear. */
+    fun legacyNetworkAccessToken(hostId: String): String? =
+        prefs.getString(legacyTokenKey(hostId), null)?.takeIf { it.isNotBlank() }
 
     fun vncPassword(hostId: String): String? =
         prefs.getString(vncKey(hostId), null)?.takeIf { it.isNotBlank() }
@@ -88,11 +95,17 @@ class HostRepository(context: Context) {
         prefs.edit().putBoolean(KEY_VNC_BUFFER_MODE, enabled).apply()
     }
 
-    fun saveNetworkAccessToken(hostId: String, token: String?) {
+    fun saveNetworkAccessSession(hostId: String, sessionToken: String?) {
         prefs.edit().apply {
-            val value = token?.trim().orEmpty()
-            if (value.isEmpty()) remove(tokenKey(hostId)) else putString(tokenKey(hostId), value)
+            val value = sessionToken?.trim().orEmpty()
+            if (value.isEmpty()) remove(sessionKey(hostId)) else putString(sessionKey(hostId), value)
+            // Always drop legacy master-token storage once we have a session path.
+            remove(legacyTokenKey(hostId))
         }.apply()
+    }
+
+    fun clearLegacyNetworkAccessToken(hostId: String) {
+        prefs.edit().remove(legacyTokenKey(hostId)).apply()
     }
 
     fun saveVncPassword(hostId: String, password: String?) {
@@ -104,7 +117,8 @@ class HostRepository(context: Context) {
 
     fun clearSecrets(hostId: String) {
         prefs.edit()
-            .remove(tokenKey(hostId))
+            .remove(sessionKey(hostId))
+            .remove(legacyTokenKey(hostId))
             .remove(vncKey(hostId))
             .apply()
     }
@@ -122,7 +136,8 @@ class HostRepository(context: Context) {
             .apply()
     }
 
-    private fun tokenKey(hostId: String) = "na_token_$hostId"
+    private fun sessionKey(hostId: String) = "na_session_$hostId"
+    private fun legacyTokenKey(hostId: String) = "na_token_$hostId"
     private fun vncKey(hostId: String) = "vnc_pass_$hostId"
 
     companion object {

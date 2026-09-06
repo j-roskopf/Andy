@@ -3,6 +3,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::{json, Value};
+use std::io::Stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -81,7 +82,7 @@ pub struct ComposeOutcome {
 /// (`None` / `Some("")` = Inbox).
 pub async fn run_composer(
     client: &mut McpClient,
-    terminal: &mut Terminal<impl Backend>,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     preset_project: Option<(&str, &str)>,
 ) -> Result<Option<ComposeOutcome>> {
     let catalog = load_catalog(client).await?;
@@ -713,7 +714,7 @@ fn move_pick(view: &mut StepView, delta: isize) {
 /// Start failures are `Err`. Attach failures are returned on the outcome.
 async fn start_and_attach(
     client: &mut McpClient,
-    terminal: &mut Terminal<impl Backend>,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     draft: &ComposeDraft,
     status: &mut String,
 ) -> Result<ComposeOutcome> {
@@ -727,10 +728,9 @@ async fn start_and_attach(
             area,
         );
     });
-    let attach_error = match attach::attach_or_reattach(client, &id).await {
-        Ok(()) => None,
-        Err(err) => Some(format!("{err:#}")),
-    };
+    // Same ownership rules as Enter-to-attach: ACP/tmux tear down the alt screen,
+    // so restore via attach_from_dashboard or keystrokes echo into the footer.
+    let attach_error = attach::attach_from_dashboard(client, terminal, &id).await?;
     Ok(ComposeOutcome {
         task_id: id,
         attach_error,

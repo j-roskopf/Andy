@@ -1,12 +1,13 @@
 package app.andy.desktop.service.webchat
 
+import app.andy.service.NetworkAccessSessionTtlMillis
 import app.andy.service.NetworkLoginCodeTtlMillis
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
-/** Chat-only (web) vs full MCP + chat. */
+/** Chat-only (legacy) vs full MCP + chat. Exchanged sessions are always [FULL]. */
 internal enum class NetworkAccessScope {
     CHAT,
     FULL,
@@ -18,12 +19,13 @@ internal data class ResolvedNetworkAuth(
 )
 
 /**
- * In-memory login codes and chat-scoped session tokens.
+ * In-memory login codes and full-scope session tokens.
  * Master [networkAccessToken] stays in workspace and grants FULL scope when presented directly.
+ * Optional master password is verified at login and exchanged for a FULL session (never stored on clients).
  */
 internal class NetworkAccessSessionStore(
     private val codeTtlMillis: Long = NetworkLoginCodeTtlMillis,
-    private val sessionTtlMillis: Long = 24 * 60 * 60_000L,
+    private val sessionTtlMillis: Long = NetworkAccessSessionTtlMillis,
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val random: SecureRandom = SecureRandom(),
 ) {
@@ -47,7 +49,7 @@ internal class NetworkAccessSessionStore(
         return code
     }
 
-    /** Single-use: returns a new chat session token or null if invalid/expired. */
+    /** Single-use: returns a new full-scope session token or null if invalid/expired. */
     fun exchangeLoginCode(code: String): String? {
         purgeExpired()
         val normalized = code.trim()
@@ -57,10 +59,17 @@ internal class NetworkAccessSessionStore(
         return issueSession()
     }
 
-    /** Validates master token and returns a chat-scoped session (never store master on phone). */
+    /** Validates master token and returns a full-scope session (never store master on phone). */
     fun exchangeMasterToken(provided: String, expectedMaster: String): String? {
         if (expectedMaster.isBlank()) return null
         if (!constantTimeEquals(provided.trim(), expectedMaster.trim())) return null
+        return issueSession()
+    }
+
+    /** Validates master password hash and returns a full-scope session. */
+    fun exchangeMasterPassword(provided: String, passwordHash: String): String? {
+        if (passwordHash.isBlank()) return null
+        if (!NetworkAccessPasswordHasher.verify(provided, passwordHash)) return null
         return issueSession()
     }
 
@@ -79,7 +88,7 @@ internal class NetworkAccessSessionStore(
             return null
         }
         return ResolvedNetworkAuth(
-            scope = NetworkAccessScope.CHAT,
+            scope = NetworkAccessScope.FULL,
             fingerprint = fingerprint(token),
         )
     }

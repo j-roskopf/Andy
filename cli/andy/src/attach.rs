@@ -1,24 +1,100 @@
 use anyhow::{bail, Context, Result};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::{event::DisableMouseCapture, event::EnableMouseCapture, ExecutableCommand};
+use ratatui::prelude::*;
 use serde_json::{json, Value};
+use std::io::{stdout, Stdout};
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
 use crate::acp_view;
 use crate::mcp::McpClient;
 use crate::tmux;
+use crate::user_input;
 
 const SESSION_WAIT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Re-assert raw mode + alternate screen after a nested viewer released them.
+///
+/// ACP/tmux attach and standalone prompts tear down the TTY; without this the
+/// dashboard keeps drawing while keystrokes echo into the footer (e.g. `qqqq`).
+pub fn resume_dashboard_terminal(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+) -> Result<()> {
+    enable_raw_mode()?;
+    stdout().execute(EnterAlternateScreen)?;
+    let _ = stdout().execute(EnableMouseCapture);
+    *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    Ok(())
+}
+
+/// Leave the dashboard alt screen so a Terminal-lane attach gets a normal TTY.
+pub fn leave_dashboard_terminal(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+) -> Result<()> {
+    disable_raw_mode()?;
+    let _ = stdout().execute(DisableMouseCapture);
+    stdout().execute(LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+/// Attach from the chats TUI, preserving dashboard ownership on return.
+///
+/// Returns `Ok(None)` on success, or `Ok(Some(err))` when attach failed but the
+/// dashboard was restored (caller shows the error). Hard setup failures are `Err`.
+pub async fn attach_from_dashboard(
+    client: &mut McpClient,
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    task_id: &str,
+) -> Result<Option<String>> {
+    // Resolve lane while the dashboard still owns the alt screen so opening a chat
+    // does not flash a blank terminal. ACP takes over that screen; Terminal needs
+    // a normal TTY for tmux.
+    match acp_view::resolve_lane(client, task_id).await {
+        Ok(lane) if lane.eq_ignore_ascii_case("Acp") => {
+            let err = match acp_view::run_acp_viewer(client, task_id).await {
+                Ok(()) => None,
+                Err(err) => Some(format!("{err:#}")),
+            };
+            // ACP viewer leaves the alt screen on exit; restore dashboard chrome.
+            resume_dashboard_terminal(terminal)?;
+            Ok(err)
+        }
+        Ok(_) => {
+            leave_dashboard_terminal(terminal)?;
+            let err = match attach_or_reattach(client, task_id).await {
+                Ok(()) => None,
+                Err(err) => Some(format!("{err:#}")),
+            };
+            resume_dashboard_terminal(terminal)?;
+            Ok(err)
+        }
+        Err(err) => Ok(Some(format!("{err:#}"))),
+    }
+}
 
 /// Attach to a chat — ACP lane opens the native viewer; Terminal lane uses tmux
 /// with the same header/status/hotkey chrome framing.
 ///
 /// For a freshly started Terminal chat, waits for the session to appear. If it
 /// never does, tries quiet provider reattach (ended chats) before failing.
+///
+/// Prefer [`attach_from_dashboard`] when nesting under the chats TUI so the
+/// alternate screen / raw mode are restored on return.
 pub async fn attach_or_reattach(client: &mut McpClient, task_id: &str) -> Result<()> {
     let lane = acp_view::resolve_lane(client, task_id).await?;
     if lane.eq_ignore_ascii_case("Acp") {
         return acp_view::run_acp_viewer(client, task_id).await;
+    }
+
+    // Grill-me / question.json parks Terminal chats as Blocked with userInputRequest.
+    // Surface Andy's decision card before dropping into tmux so CLI matches GUI/web/Android.
+    if let Some(pending) = user_input::fetch_pending_user_input(client, task_id).await {
+        let _ = user_input::run_standalone_prompt(client, task_id, &pending).await?;
     }
 
     let (title, status) = load_terminal_chrome(client, task_id).await;

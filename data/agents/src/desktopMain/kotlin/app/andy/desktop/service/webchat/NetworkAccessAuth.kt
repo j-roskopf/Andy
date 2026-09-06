@@ -66,7 +66,8 @@ internal class NetworkAccessAuthConfig {
  * - Static web-chat assets and `/api/auth/login` stay public.
  * - When Network Access is **off**, loopback is unauthenticated (vendor CLIs).
  * - When Network Access is **on**, every non-public route needs credentials — including loopback.
- * - Chat-scoped session tokens work on /api/ and /ws/ routes only; MCP requires the master token.
+ * - Chat-scoped paths (/api/, /ws/) and MCP both accept FULL-scope sessions (password, token, or login-code exchange).
+ * - The random master token still grants FULL when presented directly as Bearer.
  * - Optional Tailscale-only filter rejects non-Tailscale remote peers with 403.
  * - LAN mode allows plain HTTP (bearer token still required); use Tailscale Serve for TLS on untrusted networks.
  */

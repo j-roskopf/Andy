@@ -13,6 +13,10 @@ import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentUserInputOption
+import app.andy.model.AgentUserInputOrigin
+import app.andy.model.AgentUserInputQuestion
+import app.andy.model.AgentUserInputRequest
 import app.andy.model.MdnsService
 import app.andy.model.SdkDiscovery
 import app.andy.model.WorkspaceState
@@ -143,6 +147,46 @@ class WebChatHttpServerTest {
             assertTrue(!body.contains("term-1"), "terminal-lane chats must be filtered out")
         } finally {
             client.close()
+        }
+    }
+
+    @Test
+    fun terminalChatWithPendingDecisionIsVisibleAndRespondable() = runBlocking {
+        agents.setUserInput(
+            "term-1",
+            AgentUserInputRequest(
+                id = "q-term",
+                origin = AgentUserInputOrigin.Artifact,
+                questions = listOf(
+                    AgentUserInputQuestion(
+                        id = "platform_scope",
+                        question = "Which platforms?",
+                        options = listOf(
+                            AgentUserInputOption("Desktop only"),
+                            AgentUserInputOption("Desktop and web"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val client = HttpClient(CIO)
+        try {
+            val list = client.get("http://127.0.0.1:$port/api/chats")
+            assertEquals(HttpStatusCode.OK, list.status)
+            assertTrue(list.bodyAsText().contains("term-1"), "blocked terminal decision should list")
+
+            val detail = client.get("http://127.0.0.1:$port/api/chats/term-1")
+            assertEquals(HttpStatusCode.OK, detail.status)
+            assertTrue(detail.bodyAsText().contains("platform_scope"))
+
+            val respond = client.post("http://127.0.0.1:$port/api/chats/term-1/respond") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"requestId":"q-term","answers":{"platform_scope":"Desktop only"}}""")
+            }
+            assertEquals(HttpStatusCode.OK, respond.status)
+        } finally {
+            client.close()
+            agents.setUserInput("term-1", null)
         }
     }
 
@@ -567,7 +611,7 @@ class WebChatHttpServerTest {
     }
 
     @Test
-    fun loginCodeExchangesForChatSession() = runBlocking {
+    fun loginCodeExchangesForFullSession() = runBlocking {
         workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = true))
         val code = mcp.createNetworkLoginCode()
         assertTrue(code.isNotBlank())
@@ -584,18 +628,60 @@ class WebChatHttpServerTest {
             assertEquals(HttpStatusCode.OK, response.status)
             val body = response.bodyAsText()
             assertTrue(body.contains("sessionToken"), body)
+            assertTrue(body.contains("\"scope\":\"full\"") || body.contains("\"scope\": \"full\""), body)
             val session = Regex(""""sessionToken"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
             assertTrue(!session.isNullOrBlank())
             val chatOk = client.get("http://127.0.0.1:$port/api/chats") {
                 header(HttpHeaders.Authorization, "Bearer $session")
             }
             assertEquals(HttpStatusCode.OK, chatOk.status)
-            val mcpResponse = client.get("http://127.0.0.1:$port/mcp") {
-                header(HttpHeaders.Authorization, "Bearer $session")
-            }
-            assertEquals(HttpStatusCode.Forbidden, mcpResponse.status)
+            // MCP SSE can hang on GET; scope coverage lives in NetworkAccessAuthTest.fullSessionCanAccessMcpScope.
         } finally {
             workspaceStore.save(workspaceStore.load().copy(networkAccessEnabled = false))
+            client.close()
+        }
+    }
+
+    @Test
+    fun passwordLoginExchangesForFullSession() = runBlocking {
+        val password = "memorable-test-password"
+        val hash = mcp.hashNetworkAccessPassword(password)
+        workspaceStore.save(
+            workspaceStore.load().copy(
+                networkAccessEnabled = true,
+                networkAccessPasswordHash = hash,
+            ),
+        )
+        val client = HttpClient(CIO) {
+            install(io.ktor.client.plugins.HttpTimeout) {
+                requestTimeoutMillis = 5_000
+            }
+        }
+        try {
+            val bad = client.post("http://127.0.0.1:$port/api/auth/login") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"password":"wrong-password"}""")
+            }
+            assertEquals(HttpStatusCode.Unauthorized, bad.status)
+            val response = client.post("http://127.0.0.1:$port/api/auth/login") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"password":"$password"}""")
+            }
+            assertEquals(HttpStatusCode.OK, response.status)
+            val body = response.bodyAsText()
+            val session = Regex(""""sessionToken"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1)
+            assertTrue(!session.isNullOrBlank())
+            val chatOk = client.get("http://127.0.0.1:$port/api/chats") {
+                header(HttpHeaders.Authorization, "Bearer $session")
+            }
+            assertEquals(HttpStatusCode.OK, chatOk.status)
+        } finally {
+            workspaceStore.save(
+                workspaceStore.load().copy(
+                    networkAccessEnabled = false,
+                    networkAccessPasswordHash = "",
+                ),
+            )
             client.close()
         }
     }
@@ -705,6 +791,32 @@ class WebChatHttpServerTest {
         fun setStatus(taskId: String, status: AgentStatus) {
             _tasks.value = _tasks.value.map { task ->
                 if (task.id == taskId) task.copy(status = status) else task
+            }
+        }
+
+        fun setUserInput(taskId: String, request: AgentUserInputRequest?) {
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) {
+                    task.copy(
+                        status = if (request != null) AgentStatus.Blocked else task.status,
+                        userInputRequest = request,
+                    )
+                } else {
+                    task
+                }
+            }
+        }
+
+        override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) {
+            val task = _tasks.value.firstOrNull { it.id == taskId } ?: return
+            val request = task.userInputRequest?.takeIf { it.id == requestId } ?: return
+            if (request.questions.any { answers[it.id].isNullOrBlank() }) return
+            _tasks.value = _tasks.value.map {
+                if (it.id == taskId) {
+                    it.copy(status = AgentStatus.Working, userInputRequest = null)
+                } else {
+                    it
+                }
             }
         }
 

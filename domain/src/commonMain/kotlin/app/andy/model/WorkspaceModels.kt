@@ -67,6 +67,11 @@ data class WorkspaceState(
     val networkAccessTailscaleOnly: Boolean = true,
     /** Shared bearer token required for network (and loopback reverse-proxy) access when enabled. */
     val networkAccessToken: String = "",
+    /**
+     * Optional Argon2id hash of a memorable master password (empty = unset).
+     * Password is accepted only at `/api/auth/login`; never stored or sent as Bearer.
+     */
+    val networkAccessPasswordHash: String = "",
     /** Web Push VAPID public key (URL-safe base64); empty until first push use. */
     val vapidPublicKey: String = "",
     /** Web Push VAPID private key (URL-safe base64); empty until first push use. */

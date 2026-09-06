@@ -1,11 +1,8 @@
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
+    self, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
 };
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
@@ -14,7 +11,6 @@ use std::collections::HashSet;
 use std::io::{stdout, Stdout};
 use std::time::Duration;
 
-use crate::acp_view;
 use crate::attach;
 use crate::chats::{self, ListEntry, ProjectGroup};
 use crate::compose;
@@ -42,7 +38,7 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = restore_terminal(&mut self.0);
+        let _ = attach::leave_dashboard_terminal(&mut self.0);
     }
 }
 
@@ -122,6 +118,9 @@ pub async fn run_dashboard(socket: PathBuf, ensure_local_daemon: bool) -> Result
                                     let task_id = outcome.task_id;
                                     // Keep the project open so the new chat is visible at the top.
                                     expanded.insert(project_key);
+                                    // Belt-and-suspenders: attach_from_dashboard already
+                                    // resumes, but cancel/error paths may still need this.
+                                    attach::resume_dashboard_terminal(&mut terminal)?;
                                     refresh(
                                         &mut client,
                                         &mut terminal,
@@ -154,8 +153,13 @@ pub async fn run_dashboard(socket: PathBuf, ensure_local_daemon: bool) -> Result
                                         ),
                                     });
                                 }
-                                Ok(None) => {}
-                                Err(err) => flash = Some(format!("compose error: {err:#}")),
+                                Ok(None) => {
+                                    attach::resume_dashboard_terminal(&mut terminal)?;
+                                }
+                                Err(err) => {
+                                    let _ = attach::resume_dashboard_terminal(&mut terminal);
+                                    flash = Some(format!("compose error: {err:#}"));
+                                }
                             }
                         }
                         KeyCode::Char('r') => {
@@ -550,14 +554,6 @@ fn footer_status(selected: Option<&ListEntry>, chat_count: usize) -> String {
     }
 }
 
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    let _ = stdout().execute(DisableMouseCapture);
-    stdout().execute(LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
-}
-
 /// Pause on a full-screen hint so users see how to get back before tmux takes over.
 fn confirm_attach(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -610,36 +606,7 @@ async fn attach_selected_chat(
     *status = format!("Opening {task_id}…");
     draw_dashboard(terminal, entries, list_state, *selected, status)?;
 
-    // Resolve lane while the dashboard still owns the alt screen so opening a chat
-    // does not flash a blank terminal. ACP takes over that screen; Terminal needs
-    // a normal TTY for tmux.
-    let attach_err = match acp_view::resolve_lane(client, task_id).await {
-        Ok(lane) if lane.eq_ignore_ascii_case("Acp") => {
-            let err = match acp_view::run_acp_viewer(client, task_id).await {
-                Ok(()) => None,
-                Err(err) => Some(format!("{err:#}")),
-            };
-            // ACP viewer leaves the alt screen on exit; restore dashboard chrome.
-            enable_raw_mode()?;
-            stdout().execute(EnterAlternateScreen)?;
-            let _ = stdout().execute(EnableMouseCapture);
-            *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-            err
-        }
-        Ok(_) => {
-            restore_terminal(terminal)?;
-            let err = match attach::attach_or_reattach(client, task_id).await {
-                Ok(()) => None,
-                Err(err) => Some(format!("{err:#}")),
-            };
-            enable_raw_mode()?;
-            stdout().execute(EnterAlternateScreen)?;
-            let _ = stdout().execute(EnableMouseCapture);
-            *terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-            err
-        }
-        Err(err) => Some(format!("{err:#}")),
-    };
+    let attach_err = attach::attach_from_dashboard(client, terminal, task_id).await?;
 
     let flash = if let Some(err) = attach_err {
         show_attach_error(terminal, task_id, &err)?;

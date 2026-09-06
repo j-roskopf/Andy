@@ -17,8 +17,16 @@
     <section id="view-auth" class="view hidden">
       <div class="auth-card">
         <h1>Andy</h1>
-        <p class="muted">Enter the access token from Settings, a QR login code, or scan the QR code.</p>
-        <label class="field">
+        <p class="muted">Sign in with your master password, access token, or a one-time login code.</p>
+        <div class="auth-modes" role="tablist">
+          <button type="button" id="auth-mode-password" class="auth-mode active" role="tab" aria-selected="true">Password</button>
+          <button type="button" id="auth-mode-token" class="auth-mode" role="tab" aria-selected="false">Token / code</button>
+        </div>
+        <label class="field" id="auth-password-field">
+          <span>Master password</span>
+          <input id="password-input" type="password" autocomplete="current-password" spellcheck="false" />
+        </label>
+        <label class="field hidden" id="auth-token-field">
           <span>Access token or login code</span>
           <input id="token-input" type="password" autocomplete="off" spellcheck="false" />
         </label>
