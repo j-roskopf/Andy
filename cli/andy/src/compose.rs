@@ -332,12 +332,12 @@ pub async fn run_composer(
                     Err(err) => status = format!("error: {err:#}"),
                 }
             }
-            KeyCode::Char('i')
+            KeyCode::Char('+')
                 if step == Step::Prompt
                     && matches!(&view, StepView::Text { value, .. } if value.is_empty())
                     || step == Step::Confirm =>
             {
-                // Empty prompt (or Confirm): open image picker. Typing 'i' still works once text exists.
+                // Empty prompt (or Confirm): open image picker. Typing '+' still works once text exists.
                 let start = if !draft.directory.trim().is_empty() {
                     PathBuf::from(draft.directory.trim())
                 } else {
@@ -347,7 +347,7 @@ pub async fn run_composer(
                     Ok(Some(path)) => {
                         draft.image_paths.push(path.display().to_string());
                         status = format!(
-                            "attached {} image(s) · i attach another · Enter confirm",
+                            "attached {} image(s) · + attach another · Enter confirm",
                             draft.image_paths.len()
                         );
                         if let StepView::Text { hint, .. } = &mut view {
@@ -594,7 +594,7 @@ fn view_for_step(step: Step, catalog: &Catalog, draft: &ComposeDraft) -> StepVie
 
 fn prompt_hint(draft: &ComposeDraft) -> String {
     if draft.image_paths.is_empty() {
-        "type prompt · i attach image · Enter confirm · Esc back".into()
+        "type prompt · + attach image · Enter confirm · Esc back".into()
     } else {
         let names = draft
             .image_paths
@@ -607,7 +607,7 @@ fn prompt_hint(draft: &ComposeDraft) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        format!("images: {names} · i attach another · Enter confirm · Esc back")
+        format!("images: {names} · + attach another · Enter confirm · Esc back")
     }
 }
 
@@ -686,7 +686,7 @@ fn step_label(step: Step) -> &'static str {
 fn step_status(step: Step) -> String {
     match step {
         Step::Confirm => "Enter / a  start + attach · Esc back".into(),
-        Step::Prompt => "type · i attach image · Enter next · Esc back".into(),
+        Step::Prompt => "type · + attach image · Enter next · Esc back".into(),
         Step::Directory => "type · Enter next · Esc back".into(),
         _ => "↑↓ select · Enter next · Esc back".into(),
     }

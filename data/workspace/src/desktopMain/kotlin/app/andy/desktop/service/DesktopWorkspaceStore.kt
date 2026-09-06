@@ -137,6 +137,10 @@ class DesktopWorkspaceStore(
             liveDevicePaneWidth = props.getProperty("liveDevicePaneWidth")?.toFloatOrNull() ?: 720f,
             liveControlsPaneHeight = props.getProperty("liveControlsPaneHeight")?.toFloatOrNull() ?: 320f,
             autoBugCaptureEnabled = props.getProperty("autoBugCaptureEnabled")?.toBooleanStrictOrNull() ?: false,
+            mirrorMaxSize = props.getProperty("mirrorMaxSize")?.toIntOrNull()?.coerceIn(0, 4_320) ?: 1080,
+            mirrorBitRate = props.getProperty("mirrorBitRate")?.toIntOrNull()?.coerceIn(500_000, 80_000_000) ?: 8_000_000,
+            mirrorMaxFps = props.getProperty("mirrorMaxFps")?.toIntOrNull()?.coerceIn(15, 120) ?: 60,
+            mirrorCodec = props.getProperty("mirrorCodec")?.takeIf { it == "h264" || it == "h265" } ?: "h264",
             appsListPaneWidth = props.getProperty("appsListPaneWidth")?.toFloatOrNull() ?: 520f,
             appsDetailsPaneHeight = props.getProperty("appsDetailsPaneHeight")?.toFloatOrNull() ?: 350f,
             performanceProcessesPaneWidth = props.getProperty("performanceProcessesPaneWidth")?.toFloatOrNull() ?: 760f,
@@ -190,7 +194,7 @@ class DesktopWorkspaceStore(
             agentPinPriorityChats = props.getProperty("agentPinPriorityChats")?.toBooleanStrictOrNull() ?: false,
             agentAdoptProviderSessionTitles = props.getProperty("agentAdoptProviderSessionTitles")?.toBooleanStrictOrNull() ?: true,
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
-            collapsedProjectChatIds = props.getProperty("collapsedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
+            expandedProjectChatIds = props.getProperty("expandedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             collapsedWorkflowTaskIds = props.getProperty("collapsedWorkflowTaskIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             ollamaBaseUrl = props.getProperty("ollamaBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().ollamaBaseUrl,
             ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
@@ -288,6 +292,10 @@ class DesktopWorkspaceStore(
             setProperty("liveDevicePaneWidth", state.liveDevicePaneWidth.toString())
             setProperty("liveControlsPaneHeight", state.liveControlsPaneHeight.toString())
             setProperty("autoBugCaptureEnabled", state.autoBugCaptureEnabled.toString())
+            setProperty("mirrorMaxSize", state.mirrorMaxSize.toString())
+            setProperty("mirrorBitRate", state.mirrorBitRate.toString())
+            setProperty("mirrorMaxFps", state.mirrorMaxFps.toString())
+            setProperty("mirrorCodec", state.mirrorCodec)
             setProperty("appsListPaneWidth", state.appsListPaneWidth.toString())
             setProperty("appsDetailsPaneHeight", state.appsDetailsPaneHeight.toString())
             setProperty("performanceProcessesPaneWidth", state.performanceProcessesPaneWidth.toString())
@@ -327,7 +335,7 @@ class DesktopWorkspaceStore(
             setProperty("agentPinPriorityChats", state.agentPinPriorityChats.toString())
             setProperty("agentAdoptProviderSessionTitles", state.agentAdoptProviderSessionTitles.toString())
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
-            setProperty("collapsedProjectChatIds", state.collapsedProjectChatIds.joinToString("\n"))
+            setProperty("expandedProjectChatIds", state.expandedProjectChatIds.joinToString("\n"))
             setProperty("collapsedWorkflowTaskIds", state.collapsedWorkflowTaskIds.joinToString("\n"))
             setProperty("ollamaBaseUrl", state.ollamaBaseUrl)
             setProperty("ollamaBearerToken", state.ollamaBearerToken)

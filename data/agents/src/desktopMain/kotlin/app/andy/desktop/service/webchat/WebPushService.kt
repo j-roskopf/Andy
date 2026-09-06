@@ -1,7 +1,8 @@
 package app.andy.desktop.service.webchat
 
-import app.andy.domain.excludingTemporary
 import app.andy.model.WorkspaceState
+import app.andy.service.AgentAttentionEvent
+import app.andy.service.AgentAttentionKind
 import app.andy.service.WorkspaceStore
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -10,8 +11,6 @@ import java.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -26,11 +25,10 @@ import org.bouncycastle.jce.ECNamedCurveTable
 import org.bouncycastle.jce.interfaces.ECPrivateKey
 import org.bouncycastle.jce.interfaces.ECPublicKey
 import org.bouncycastle.jce.provider.BouncyCastleProvider
-import app.andy.service.AgentRunService
 
 /**
  * Self-hosted Web Push: generates a VAPID keypair once, stores subscriptions, and
- * sends generic "needs your input" notifications (no chat content in the payload).
+ * forwards [AttentionHub] events (generic lock-screen bodies — no chat prompt text).
  */
 class WebPushService(
     private val workspaceStore: WorkspaceStore,
@@ -40,7 +38,6 @@ class WebPushService(
 ) {
     private val mutex = Mutex()
     private var watching = false
-    private val notifiedRequestIds = mutableSetOf<String>()
 
     init {
         ensureBouncyCastle()
@@ -73,42 +70,47 @@ class WebPushService(
 
     fun listSubscriptions(): List<StoredPushSubscription> = subscriptions.list()
 
-    /** Start watching ACP tasks for pending user-input / permission prompts. */
-    fun startWatching(agentRuns: AgentRunService) {
+    /** Forward hub attention events to browser push subscribers. */
+    fun startWatching(hub: AttentionHub) {
         if (watching) return
         watching = true
         scope.launch {
-            agentRuns.tasks
-                .map { tasks ->
-                    // Never push a temporary chat to a remote device: it exists only for this
-                    // desktop session and the phone has nothing to open when the tap arrives.
-                    tasks.excludingTemporary().mapNotNull { task ->
-                        val request = task.userInputRequest ?: return@mapNotNull null
-                        Triple(task.id, task.title, request.id)
-                    }
+            hub.events.collect { event ->
+                // Never block the SharedFlow collector on network I/O — that stalls every
+                // subscriber (including Android /ws/attention) when the buffer fills.
+                launch {
+                    runCatching { sendAttention(event) }
                 }
-                .distinctUntilChanged()
-                .collect { pending ->
-                    for ((taskId, title, requestId) in pending) {
-                        if (!notifiedRequestIds.add(requestId)) continue
-                        sendNeedsInput(taskId, title)
-                    }
-                    val liveIds = pending.map { it.third }.toSet()
-                    notifiedRequestIds.retainAll(liveIds)
-                }
+            }
         }
     }
 
-    suspend fun sendNeedsInput(taskId: String, @Suppress("UNUSED_PARAMETER") title: String) {
-        // Keep the notification body generic — untitled chats use prompt text as
-        // title, which must not appear on lock screens / notification centers.
+    suspend fun sendAttention(event: AgentAttentionEvent) {
+        val body = when (event.kind) {
+            AgentAttentionKind.Blocked -> "Andy needs your input."
+            AgentAttentionKind.Done -> "Agent completed."
+            AgentAttentionKind.Error -> "Agent failed."
+        }
         val payload = buildJsonObject {
             put("title", "Andy")
-            put("body", "Andy needs your input.")
-            put("taskId", taskId)
-            put("url", "/#/chat/$taskId")
+            put("body", body)
+            put("taskId", event.taskId)
+            put("kind", event.kind.name)
+            put("url", "/#/chat/${event.taskId}")
         }.toString()
         sendPayload(payload)
+    }
+
+    /** @deprecated Prefer [sendAttention]; kept for tests that assert needs-input payload shape. */
+    suspend fun sendNeedsInput(taskId: String, @Suppress("UNUSED_PARAMETER") title: String) {
+        sendAttention(
+            AgentAttentionEvent(
+                taskId = taskId,
+                projectId = null,
+                title = title,
+                kind = AgentAttentionKind.Blocked,
+            ),
+        )
     }
 
     /**

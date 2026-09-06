@@ -157,6 +157,13 @@ remote `tmux -L andy` server over SSH, sets `ANDY_SOCKET` / `ANDY_TMUX_SOCKET` /
 `ANDY_REMOTE` in a child shell, then tears the tunnel down when that shell exits.
 The remote host must already be running `andyd`.
 
+### Remote access from mobile (Android companion)
+
+For a native phone client (saved hosts, VNC screen control, Network Access
+projects/chats), see [ANDROID_MOBILE.md](ANDROID_MOBILE.md). That path uses
+Tailscale reachability to VNC `:5900` and the Network Access HTTP API — no SSH
+from the phone required for the MVP.
+
 ### Remote access from mobile (SSH + Tailscale)
 
 Andy's CLI only runs on macOS/Linux, so to drive chats from a phone you SSH

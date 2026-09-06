@@ -113,6 +113,7 @@ internal fun mirrorVideoConfig(
     bitRateMbps: String,
     maxFps: String,
     rendererMode: MirrorRendererMode = MirrorRendererMode.Auto,
+    codec: String = LiveMirrorSettings.config.value.codec,
 ): MirrorVideoConfig {
     val parsedMaxSize = maxSize.toIntOrNull()
     return MirrorVideoConfig(
@@ -123,6 +124,7 @@ internal fun mirrorVideoConfig(
         },
         bitRate = ((bitRateMbps.toFloatOrNull()?.coerceIn(0.5f, 80f) ?: 4f) * 1_000_000).toInt(),
         maxFps = maxFps.toIntOrNull()?.coerceIn(15, 120) ?: 60,
+        codec = codec.ifBlank { "h264" },
         rendererMode = rendererMode,
     )
 }

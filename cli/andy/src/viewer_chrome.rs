@@ -32,7 +32,7 @@ impl Lane {
 
     pub fn hotkey_hint(self) -> &'static str {
         match self {
-            Self::Acp => "Esc/q quit · Ctrl-s stop · Ctrl-i image · v details · Enter send",
+            Self::Acp => "Esc/q quit · Ctrl-s stop · Ctrl-+ image · v details · Enter send",
             Self::Terminal => "F12/Alt+d/Ctrl-b d detach",
         }
     }
@@ -47,7 +47,7 @@ pub fn format_header(task_id: &str, title: &str, status: &str, lane: Lane) -> St
 pub fn format_status_line(lane: Lane, flash: Option<&str>) -> String {
     flash.map(|s| s.to_string()).unwrap_or_else(|| match lane {
         Lane::Acp => {
-            " y/n/a when prompted · v details · space expand tool · ↑↓ scroll ".into()
+            " y/n/a when prompted · v details · space expand tool · ↑↓/wheel scroll ".into()
         }
         Lane::Terminal => {
             format!(" {} — task keeps running after detach ", lane.hotkey_hint())
@@ -159,5 +159,11 @@ mod tests {
         let line = format_status_line(Lane::Terminal, None);
         assert!(line.contains("detach"));
         assert!(line.contains("keeps running"));
+    }
+
+    #[test]
+    fn acp_status_line_mentions_wheel_scroll() {
+        let line = format_status_line(Lane::Acp, None);
+        assert!(line.contains("wheel scroll"));
     }
 }

@@ -60,6 +60,7 @@ import app.andy.ui.theme.Green
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
+import app.andy.ui.theme.TextSecondary
 import app.andy.ui.network.GlowingDot
 import app.andy.ui.components.Lucide
 import app.andy.ui.components.LucideIcon
@@ -85,6 +86,7 @@ internal fun TopChrome(
     selectedActionId: String? = null,
     onActionSelectionChange: (projectId: String, actionId: String?) -> Unit = { _, _ -> },
     onRunAction: (ActionProject, ProjectAction) -> Unit,
+    onRefreshActions: () -> Unit = {},
     proxyRunning: Boolean,
     onProxyClick: () -> Unit = {},
     showLocalServers: Boolean = false,
@@ -327,6 +329,7 @@ internal fun TopChrome(
                         if (projectId != null) onActionSelectionChange(projectId, selected.id)
                         closeFlyout()
                     },
+                    onRefresh = onRefreshActions,
                 )
                 null -> Unit
             }
@@ -448,6 +451,7 @@ private fun ActionProjectPickerPanel(
 private fun ActionPickerPanel(
     project: ActionProject?,
     onSelect: (ProjectAction) -> Unit,
+    onRefresh: () -> Unit,
 ) {
     val actions = project?.actions.orEmpty()
     Column(Modifier.fillMaxWidth()) {
@@ -465,6 +469,18 @@ private fun ActionPickerPanel(
                 )
             }
         }
+        ChromeFlyoutRow(
+            label = "Refresh from disk",
+            onClick = onRefresh,
+            leading = {
+                LucideIcon(
+                    Lucide.RefreshCw,
+                    TextSecondary,
+                    Modifier.size(16.dp),
+                    contentDescription = null,
+                )
+            },
+        )
     }
 }
 

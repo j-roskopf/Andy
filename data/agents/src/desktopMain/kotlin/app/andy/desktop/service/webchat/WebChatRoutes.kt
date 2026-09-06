@@ -102,6 +102,7 @@ internal fun Application.installWebChatRoutes(
     projectWorkflows: () -> ProjectWorkflowService? = { null },
     actionConfig: () -> ActionConfigStore? = { null },
     push: WebPushService,
+    attention: AttentionHub = AttentionHub(),
     networkAccess: NetworkAccessWebConfig = NetworkAccessWebConfig(),
 ) {
     routing {
@@ -616,6 +617,36 @@ internal fun Application.installWebChatRoutes(
                 }.orEmpty()
                 push.unsubscribe(endpoint)
                 call.respondText("""{"ok":true}""", ContentType.Application.Json)
+            }
+        }
+
+        webSocket("/ws/attention") {
+            if (call.attributes.getOrNull(NetworkAccessWsScopeRejectedKey) == true) {
+                close(
+                    CloseReason(
+                        NetworkAccessScopeFailureCloseCode.toShort(),
+                        "forbidden",
+                    ),
+                )
+                return@webSocket
+            }
+            if (call.attributes.getOrNull(NetworkAccessWsAuthRejectedKey) == true) {
+                close(
+                    CloseReason(
+                        NetworkAccessAuthFailureCloseCode.toShort(),
+                        "unauthorized",
+                    ),
+                )
+                return@webSocket
+            }
+            // Ready frame so clients know auth succeeded before the first attention event.
+            send(Frame.Text("""{"ok":true,"stream":"attention"}"""))
+            try {
+                attention.events.collect { event ->
+                    send(Frame.Text(AttentionHub.toWireJson(event)))
+                }
+            } catch (_: Exception) {
+                close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "stream error"))
             }
         }
 

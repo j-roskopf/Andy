@@ -25,6 +25,7 @@ import java.util.Base64
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
 import app.andy.desktop.service.proxy.resolveNetworkAccessHosts
+import app.andy.desktop.service.webchat.AttentionHub
 import app.andy.desktop.service.webchat.NetworkAccessSessionStore
 import app.andy.desktop.service.webchat.AuthFailureLimiter
 import app.andy.desktop.service.webchat.NetworkAccessAuthPlugin
@@ -61,6 +62,8 @@ class DesktopMcpServerService(
     override val status = MutableStateFlow("stopped")
     override val running = MutableStateFlow(false)
 
+    private val attentionHub = AttentionHub()
+
     private var serverEngine: EmbeddedServer<*, *>? = null
     private var runningPort: Int? = null
     private var runningHost: String? = null
@@ -93,7 +96,8 @@ class DesktopMcpServerService(
         agentRuns = agents
         projectWorkflows = projects
         this.automations = automations
-        webPush.startWatching(agents)
+        attentionHub.startWatching(agents)
+        webPush.startWatching(attentionHub)
     }
 
     override fun suggestNetworkAccessHosts(): List<String> {
@@ -231,6 +235,7 @@ class DesktopMcpServerService(
                     projectWorkflows = { projectWorkflows },
                     actionConfig = { actionConfig },
                     push = webPush,
+                    attention = attentionHub,
                     networkAccess = webConfig,
                 )
                 routing {

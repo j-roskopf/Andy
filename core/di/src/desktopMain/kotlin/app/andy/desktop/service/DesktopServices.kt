@@ -569,6 +569,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     )
     remoteShellRef.set { remoteSession.shellEndpoint() }
 
+    // Network Access HTTP may be started by the GUI when andyd's port is free (or for
+    // local tool MCP). Bind the daemon-client agent mirror so /api/chats and /ws/attention
+    // are not empty / silent on an unbound DesktopMcpServerService.
+    mcp.bindAgentServices(swappableAgents, swappableAgents, swappableAutomations)
+
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
     // Do not open a second writer here — use UnavailableKanbanService until the daemon
     // exposes kanban over the socket (same constraint as localAttach's per-pid DB).

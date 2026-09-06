@@ -652,6 +652,94 @@ jobs:
           if-no-files-found: error
           path: release-artifacts/*
 
+  android:
+    name: Android release
+    needs:
+      - version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag_name }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure signing keystore
+        id: keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "Decoding release keystore from secrets..."
+            keystore_path="${RUNNER_TEMP}/release.keystore"
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${keystore_path}"
+            echo "keystore_path=${keystore_path}" >> "${GITHUB_OUTPUT}"
+            echo "has_keystore=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 secret not set; signing with fallback debug key."
+            echo "has_keystore=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build Android release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle_args=(
+            :androidApp:assembleRelease
+            "-Pandy.versionName=${VERSION}"
+            "-Pandy.versionCode=${VERSION_CODE}"
+          )
+          if [[ "${{ steps.keystore.outputs.has_keystore }}" == "true" ]]; then
+            gradle_args+=(
+              "-Pandy.android.keystore.path=${{ steps.keystore.outputs.keystore_path }}"
+              "-Pandy.android.keystore.password=${ANDROID_KEYSTORE_PASSWORD}"
+              "-Pandy.android.key.alias=${ANDROID_KEY_ALIAS}"
+              "-Pandy.android.key.password=${ANDROID_KEY_PASSWORD}"
+            )
+          fi
+          ./gradlew "${gradle_args[@]}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          VERSION_CODE: ${{ needs.version.outputs.version_code }}
+
+      - name: Collect Android release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          apk="$(find androidApp/build/outputs/apk/release -name '*.apk' -print -quit)"
+          if [[ -z "${apk}" ]]; then
+            echo "::error::Could not find Android release APK"
+            exit 1
+          fi
+          dest="release-artifacts/Andy-${VERSION}.apk"
+          cp "${apk}" "${dest}"
+          ls -la "${dest}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          if-no-files-found: error
+          path: release-artifacts/*
+
   github-release:
     name: Create GitHub release
     needs:
@@ -659,10 +747,11 @@ jobs:
       - linux
       - windows
       - macos
+      - android
       - tracebox
       - andy-cli
       - andyd-runtime
-    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.tracebox.result == 'success' && needs.andy-cli.result == 'success' && needs.andyd-runtime.result == 'success'
+    if: always() && needs.version.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result == 'success' && needs.android.result == 'success' && needs.tracebox.result == 'success' && needs.andy-cli.result == 'success' && needs.andyd-runtime.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -700,6 +789,7 @@ jobs:
             release-artifacts/**/*.flatpak
             release-artifacts/**/*.msi
             release-artifacts/**/*.dmg
+            release-artifacts/**/*.apk
             release-artifacts/**/andy-*-linux-x86_64
             release-artifacts/**/andy-*-macos-arm64
             release-artifacts/**/andyd-*-linux-x86_64.jar
