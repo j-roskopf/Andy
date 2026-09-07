@@ -58,9 +58,15 @@ import com.joetr.andy.mobile.data.networkaccess.ChatDto
 import com.joetr.andy.mobile.data.networkaccess.ChatEventDto
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
+import com.joetr.andy.mobile.data.networkaccess.PlanEntryDto
 import com.joetr.andy.mobile.data.networkaccess.UserInputRequestDto
+import com.joetr.andy.mobile.data.networkaccess.awaitingPlanConfirmation
 import com.joetr.andy.mobile.data.networkaccess.coalesceStreams
+import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
 import com.joetr.andy.mobile.data.networkaccess.isVisibleTranscript
+import com.joetr.andy.mobile.data.networkaccess.latestPlanHasPendingEntries
+import com.joetr.andy.mobile.data.networkaccess.showImplementPlan
+import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -87,6 +93,10 @@ fun ChatScreen(
     val agentId = chat?.agent.orEmpty()
     val slashCommands = rememberSlashCommands(client, agentId)
     val slashToken = remember(draft) { findActiveSlashToken(draft) }
+    val hasPendingPlanEntries = remember(events) { events.latestPlanHasPendingEntries() }
+    val awaitingPlan = chat?.awaitingPlanConfirmation(hasPendingPlanEntries) == true
+    val showImplement = chat?.showImplementPlan(hasPendingPlanEntries) == true
+    val statusLabel = chat?.displayStatusLabel(hasPendingPlanEntries).orEmpty()
 
     suspend fun loadOnce() {
         val detail = client.chatDetail(chatId)
@@ -167,7 +177,10 @@ fun ChatScreen(
                     maxLines = 1,
                 )
                 Text(
-                    listOfNotNull(chat?.agent, chat?.status).joinToString(" · "),
+                    listOfNotNull(
+                        chat?.agent,
+                        statusLabel.takeIf { it.isNotBlank() },
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = tokens.palette.textTertiary,
                 )
@@ -192,7 +205,15 @@ fun ChatScreen(
                         key = { "${it.atMillis}-${it.type}-${it.text.hashCode()}" },
                         contentType = { it.type },
                     ) { event ->
-                        TranscriptBubble(event)
+                        if (event.type == "plan") {
+                            PlanDocumentCard(
+                                entries = event.entries,
+                                markdown = event.markdown,
+                                awaitingApproval = awaitingPlan,
+                            )
+                        } else {
+                            TranscriptBubble(event)
+                        }
                     }
                     optimistic?.let { text ->
                         item(key = "optimistic") {
@@ -228,6 +249,37 @@ fun ChatScreen(
             )
         }
 
+        if (awaitingPlan && pendingInput == null) {
+            PlanApprovalCard(
+                showImplementAction = showImplement,
+                onImplement = {
+                    scope.launch {
+                        try {
+                            client.implementPlan(chatId)
+                            chat = chat?.copy(planMode = false, status = "Working")
+                        } catch (e: Exception) {
+                            error = e.message
+                        }
+                    }
+                },
+                onRefine = { feedback ->
+                    scope.launch {
+                        sending = true
+                        error = null
+                        optimistic = feedback
+                        try {
+                            client.reply(chatId, feedback)
+                        } catch (e: Exception) {
+                            optimistic = null
+                            error = e.message
+                        } finally {
+                            sending = false
+                        }
+                    }
+                },
+            )
+        }
+
         if (slashToken != null && agentId.isNotBlank()) {
             SlashCommandSuggestions(
                 query = slashToken.query,
@@ -256,7 +308,11 @@ fun ChatScreen(
                     label = "Message",
                     value = draft,
                     onValueChange = { draft = it },
-                    placeholder = "Follow up… Type / for commands",
+                    placeholder = if (awaitingPlan) {
+                        "Refine the plan…"
+                    } else {
+                        "Follow up… Type / for commands"
+                    },
                     singleLine = false,
                     modifier = Modifier.weight(1f),
                 )
@@ -290,6 +346,179 @@ fun ChatScreen(
                         contentDescription = "Send",
                         tint = if (draft.isNotBlank() && !sending) tokens.accent else tokens.palette.textTertiary,
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanDocumentCard(
+    entries: List<PlanEntryDto>,
+    markdown: String,
+    awaitingApproval: Boolean,
+) {
+    val tokens = andyTokens()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AndyShape.Sheet)
+            .background(tokens.palette.surfaceRaised)
+            .border(1.dp, Yellow.copy(alpha = 0.85f), AndyShape.Sheet)
+            .padding(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            Text("≡", color = Yellow, fontFamily = MonoFont, style = MaterialTheme.typography.labelMedium)
+            Text(
+                "Plan",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.SemiBold,
+                color = tokens.palette.textPrimary,
+            )
+            if (awaitingApproval) {
+                Text(
+                    "Awaiting approval",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.palette.textSecondary,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(AndyShape.Interactive)
+                .background(tokens.palette.surfaceHover)
+                .padding(AndySpace.Space3),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            if (markdown.isNotBlank()) {
+                Text(
+                    markdown,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = tokens.palette.textPrimary,
+                )
+            }
+            entries.forEachIndexed { index, entry ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                ) {
+                    Text(
+                        "${index + 1}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = MonoFont,
+                        color = tokens.palette.textTertiary,
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            entry.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = tokens.palette.textPrimary,
+                        )
+                        if (entry.status.isNotBlank() && !entry.status.equals("pending", ignoreCase = true)) {
+                            Text(
+                                entry.status,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = MonoFont,
+                                color = tokens.palette.textTertiary,
+                            )
+                        }
+                    }
+                }
+            }
+            if (markdown.isBlank() && entries.isEmpty()) {
+                Text(
+                    "Plan ready",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = tokens.palette.textSecondary,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanApprovalCard(
+    showImplementAction: Boolean,
+    onImplement: () -> Unit,
+    onRefine: (String) -> Unit,
+) {
+    val tokens = andyTokens()
+    var feedback by remember { mutableStateOf("") }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(AndySpace.Space3),
+        shape = AndyShape.Sheet,
+        backgroundColor = tokens.palette.surfaceRaised,
+        borderColor = Yellow.copy(alpha = 0.85f),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(AndySpace.Space3),
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            ) {
+                Text("≡", color = Yellow, fontFamily = MonoFont, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    "Plan",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tokens.palette.textPrimary,
+                )
+                Text(
+                    "Awaiting approval",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tokens.palette.textSecondary,
+                )
+            }
+            Text(
+                if (showImplementAction) {
+                    "This turn finished in plan mode. Nothing was changed. Implement when you're ready, or leave feedback and refine below."
+                } else {
+                    "This turn finished in plan mode. Nothing was changed. Review the plan in Projects, or leave feedback and refine below."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.palette.textSecondary,
+            )
+            MobileField(
+                label = "Feedback",
+                value = feedback,
+                onValueChange = { feedback = it },
+                placeholder = "Optional feedback if refining…",
+                singleLine = true,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2, Alignment.End),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val trimmed = feedback.trim()
+                        if (trimmed.isNotEmpty()) {
+                            onRefine(trimmed)
+                            feedback = ""
+                        }
+                    },
+                    enabled = feedback.isNotBlank(),
+                    shape = AndyShape.Interactive,
+                ) {
+                    Text("Refine")
+                }
+                if (showImplementAction) {
+                    Button(onClick = onImplement, shape = AndyShape.Interactive) {
+                        Text("Implement plan")
+                    }
                 }
             }
         }

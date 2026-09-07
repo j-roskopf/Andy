@@ -73,6 +73,8 @@ import com.joetr.andy.mobile.data.networkaccess.ChatDto
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import com.joetr.andy.mobile.data.networkaccess.ProjectGroup
+import com.joetr.andy.mobile.data.networkaccess.awaitingPlanConfirmation
+import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
 import com.joetr.andy.mobile.data.networkaccess.groupChatsByProject
 import kotlinx.coroutines.launch
 
@@ -143,7 +145,11 @@ fun ProjectsScreen(
             signedIn = true
         } catch (e: NetworkAccessException) {
             error = e.message
-            if (e.unauthorized) {
+            // 401 or IP auth cooldown from a dead stored session — drop it so the user
+            // can password-login cleanly (and so AttentionPushService is stopped).
+            val authDead = e.unauthorized ||
+                e.message.orEmpty().contains("too many failed auth", ignoreCase = true)
+            if (authDead) {
                 signedIn = false
                 repository.saveNetworkAccessSession(host.id, null)
                 onSignedOut()
@@ -514,11 +520,12 @@ private fun ProjectSection(
 @Composable
 private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
     val tokens = andyTokens()
-    val statusVariant = when (chat.status) {
-        "completed" -> StatusDotVariant.Success
-        "error" -> StatusDotVariant.Error
-        "running", "in_progress" -> StatusDotVariant.Warning
-        else -> StatusDotVariant.Neutral
+    val attentionVariant = when {
+        chat.userInputRequest != null ||
+            chat.status.equals("Blocked", ignoreCase = true) -> StatusDotVariant.Warning
+        chat.status.equals("Error", ignoreCase = true) -> StatusDotVariant.Error
+        chat.awaitingPlanConfirmation() -> StatusDotVariant.Success
+        else -> null
     }
     Row(
         modifier = Modifier
@@ -533,7 +540,11 @@ private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
     ) {
-        StatusDot(variant = statusVariant)
+        if (attentionVariant != null) {
+            StatusDot(variant = attentionVariant)
+        } else {
+            Spacer(modifier = Modifier.size(8.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 chat.title.ifBlank { chat.prompt.take(48).ifBlank { chat.id } },
@@ -546,7 +557,7 @@ private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
             Text(
                 listOfNotNull(
                     chat.agent.takeIf { it.isNotBlank() },
-                    chat.status.takeIf { it.isNotBlank() },
+                    chat.displayStatusLabel().takeIf { it.isNotBlank() },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.palette.textTertiary,

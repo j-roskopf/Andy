@@ -11,7 +11,9 @@ import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.IMPLEMENT_PLAN_PROMPT
 import app.andy.model.LocalAgentRuntime
+import app.andy.model.ProjectWorkflowStage
 import app.andy.model.acpSupported
 import app.andy.model.hasVendorCli
 import app.andy.model.isLocalModelBackend
@@ -51,8 +53,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -453,6 +457,73 @@ internal fun Application.installWebChatRoutes(
                 )
             }
 
+            post("/chats/{id}/plan-mode") {
+                val agents = agentRuns()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "agent services unavailable",
+                    )
+                val id = call.parameters["id"].orEmpty()
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
+                    ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
+                if (task.lane != AgentLaneKind.Acp) {
+                    return@post call.respondJsonError(
+                        HttpStatusCode.Conflict,
+                        "plan mode requires an ACP-lane session",
+                    )
+                }
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
+                val planModeEl = body["planMode"]
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "planMode required")
+                val planMode = when (planModeEl) {
+                    is JsonPrimitive -> planModeEl.booleanOrNull
+                        ?: planModeEl.contentOrNull?.toBooleanStrictOrNull()
+                    else -> null
+                } ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "planMode must be boolean")
+                agents.updatePlanMode(id, planMode)
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", true)
+                        put("id", id)
+                        put("planMode", planMode)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/chats/{id}/implement-plan") {
+                val agents = agentRuns()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "agent services unavailable",
+                    )
+                val id = call.parameters["id"].orEmpty()
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
+                    ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
+                if (task.lane != AgentLaneKind.Acp) {
+                    return@post call.respondJsonError(
+                        HttpStatusCode.Conflict,
+                        "implement plan requires an ACP-lane session",
+                    )
+                }
+                if (task.workflowStage == ProjectWorkflowStage.Spec) {
+                    return@post call.respondJsonError(
+                        HttpStatusCode.Conflict,
+                        "spec runs stay in plan mode — review the plan in Projects",
+                    )
+                }
+                agents.updatePlanMode(id, false)
+                agents.resume(id, IMPLEMENT_PLAN_PROMPT)
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", true)
+                        put("id", id)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
             post("/chats/start") {
                 val agents = agentRuns()
                     ?: return@post call.respondJsonError(
@@ -707,6 +778,7 @@ internal fun Application.installWebChatRoutes(
                 replaceFrom: Int? = null,
                 terminalStatus: String? = null,
             ) {
+                val currentTask = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
                 val payload = buildJsonObject {
                     put("taskId", id)
                     putJsonArray("events") { events.forEach { add(it.toWire()) } }
@@ -714,8 +786,12 @@ internal fun Application.installWebChatRoutes(
                     if (done) put("done", true)
                     if (error != null) put("error", error)
                     if (terminalStatus != null) put("terminalStatus", terminalStatus)
+                    // Keep remote clients in sync on status / planMode / input prompts.
+                    if (currentTask != null) {
+                        put("chat", currentTask.toChatJson())
+                    }
                     // Include pending user-input so the client can render approve/deny UI.
-                    agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }?.userInputRequest?.let { request ->
+                    currentTask?.userInputRequest?.let { request ->
                         putJsonObject("userInputRequest") {
                             put("id", request.id)
                             put("origin", request.origin.name)
@@ -814,6 +890,8 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
     put("status", status?.name.orEmpty())
     put("projectId", projectId.orEmpty())
     put("autonomy", autonomy.name)
+    put("planMode", planMode)
+    put("workflowStage", workflowStage?.name.orEmpty())
     put("unread", unread)
     put("archived", archived)
     put("createdAtMillis", createdAtMillis)

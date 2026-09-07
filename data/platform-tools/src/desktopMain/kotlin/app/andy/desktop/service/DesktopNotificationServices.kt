@@ -39,7 +39,7 @@ class DesktopOsNotificationService : OsNotificationService {
     override fun show(event: AgentAttentionEvent) {
         val subtitle = when (event.kind) {
             AgentAttentionKind.Blocked -> "Needs your input"
-            AgentAttentionKind.Done -> "Agent completed"
+            AgentAttentionKind.Done -> if (event.planMode) "Plan ready" else "Agent completed"
             AgentAttentionKind.Error -> "Agent failed"
         }
         val os = System.getProperty("os.name").orEmpty()

@@ -88,7 +88,7 @@ class WebPushService(
     suspend fun sendAttention(event: AgentAttentionEvent) {
         val body = when (event.kind) {
             AgentAttentionKind.Blocked -> "Andy needs your input."
-            AgentAttentionKind.Done -> "Agent completed."
+            AgentAttentionKind.Done -> if (event.planMode) "Plan ready." else "Agent completed."
             AgentAttentionKind.Error -> "Agent failed."
         }
         val payload = buildJsonObject {

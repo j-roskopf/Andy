@@ -28,6 +28,8 @@ data class ChatDto(
     val status: String = "",
     val projectId: String = "",
     val autonomy: String = "Standard",
+    val planMode: Boolean = false,
+    val workflowStage: String = "",
     val unread: Boolean = false,
     val archived: Boolean = false,
     val createdAtMillis: Long = 0L,
@@ -36,6 +38,35 @@ data class ChatDto(
     val resumable: Boolean = false,
     val errorMessage: String = "",
     val userInputRequest: UserInputRequestDto? = null,
+)
+
+/** Matches desktop [app.andy.ui.agents.isAwaitingPlanConfirmation] for Network Access chats. */
+fun ChatDto.awaitingPlanConfirmation(hasPendingPlanEntries: Boolean = false): Boolean =
+    status.equals("Done", ignoreCase = true) &&
+        userInputRequest == null &&
+        (planMode || hasPendingPlanEntries)
+
+fun ChatDto.showImplementPlan(hasPendingPlanEntries: Boolean = false): Boolean =
+    awaitingPlanConfirmation(hasPendingPlanEntries) &&
+        !workflowStage.equals("Spec", ignoreCase = true)
+
+fun ChatDto.displayStatusLabel(hasPendingPlanEntries: Boolean = false): String = when {
+    awaitingPlanConfirmation(hasPendingPlanEntries) -> "plan ready"
+    status.isNotBlank() -> status
+    else -> ""
+}
+
+/** True when the chat list should surface a status marker (blocked / error / plan ready). */
+fun ChatDto.hasListAttentionMarker(): Boolean =
+    userInputRequest != null ||
+        status.equals("Blocked", ignoreCase = true) ||
+        status.equals("Error", ignoreCase = true) ||
+        awaitingPlanConfirmation()
+
+@Serializable
+data class PlanEntryDto(
+    val content: String = "",
+    val status: String = "pending",
 )
 
 @Serializable
@@ -79,6 +110,10 @@ data class ChatEventDto(
     val note: String = "",
     val success: Boolean? = null,
     val finalText: String = "",
+    /** Plan-update markdown when [type] is `plan`. */
+    val markdown: String = "",
+    /** Plan checklist entries when [type] is `plan`. */
+    val entries: List<PlanEntryDto> = emptyList(),
     /** Catch-all so unknown event fields don't break decoding. */
     val sessionId: String = "",
     val model: String = "",
@@ -135,6 +170,9 @@ data class StartChatResponse(
 data class ReplyRequest(val message: String)
 
 @Serializable
+data class UpdatePlanModeRequest(val planMode: Boolean)
+
+@Serializable
 data class RespondRequest(
     val requestId: String,
     val answers: Map<String, String>,
@@ -179,7 +217,29 @@ fun groupChatsByProject(
 
 fun ChatEventDto.isVisibleTranscript(): Boolean =
     type == "user" || type == "assistant" || type == "thinking" ||
-        type == "error" || type == "permission-resolved"
+        type == "error" || type == "permission-resolved" || type == "plan"
+
+/**
+ * Mirrors [app.andy.model.latestPlanHasPendingEntries] for Network Access wire events.
+ * Cursor Create Plan can end_turn with pending rows while Andy [ChatDto.planMode] stays off.
+ */
+fun List<ChatEventDto>.latestPlanHasPendingEntries(): Boolean {
+    val planIndex = indexOfLast { it.type == "plan" }
+    if (planIndex < 0) return false
+    if (withIndex().any { (index, event) -> index > planIndex && event.type == "user" }) {
+        return false
+    }
+    val plan = this[planIndex]
+    if (plan.entries.isEmpty()) {
+        return plan.markdown.isNotBlank()
+    }
+    return plan.entries.any { entry ->
+        when (entry.status.trim().lowercase()) {
+            "completed", "complete", "done", "cancelled", "canceled", "file" -> false
+            else -> true
+        }
+    }
+}
 
 fun List<ChatEventDto>.coalesceStreams(): List<ChatEventDto> {
     if (isEmpty()) return this

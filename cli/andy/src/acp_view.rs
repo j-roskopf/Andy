@@ -46,6 +46,8 @@ struct ChatMeta {
     id: String,
     title: String,
     status: String,
+    plan_mode: bool,
+    workflow_stage: String,
     queued_follow_ups: Vec<QueuedFollowUp>,
     agent: Option<String>,
     #[allow(dead_code)]
@@ -62,6 +64,8 @@ struct QueuedFollowUp {
 #[derive(Debug, Clone)]
 struct LiveSnapshot {
     status: String,
+    plan_mode: bool,
+    workflow_stage: String,
     queued_follow_ups: Vec<QueuedFollowUp>,
     /// True when workspace delivery mode is Queue (vs Immediate inject).
     prefer_queue: bool,
@@ -78,6 +82,8 @@ enum ConnectionIssue {
 struct ViewState {
     events: Vec<AgentEvent>,
     status: String,
+    plan_mode: bool,
+    workflow_stage: String,
     queued_follow_ups: Vec<QueuedFollowUp>,
     /// Workspace AgentMessageDeliveryMode == Queue.
     prefer_queue: bool,
@@ -155,6 +161,8 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
         let mut state = ViewState {
             events: Vec::new(),
             status: meta.status.clone(),
+            plan_mode: meta.plan_mode,
+            workflow_stage: meta.workflow_stage.clone(),
             queued_follow_ups: meta.queued_follow_ups.clone(),
             prefer_queue: false,
             input: String::new(),
@@ -489,6 +497,44 @@ async fn handle_key(
                 }
             }
         }
+        MappedKey::ImplementPlan => {
+            if !awaiting_plan_confirmation(state) {
+                state.status_flash = Some("not awaiting plan approval".into());
+            } else if state.workflow_stage.eq_ignore_ascii_case("Spec") {
+                state.status_flash = Some("spec runs stay in plan mode — review in Projects".into());
+            } else {
+                match client
+                    .call_tool(
+                        "chat.update_plan_mode",
+                        json!({ "taskId": meta.id, "planMode": false }),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        state.plan_mode = false;
+                        match client
+                            .call_tool(
+                                "chat.resume",
+                                json!({ "taskId": meta.id, "followUp": "Implement the plan." }),
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                state.status = "Working".into();
+                                state.status_flash = Some("implementing plan".into());
+                                state.presence_started = Instant::now();
+                            }
+                            Err(err) => {
+                                state.status_flash = Some(format!("implement failed: {err:#}"));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        state.status_flash = Some(format!("plan mode update failed: {err:#}"));
+                    }
+                }
+            }
+        }
         MappedKey::PickImage => {
             let start = if !meta.cwd.is_empty() {
                 PathBuf::from(&meta.cwd)
@@ -624,6 +670,7 @@ enum MappedKey {
     Exit,
     Retry,
     Stop,
+    ImplementPlan,
     PickImage,
     ToggleExpand,
     ToggleDetails,
@@ -712,6 +759,15 @@ fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
             .and_then(|s| s.as_str())
             .unwrap_or("")
             .to_string(),
+        plan_mode: v
+            .get("planMode")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false),
+        workflow_stage: v
+            .get("workflowStage")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
         queued_follow_ups: parse_queued_follow_ups(v.get("queuedFollowUps")),
         prefer_queue: v
             .get("messageDeliveryMode")
@@ -746,6 +802,8 @@ async fn refresh_live_state(client: &mut McpClient, task_id: &str, state: &mut V
         return;
     };
     state.prefer_queue = snap.prefer_queue;
+    state.plan_mode = snap.plan_mode;
+    state.workflow_stage = snap.workflow_stage;
     if !snap.status.is_empty()
         && !matches!(state.status.as_str(), "Stopping")
         && state.status != snap.status
@@ -791,8 +849,22 @@ fn is_active_status(status: &str) -> bool {
     matches!(status, "Working" | "Blocked" | "Stopping")
 }
 
+fn awaiting_plan_confirmation(state: &ViewState) -> bool {
+    state.status.eq_ignore_ascii_case("Done")
+        && state.plan_mode
+        && state.pending_input.is_none()
+}
+
+fn display_status_label(state: &ViewState) -> String {
+    if awaiting_plan_confirmation(state) {
+        "plan ready".into()
+    } else {
+        state.status.clone()
+    }
+}
+
 /// Transcript presence line mirroring the desktop Working orb.
-fn presence_label(status: &str, pending: Option<&PendingUserInput>) -> Option<String> {
+fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_mode: bool) -> Option<String> {
     match status {
         "Working" => Some("Working".into()),
         "Blocked" => {
@@ -803,6 +875,9 @@ fn presence_label(status: &str, pending: Option<&PendingUserInput>) -> Option<St
             }
         }
         "Stopping" => Some("Stopping".into()),
+        "Done" if plan_mode && pending.is_none() => {
+            Some("Plan ready — Ctrl-i implement · type to refine".into())
+        }
         _ => None,
     }
 }
@@ -819,20 +894,29 @@ fn presence_line(
     status: &str,
     started: Instant,
     pending: Option<&PendingUserInput>,
+    plan_mode: bool,
 ) -> Option<Line<'static>> {
-    let label = presence_label(status, pending)?;
+    let label = presence_label(status, pending, plan_mode)?;
     // Keep presence to one row; long delete paths truncate rather than wrap.
     let max = 120usize;
     let display = if label.chars().count() > max {
         let truncated: String = label.chars().take(max.saturating_sub(1)).collect();
         format!("{truncated}…")
     } else {
-        format!("{label}…")
+        label
+    };
+    let spinning = matches!(status, "Working" | "Blocked" | "Stopping");
+    let text = if spinning {
+        format!("  {} {display}…", presence_spinner(started))
+    } else {
+        format!("  {display}")
     };
     Some(Line::from(Span::styled(
-        format!("  {} {display}", presence_spinner(started)),
+        text,
         Style::default().fg(if pending.is_some() {
             Color::Magenta
+        } else if status.eq_ignore_ascii_case("Done") && plan_mode {
+            Color::Green
         } else {
             Color::DarkGray
         }),
@@ -939,6 +1023,13 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
             MappedKey::Exit
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => MappedKey::Stop,
+        KeyCode::Char('i')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && awaiting_plan_confirmation(state)
+                && !state.workflow_stage.eq_ignore_ascii_case("Spec") =>
+        {
+            MappedKey::ImplementPlan
+        }
         // Ctrl-+ (and Ctrl-= on US layouts where + is Shift-=) — avoid letter chords.
         KeyCode::Char('+') | KeyCode::Char('=')
             if key.modifiers.contains(KeyModifiers::CONTROL) && state.composer_enabled =>
@@ -1116,7 +1207,12 @@ fn draw(
         ])
         .split(area);
 
-    let header = viewer_chrome::format_header(&meta.id, &meta.title, &state.status, Lane::Acp);
+    let header = viewer_chrome::format_header(
+        &meta.id,
+        &meta.title,
+        &display_status_label(state),
+        Lane::Acp,
+    );
     frame.render_widget(
         Paragraph::new(header).block(
             Block::default()
@@ -1141,6 +1237,7 @@ fn draw(
         &state.status,
         state.presence_started,
         state.pending_input.as_ref(),
+        state.plan_mode,
     );
     let presence_h = if presence.is_some() { 1u16 } else { 0 };
     let transcript_parts = Layout::default()
@@ -1659,6 +1756,19 @@ async fn load_meta(client: &mut McpClient, task_id: &str) -> Result<ChatMeta> {
         } else {
             snap.status
         },
+        plan_mode: snap.plan_mode
+            || row
+                .and_then(|r| r.get("planMode"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        workflow_stage: if snap.workflow_stage.is_empty() {
+            row.and_then(|r| r.get("workflowStage"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        } else {
+            snap.workflow_stage
+        },
         queued_follow_ups: queued,
         agent: row
             .and_then(|r| r.get("agent"))
@@ -1737,6 +1847,8 @@ mod tests {
         ViewState {
             events: Vec::new(),
             status: "Idle".into(),
+            plan_mode: false,
+            workflow_stage: String::new(),
             queued_follow_ups: Vec::new(),
             prefer_queue: false,
             input: String::new(),
@@ -2238,11 +2350,11 @@ mod tests {
     #[test]
     fn presence_label_for_active_statuses() {
         assert_eq!(
-            presence_label("Working", None).as_deref(),
+            presence_label("Working", None, false).as_deref(),
             Some("Working")
         );
         assert_eq!(
-            presence_label("Blocked", None).as_deref(),
+            presence_label("Blocked", None, false).as_deref(),
             Some("Blocked — waiting")
         );
         let pending = PendingUserInput::from_permission_event(
@@ -2252,15 +2364,19 @@ mod tests {
             vec![],
         );
         assert_eq!(
-            presence_label("Blocked", Some(&pending)).as_deref(),
+            presence_label("Blocked", Some(&pending), false).as_deref(),
             Some("Blocked — delete: Delete tmp.txt?")
         );
         assert_eq!(
-            presence_label("Stopping", None).as_deref(),
+            presence_label("Stopping", None, false).as_deref(),
             Some("Stopping")
         );
-        assert_eq!(presence_label("Done", None), None);
-        assert_eq!(presence_label("Idle", None), None);
+        assert_eq!(presence_label("Done", None, false), None);
+        assert_eq!(
+            presence_label("Done", None, true).as_deref(),
+            Some("Plan ready — Ctrl-i implement · type to refine")
+        );
+        assert_eq!(presence_label("Idle", None, false), None);
     }
 
     #[test]
@@ -2421,7 +2537,7 @@ mod tests {
 
     #[test]
     fn presence_line_renders_outside_transcript() {
-        let line = presence_line("Working", Instant::now(), None).expect("presence");
+        let line = presence_line("Working", Instant::now(), None, false).expect("presence");
         let plain: String = line
             .spans
             .iter()

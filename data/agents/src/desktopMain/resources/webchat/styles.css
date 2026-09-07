@@ -449,6 +449,65 @@ details.group > summary.group-header::-webkit-details-marker {
   align-self: flex-start;
 }
 
+.plan-approval {
+  margin: 12px;
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid #e2a400;
+  background: color-mix(in srgb, #e2a400 12%, var(--panel));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.plan-approval h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.plan-approval p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.plan-approval-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.plan-approval input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.bubble.plan {
+  border-color: #e2a400;
+  background: color-mix(in srgb, #e2a400 10%, var(--panel));
+  white-space: normal;
+  font-size: 0.9rem;
+  max-width: 100%;
+  font-family: inherit;
+}
+.plan-header {
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.plan-mark {
+  color: #e2a400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.plan-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+}
+.plan-entries {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .composer-wrap {
   position: relative;
   flex-shrink: 0;
