@@ -851,8 +851,37 @@ fn is_active_status(status: &str) -> bool {
 
 fn awaiting_plan_confirmation(state: &ViewState) -> bool {
     state.status.eq_ignore_ascii_case("Done")
-        && state.plan_mode
+        && (state.plan_mode || latest_plan_has_pending_entries(&state.events))
         && state.pending_input.is_none()
+}
+
+/// Mirrors `latestPlanHasPendingEntries` (Android/web): a Create Plan turn can end with
+/// pending rows while `planMode` stays off. The latest plan is "pending" unless a user turn
+/// followed it and every entry (or the markdown) reads as resolved.
+fn latest_plan_has_pending_entries(events: &[AgentEvent]) -> bool {
+    let Some(plan_index) = events.iter().rposition(|e| matches!(e, AgentEvent::Plan { .. })) else {
+        return false;
+    };
+    if events
+        .iter()
+        .enumerate()
+        .any(|(i, e)| i > plan_index && matches!(e, AgentEvent::User { .. }))
+    {
+        return false;
+    }
+    let AgentEvent::Plan { entries, markdown, .. } = &events[plan_index] else {
+        return false;
+    };
+    if entries.is_empty() {
+        return markdown.as_deref().is_some_and(|m| !m.trim().is_empty());
+    }
+    entries.iter().any(|(_, status)| {
+        let s = status.trim().to_lowercase();
+        !matches!(
+            s.as_str(),
+            "completed" | "complete" | "done" | "cancelled" | "canceled" | "file"
+        )
+    })
 }
 
 fn display_status_label(state: &ViewState) -> String {
@@ -864,7 +893,9 @@ fn display_status_label(state: &ViewState) -> String {
 }
 
 /// Transcript presence line mirroring the desktop Working orb.
-fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_mode: bool) -> Option<String> {
+/// `plan_ready` is the precomputed "Done awaiting plan approval" flag (see
+/// [`awaiting_plan_confirmation`]).
+fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_ready: bool) -> Option<String> {
     match status {
         "Working" => Some("Working".into()),
         "Blocked" => {
@@ -875,7 +906,7 @@ fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_mode: b
             }
         }
         "Stopping" => Some("Stopping".into()),
-        "Done" if plan_mode && pending.is_none() => {
+        "Done" if plan_ready => {
             Some("Plan ready — Ctrl-i implement · type to refine".into())
         }
         _ => None,
@@ -894,9 +925,9 @@ fn presence_line(
     status: &str,
     started: Instant,
     pending: Option<&PendingUserInput>,
-    plan_mode: bool,
+    plan_ready: bool,
 ) -> Option<Line<'static>> {
-    let label = presence_label(status, pending, plan_mode)?;
+    let label = presence_label(status, pending, plan_ready)?;
     // Keep presence to one row; long delete paths truncate rather than wrap.
     let max = 120usize;
     let display = if label.chars().count() > max {
@@ -915,7 +946,7 @@ fn presence_line(
         text,
         Style::default().fg(if pending.is_some() {
             Color::Magenta
-        } else if status.eq_ignore_ascii_case("Done") && plan_mode {
+        } else if status.eq_ignore_ascii_case("Done") && plan_ready {
             Color::Green
         } else {
             Color::DarkGray
@@ -1023,7 +1054,9 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
             MappedKey::Exit
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => MappedKey::Stop,
-        KeyCode::Char('i')
+        // Ctrl-I is encoded as Tab (0x09) on standard terminals, so accept both the literal
+        // 'i' (kitty-enhanced terminals disambiguate) and Tab-with-CONTROL.
+        KeyCode::Char('i') | KeyCode::Tab
             if key.modifiers.contains(KeyModifiers::CONTROL)
                 && awaiting_plan_confirmation(state)
                 && !state.workflow_stage.eq_ignore_ascii_case("Spec") =>
@@ -1237,7 +1270,7 @@ fn draw(
         &state.status,
         state.presence_started,
         state.pending_input.as_ref(),
-        state.plan_mode,
+        awaiting_plan_confirmation(state),
     );
     let presence_h = if presence.is_some() { 1u16 } else { 0 };
     let transcript_parts = Layout::default()
@@ -2377,6 +2410,96 @@ mod tests {
             Some("Plan ready — Ctrl-i implement · type to refine")
         );
         assert_eq!(presence_label("Idle", None, false), None);
+    }
+
+    #[test]
+    fn plan_pending_entries_are_detected_like_android_web() {
+        // Cursor Create Plan can end with pending rows while planMode stays off.
+        let pending = vec![
+            AgentEvent::Plan {
+                at_millis: 0,
+                entries: vec![
+                    ("Step one".into(), "pending".into()),
+                    ("Step two".into(), "completed".into()),
+                ],
+                markdown: None,
+            },
+        ];
+        assert!(latest_plan_has_pending_entries(&pending));
+        // A user turn after the plan supersedes it.
+        let superseded = vec![
+            AgentEvent::Plan {
+                at_millis: 0,
+                entries: vec![("Step one".into(), "pending".into())],
+                markdown: None,
+            },
+            AgentEvent::User {
+                at_millis: 1,
+                text: "refine".into(),
+                images: vec![],
+            },
+        ];
+        assert!(!latest_plan_has_pending_entries(&superseded));
+        // All-completed entries are not pending.
+        let done = vec![AgentEvent::Plan {
+            at_millis: 0,
+            entries: vec![
+                ("Step one".into(), "completed".into()),
+                ("Step two".into(), "done".into()),
+            ],
+            markdown: None,
+        }];
+        assert!(!latest_plan_has_pending_entries(&done));
+        // Empty entries fall back to the markdown body.
+        let markdown_only = vec![AgentEvent::Plan {
+            at_millis: 0,
+            entries: vec![],
+            markdown: Some("  ".into()),
+        }];
+        assert!(!latest_plan_has_pending_entries(&markdown_only));
+        let markdown_body = vec![AgentEvent::Plan {
+            at_millis: 0,
+            entries: vec![],
+            markdown: Some("Step one".into()),
+        }];
+        assert!(latest_plan_has_pending_entries(&markdown_body));
+    }
+
+    #[test]
+    fn awaiting_plan_confirmation_accepts_pending_plan_entries_without_plan_mode() {
+        let mut state = empty_state();
+        state.status = "Done".into();
+        state.plan_mode = false;
+        state.events = vec![AgentEvent::Plan {
+            at_millis: 0,
+            entries: vec![("Step one".into(), "pending".into())],
+            markdown: None,
+        }];
+        assert!(awaiting_plan_confirmation(&state));
+        assert_eq!(display_status_label(&state), "plan ready");
+    }
+
+    #[test]
+    fn implement_shortcut_accepts_tab_encoding_of_ctrl_i() {
+        // Standard terminals encode Ctrl-I as Tab (0x09); ensure it maps to ImplementPlan.
+        let mut state = empty_state();
+        state.status = "Done".into();
+        state.plan_mode = true;
+        state.events = vec![];
+        let mapped = map_key_action(
+            &state,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL),
+        );
+        assert_eq!(mapped, MappedKey::ImplementPlan);
+        // And still not when the plan-mode predicate is unsatisfied.
+        state.plan_mode = false;
+        assert_eq!(
+            map_key_action(
+                &state,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL),
+            ),
+            MappedKey::None
+        );
     }
 
     #[test]

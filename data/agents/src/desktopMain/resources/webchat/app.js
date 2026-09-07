@@ -79,6 +79,10 @@
   let chatWorking = false;
   let chatLoading = false;
   let optimisticUserText = null;
+  // Authoritative status captured before an optimistic "Working" override, so a failed
+  // request can restore it instead of leaving a stale "Working" (which would hide the
+  // plan-approval card and mislabel the chat until a reload).
+  let optimisticStatus = null;
   let socketPreferQueryAuth = false;
   let socketConnecting = false;
 
@@ -392,7 +396,9 @@
     if (String(chat.status || "").toLowerCase() !== "done") return false;
     if (chat.userInputRequest) return false;
     if (chat.planMode) return true;
-    return latestPlanHasPendingEntries(eventList || events);
+    // Only trust an explicit transcript. Falling back to the module-level `events`
+    // would leak one chat's plan into list rows (which don't pass a transcript).
+    return latestPlanHasPendingEntries(eventList);
   }
 
   function latestPlanHasPendingEntries(list) {
@@ -444,7 +450,16 @@
   function setChatWorking(working, label) {
     chatWorking = !!working;
     if (chatMeta) {
-      if (working) chatMeta.status = label || "Working";
+      if (working) {
+        if (optimisticStatus === null) optimisticStatus = chatMeta.status;
+        chatMeta.status = label || "Working";
+      } else if (optimisticStatus !== null) {
+        // Restore the authoritative status only if our optimistic value still owns the
+        // field; a fresher socket value (e.g. the server really did start) wins.
+        const optimistic = label || "Working";
+        if (chatMeta.status === optimistic) chatMeta.status = optimisticStatus;
+        optimisticStatus = null;
+      }
       setChatMetaLabel();
     }
     renderTranscript();
@@ -927,6 +942,7 @@
           if (chatMeta) {
             chatMeta.planMode = false;
             chatMeta.status = "Working";
+            optimisticStatus = null; // real state change; don't restore the stale capture
           }
           renderPlanApproval();
           setChatMetaLabel();
