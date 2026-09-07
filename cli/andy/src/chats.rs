@@ -6,6 +6,7 @@ pub struct ChatRow {
     pub id: String,
     pub title: String,
     pub status: String,
+    pub plan_mode: bool,
     pub project_id: String,
     pub tmux_alive: bool,
     pub queued_count: usize,
@@ -61,6 +62,10 @@ pub fn parse_chats(raw: &str) -> Vec<ChatRow> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string(),
+                plan_mode: el
+                    .get("planMode")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 project_id: el
                     .get("projectId")
                     .and_then(|v| v.as_str())
@@ -180,13 +185,22 @@ fn project_label(project_id: &str) -> String {
 
 /// `[Working live · 2 queued]` style badge for list rows.
 pub fn format_status_badge(chat: &ChatRow) -> String {
+    let status = display_status_label(chat);
     let live = if chat.tmux_alive { " live" } else { "" };
     let queue = if chat.queued_count > 0 {
         format!(" · {} queued", chat.queued_count)
     } else {
         String::new()
     };
-    format!("[{}{}{}]", chat.status, live, queue)
+    format!("[{status}{live}{queue}]")
+}
+
+pub fn display_status_label(chat: &ChatRow) -> &str {
+    if chat.status.eq_ignore_ascii_case("Done") && chat.plan_mode {
+        "plan ready"
+    } else {
+        chat.status.as_str()
+    }
 }
 
 fn project_sort_key(project_id: &str) -> (u8, String) {
@@ -214,6 +228,14 @@ mod tests {
             format_status_badge(&chats[0]),
             "[Working live · 2 queued]"
         );
+    }
+
+    #[test]
+    fn format_status_badge_shows_plan_ready() {
+        let chats = parse_chats(
+            r#"[{"id":"t1","title":"Demo","status":"Done","planMode":true}]"#,
+        );
+        assert_eq!(format_status_badge(&chats[0]), "[plan ready]");
     }
 
     #[test]

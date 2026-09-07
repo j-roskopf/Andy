@@ -3,6 +3,7 @@ package com.joetr.andy.mobile.ui
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -12,11 +13,14 @@ class RemoteDisplayTest {
     private val crop = DisplayCrop(0, 0, 0, 3448, 2346)
 
     @Test
-    fun atFitZoomTheImageIsLetterboxedInsideTheViewport() {
+    fun atFillZoomWideCropCoversViewportAndAllowsHorizontalPan() {
         val mapping = computeMapping(viewport, crop, zoom = 1f, pan = Offset.Zero)
-        assertEquals(0f, mapping.left, 0.5f)
-        assertTrue("image must not exceed the viewport", mapping.width <= viewport.width + 0.5f)
-        assertTrue(mapping.height <= viewport.height + 0.5f)
+        assertTrue("image must cover viewport width", mapping.width >= viewport.width - 0.5f)
+        assertTrue("image must cover viewport height", mapping.height >= viewport.height - 0.5f)
+        assertTrue(canPan(viewport, crop, zoom = 1f))
+        val clamped = clampPan(viewport, crop, zoom = 1f, Offset(100_000f, 0f))
+        assertTrue(abs(clamped.x) > 1f)
+        assertEquals(0f, clamped.y, 0.001f)
     }
 
     /** Pinch-zoom used to let the image be dragged off-screen entirely. */
@@ -30,11 +34,14 @@ class RemoteDisplayTest {
     }
 
     @Test
-    fun panIsZeroedOnAnAxisWhereTheImageIsSmallerThanTheViewport() {
-        // The wide crop never fills the tall viewport vertically, so it stays centred.
-        val clamped = clampPan(viewport, crop, zoom = 1f, pan = Offset(500f, 500f))
+    fun panIsZeroedOnAnAxisWhereTheImageDoesNotOverflow() {
+        // Matched aspect: cover equals fit, no overflow, pan stays centred.
+        val squareCrop = DisplayCrop(null, 0, 0, 100, 100)
+        val squareViewport = IntSize(200, 200)
+        val clamped = clampPan(squareViewport, squareCrop, zoom = 1f, Offset(500f, 500f))
         assertEquals(0f, clamped.x, 0.001f)
         assertEquals(0f, clamped.y, 0.001f)
+        assertFalse(canPan(squareViewport, squareCrop, zoom = 1f))
     }
 
     @Test
@@ -59,7 +66,7 @@ class RemoteDisplayTest {
 
     @Test
     fun touchMapsToTheRemotePixelUnderTheViewPoint() {
-        // A 4×2 crop fitted into an 8×4 viewport → each remote pixel is 2×2 view pixels.
+        // A 4×2 crop covered into an 8×4 viewport → each remote pixel is 2×2 view pixels.
         val tiny = DisplayCrop(null, 0, 0, 4, 2)
         val mapping = computeMapping(IntSize(8, 4), tiny, zoom = 1f, pan = Offset.Zero)
         // Just inside the top-left remote pixel's view rect should stay on (0,0),
@@ -72,9 +79,18 @@ class RemoteDisplayTest {
 
     @Test
     fun touchesOutsideTheImageDoNotMapButClampedTouchesDo() {
-        val mapping = computeMapping(viewport, crop, zoom = 1f, pan = Offset.Zero)
-        assertEquals(null, mapping.toRemote(mapping.left - 40f, mapping.top + 10f))
-        assertEquals(crop.x, mapping.toRemoteClamped(mapping.left - 40f, mapping.top + 10f)!!.first)
+        val mapping = computeMapping(viewport, crop, zoom = 2f, pan = Offset.Zero)
+        // At cover zoom the image already fills the viewport; pan left so left edge is past 0.
+        val panned = computeMapping(
+            viewport,
+            crop,
+            zoom = 2f,
+            pan = clampPan(viewport, crop, 2f, Offset(10_000f, 0f)),
+        )
+        assertEquals(null, panned.toRemote(panned.left - 40f, panned.top + 10f))
+        assertEquals(crop.x, panned.toRemoteClamped(panned.left - 40f, panned.top + 10f)!!.first)
+        // Sanity: centre still maps.
+        assertTrue(mapping.toRemote(viewport.width / 2f, viewport.height / 2f) != null)
     }
 
     @Test
@@ -98,7 +114,8 @@ class RemoteDisplayTest {
     }
 
     @Test
-    fun samplerBlacksOutLetterboxBarsInsteadOfLeavingStalePixels() {
+    fun samplerBlacksOutUncoveredBarsInsteadOfLeavingStalePixels() {
+        // Force a letterboxed mapping (narrower than cover) so uncovered rows stay black.
         val srcW = 8
         val srcH = 2
         val src = IntArray(srcW * srcH) { 0xFFFFFFFF.toInt() }
@@ -106,13 +123,13 @@ class RemoteDisplayTest {
         val dstW = 8
         val dstH = 8
         val dst = IntArray(dstW * dstH) { 0xFF00FF00.toInt() } // stale green
-        val mapping = computeMapping(IntSize(dstW, dstH), fullCrop, 1f, Offset.Zero)
+        val mapping = ViewMapping(fullCrop, left = 0f, top = 3f, width = 8f, height = 2f)
 
         sampleFrame(src, srcW, srcH, mapping, dst, dstW, dstH)
 
         assertEquals(0xFF000000.toInt(), dst[0]) // top bar
         assertEquals(0xFF000000.toInt(), dst[dst.size - 1]) // bottom bar
-        assertEquals(0xFFFFFFFF.toInt(), dst[dstH / 2 * dstW + dstW / 2]) // image band
+        assertEquals(0xFFFFFFFF.toInt(), dst[4 * dstW + 4]) // image band
     }
 
     @Test
@@ -131,6 +148,53 @@ class RemoteDisplayTest {
 
         assertTrue(dst.none { it == LEFT })
         assertTrue(dst.any { it == RIGHT })
+    }
+
+    @Test
+    fun viewportResizePreservesAbsoluteScale() {
+        val oldViewport = IntSize(1080, 1920)
+        val newViewport = IntSize(1080, 900)
+        val oldZoom = 2f
+        val newZoom = zoomPreservingAbsoluteScale(oldViewport, newViewport, crop, oldZoom, maxZoom = 20f)
+        val oldFill = fillScale(oldViewport, crop)
+        val newFill = fillScale(newViewport, crop)
+        assertEquals(oldZoom * oldFill, newZoom * newFill, 0.001f)
+    }
+
+    @Test
+    fun panShowingRemoteAtKeepsRemotePixelUnderViewPoint() {
+        val zoom = 3f // both axes overflow so any in-crop pixel can sit at centre
+        val remoteX = crop.x + crop.width / 3
+        val remoteY = crop.y + crop.height / 4
+        val viewX = viewport.width / 2f
+        val viewY = viewport.height / 2f
+        val pan = panShowingRemoteAt(viewport, crop, zoom, remoteX, remoteY, viewX, viewY)
+        val mapped = computeMapping(viewport, crop, zoom, pan).toRemote(viewX, viewY)!!
+        assertTrue(abs(mapped.first - remoteX) <= 1)
+        assertTrue(abs(mapped.second - remoteY) <= 1)
+    }
+
+    @Test
+    fun viewportResizeCanPreserveCentreRemotePixel() {
+        val zoom = 1.5f
+        val oldViewport = IntSize(1080, 1920)
+        val newViewport = IntSize(1080, 900) // keyboard ate the bottom
+        val oldPan = clampPan(oldViewport, crop, zoom, Offset(200f, -150f))
+        val remote = computeMapping(oldViewport, crop, zoom, oldPan)
+            .toRemoteClamped(oldViewport.width / 2f, oldViewport.height / 2f)!!
+        val newPan = panShowingRemoteAt(
+            newViewport,
+            crop,
+            zoom,
+            remote.first,
+            remote.second,
+            newViewport.width / 2f,
+            newViewport.height / 2f,
+        )
+        val mapped = computeMapping(newViewport, crop, zoom, newPan)
+            .toRemote(newViewport.width / 2f, newViewport.height / 2f)!!
+        assertTrue(abs(mapped.first - remote.first) <= 1)
+        assertTrue(abs(mapped.second - remote.second) <= 1)
     }
 
     private companion object {

@@ -160,6 +160,31 @@ class AttentionPushService : Service() {
     private fun isUnauthorized(e: Throwable): Boolean =
         (e as? NetworkAccessException)?.unauthorized == true
 
+    private fun isAuthRejection(e: Throwable): Boolean {
+        if (isUnauthorized(e)) return true
+        val msg = e.message.orEmpty()
+        return msg.contains("too many failed auth", ignoreCase = true)
+    }
+
+    /**
+     * Expired / wiped host sessions must not keep polling — each 401 counts toward the
+     * host IP auth rate limit and can lock the phone out of password login for minutes.
+     */
+    private fun stopForExpiredSession(source: String) {
+        Log.w(TAG, "$source session expired — stopping listener")
+        pushStatus.set("session expired · sign in again")
+        pullStatus.set("session expired · sign in again")
+        publishStatus()
+        clearSession(this)
+        listenJob?.cancel()
+        listenJob = null
+        client?.close()
+        client = null
+        connectedBaseUrl = null
+        connectedToken = null
+        stopSelf()
+    }
+
     private suspend fun pushLoop(client: NetworkAccessClient) {
         var backoffMs = 1_000L
         while (currentCoroutineContext().isActive) {
@@ -180,15 +205,15 @@ class AttentionPushService : Service() {
                 publishStatus()
             } catch (e: Exception) {
                 Log.w(TAG, "attention push failed: ${e.message}", e)
-                if (isUnauthorized(e)) {
-                    pushStatus.set("push session expired · sign in again")
-                } else {
-                    val short = e.message?.take(48)?.replace('\n', ' ').orEmpty()
-                    pushStatus.set(
-                        if (short.isBlank()) "push down · retrying"
-                        else "push down · $short",
-                    )
+                if (isAuthRejection(e)) {
+                    stopForExpiredSession("push")
+                    return
                 }
+                val short = e.message?.take(48)?.replace('\n', ' ').orEmpty()
+                pushStatus.set(
+                    if (short.isBlank()) "push down · retrying"
+                    else "push down · $short",
+                )
                 publishStatus()
             }
             if (!currentCoroutineContext().isActive) break
@@ -215,11 +240,11 @@ class AttentionPushService : Service() {
                 publishStatus()
             }.onFailure { e ->
                 Log.w(TAG, "attention pull failed: ${e.message}")
-                if (isUnauthorized(e)) {
-                    pullStatus.set("pull session expired · sign in again")
-                } else {
-                    pullStatus.set("pull down")
+                if (isAuthRejection(e)) {
+                    stopForExpiredSession("pull")
+                    return
                 }
+                pullStatus.set("pull down")
                 publishStatus()
             }
             delay(PULL_INTERVAL_MS)

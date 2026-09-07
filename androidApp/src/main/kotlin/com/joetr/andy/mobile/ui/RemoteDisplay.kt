@@ -73,12 +73,28 @@ internal fun displayCrop(
     return DisplayCrop(index, x, 0, width.coerceAtLeast(1), h)
 }
 
-internal fun fitScale(viewport: IntSize, crop: DisplayCrop): Float {
+/**
+ * Cover scale — fills the viewport on both axes (zoom = 1 baseline).
+ * Widescreen remotes on a portrait phone overflow horizontally and stay finger-sized.
+ */
+internal fun fillScale(viewport: IntSize, crop: DisplayCrop): Float {
     if (viewport.width <= 0 || viewport.height <= 0) return 0f
-    return min(
+    return max(
         viewport.width.toFloat() / crop.width.toFloat(),
         viewport.height.toFloat() / crop.height.toFloat(),
     )
+}
+
+internal fun drawnSize(viewport: IntSize, crop: DisplayCrop, zoom: Float): Pair<Float, Float> {
+    val fill = fillScale(viewport, crop)
+    if (fill <= 0f) return 0f to 0f
+    return crop.width * fill * zoom to crop.height * fill * zoom
+}
+
+/** True when the drawn image exceeds the viewport on either axis (panning can move it). */
+internal fun canPan(viewport: IntSize, crop: DisplayCrop, zoom: Float): Boolean {
+    val (drawW, drawH) = drawnSize(viewport, crop, zoom)
+    return drawW > viewport.width + 0.5f || drawH > viewport.height + 0.5f
 }
 
 internal fun computeMapping(
@@ -87,10 +103,8 @@ internal fun computeMapping(
     zoom: Float,
     pan: Offset,
 ): ViewMapping {
-    val fit = fitScale(viewport, crop)
-    if (fit <= 0f) return ViewMapping(crop, 0f, 0f, 0f, 0f)
-    val drawW = crop.width * fit * zoom
-    val drawH = crop.height * fit * zoom
+    val (drawW, drawH) = drawnSize(viewport, crop, zoom)
+    if (drawW <= 0f || drawH <= 0f) return ViewMapping(crop, 0f, 0f, 0f, 0f)
     val left = (viewport.width - drawW) / 2f + pan.x
     val top = (viewport.height - drawH) / 2f + pan.y
     return ViewMapping(crop, left, top, drawW, drawH)
@@ -104,10 +118,8 @@ internal fun panForCorner(
     left: Float,
     top: Float,
 ): Offset {
-    val fit = fitScale(viewport, crop)
-    if (fit <= 0f) return Offset.Zero
-    val drawW = crop.width * fit * zoom
-    val drawH = crop.height * fit * zoom
+    val (drawW, drawH) = drawnSize(viewport, crop, zoom)
+    if (drawW <= 0f || drawH <= 0f) return Offset.Zero
     return Offset(
         left - (viewport.width - drawW) / 2f,
         top - (viewport.height - drawH) / 2f,
@@ -119,13 +131,50 @@ internal fun panForCorner(
  * and it stays centred on any axis where it is smaller than the viewport.
  */
 internal fun clampPan(viewport: IntSize, crop: DisplayCrop, zoom: Float, pan: Offset): Offset {
-    val fit = fitScale(viewport, crop)
-    if (fit <= 0f) return Offset.Zero
-    val drawW = crop.width * fit * zoom
-    val drawH = crop.height * fit * zoom
+    val (drawW, drawH) = drawnSize(viewport, crop, zoom)
+    if (drawW <= 0f || drawH <= 0f) return Offset.Zero
     val maxX = max((drawW - viewport.width) / 2f, 0f)
     val maxY = max((drawH - viewport.height) / 2f, 0f)
     return Offset(pan.x.coerceIn(-maxX, maxX), pan.y.coerceIn(-maxY, maxY))
+}
+
+/**
+ * Pan that places remote pixel ([remoteX], [remoteY]) under view point ([viewX], [viewY]).
+ * Used to keep the same remote content on-screen when the viewport resizes (keyboard, chrome).
+ */
+internal fun panShowingRemoteAt(
+    viewport: IntSize,
+    crop: DisplayCrop,
+    zoom: Float,
+    remoteX: Int,
+    remoteY: Int,
+    viewX: Float,
+    viewY: Float,
+): Offset {
+    val (drawW, drawH) = drawnSize(viewport, crop, zoom)
+    if (drawW <= 0f || drawH <= 0f || crop.width <= 0 || crop.height <= 0) return Offset.Zero
+    val left = viewX - ((remoteX - crop.x + 0.5f) / crop.width.toFloat()) * drawW
+    val top = viewY - ((remoteY - crop.y + 0.5f) / crop.height.toFloat()) * drawH
+    return clampPan(viewport, crop, zoom, panForCorner(viewport, crop, zoom, left, top))
+}
+
+/**
+ * Zoom multiplier that keeps crop pixels the same size on screen after a viewport resize.
+ * Cover [fillScale] changes with keyboard/chrome height; compensate so the view does not
+ * appear to zoom in/out.
+ */
+internal fun zoomPreservingAbsoluteScale(
+    oldViewport: IntSize,
+    newViewport: IntSize,
+    crop: DisplayCrop,
+    oldZoom: Float,
+    minZoom: Float = 1f,
+    maxZoom: Float = Float.MAX_VALUE,
+): Float {
+    val oldFill = fillScale(oldViewport, crop)
+    val newFill = fillScale(newViewport, crop)
+    if (oldFill <= 0f || newFill <= 0f) return oldZoom.coerceIn(minZoom, maxZoom)
+    return (oldZoom * oldFill / newFill).coerceIn(minZoom, maxZoom)
 }
 
 private const val FIXED_BITS = 16

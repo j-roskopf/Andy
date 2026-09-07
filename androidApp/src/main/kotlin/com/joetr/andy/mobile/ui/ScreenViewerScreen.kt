@@ -80,13 +80,15 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -128,12 +130,9 @@ private const val SCROLL_STEP = 56f
 /** Pinch ceiling — high enough that ~12–24px remote controls become finger-sized. */
 private const val MAX_ZOOM = 20f
 
-/** Zoom at or below this counts as "fits the viewport", where panning is a no-op. */
-private const val FIT_ZOOM_EPSILON = 1.001f
-
 private data class ViewTransform(val viewport: IntSize, val zoom: Float, val pan: Offset)
 
-private enum class Gesture { Tap, LongPress, Drag, Multi }
+private enum class Gesture { Tap, LongPress, Pan, Multi }
 
 @Composable
 fun ScreenViewerScreen(
@@ -196,6 +195,7 @@ fun ScreenViewerScreen(
     val focusRequester = remember { FocusRequester() }
     val softKeyboard = LocalSoftwareKeyboardController.current
     val view = LocalView.current
+    val haptics = LocalHapticFeedback.current
 
     // ViewModel-owned clients outlive this composable across tab switches. Closing them here
     // called Inflater.end(), so returning to Screen failed with "Inflater has been closed".
@@ -374,6 +374,7 @@ fun ScreenViewerScreen(
                             selected = streamQuality == quality,
                             onClick = {
                                 if (streamQuality == quality) return@DisplayChip
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 streamQuality = quality
                                 repository.saveVncStreamQuality(quality)
                                 scope.launch { runCatching { connectWithQuality(quality) } }
@@ -386,6 +387,7 @@ fun ScreenViewerScreen(
                             label = "All",
                             selected = selectedDisplay == null,
                             onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 selectedDisplay = null
                                 zoomState.floatValue = 1f
                                 panState.value = Offset.Zero
@@ -396,6 +398,7 @@ fun ScreenViewerScreen(
                                 label = "Display ${index + 1}",
                                 selected = selectedDisplay == index,
                                 onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     selectedDisplay = index
                                     zoomState.floatValue = 1f
                                     panState.value = Offset.Zero
@@ -413,7 +416,44 @@ fun ScreenViewerScreen(
                 .fillMaxWidth()
                 // Without this the zoomed image paints over the chrome and the bottom nav.
                 .clipToBounds()
-                .onSizeChanged { viewportState.value = it }
+                .onSizeChanged { newSize ->
+                    val old = viewportState.value
+                    val zoom = zoomState.floatValue
+                    if (old.width > 0 && old.height > 0 &&
+                        (old.width != newSize.width || old.height != newSize.height)
+                    ) {
+                        // Keyboard / chrome / immersive bars resize the viewport. Cover scale
+                        // tracks the new size, so re-zoom to keep remote pixels the same
+                        // on-screen size, and keep the old centre remote pixel centred.
+                        val remote = computeMapping(old, crop, zoom, panState.value)
+                            .toRemoteClamped(old.width / 2f, old.height / 2f)
+                        val newZoom = zoomPreservingAbsoluteScale(
+                            oldViewport = old,
+                            newViewport = newSize,
+                            crop = crop,
+                            oldZoom = zoom,
+                            minZoom = 1f,
+                            maxZoom = MAX_ZOOM,
+                        )
+                        viewportState.value = newSize
+                        zoomState.floatValue = newZoom
+                        if (remote != null) {
+                            panState.value = panShowingRemoteAt(
+                                viewport = newSize,
+                                crop = crop,
+                                zoom = newZoom,
+                                remoteX = remote.first,
+                                remoteY = remote.second,
+                                viewX = newSize.width / 2f,
+                                viewY = newSize.height / 2f,
+                            )
+                        } else {
+                            panState.value = clampPan(newSize, crop, newZoom, panState.value)
+                        }
+                    } else {
+                        viewportState.value = newSize
+                    }
+                }
                 .pointerInput(crop) {
                     val touchSlop = viewConfiguration.touchSlop
                     val longPressMs = viewConfiguration.longPressTimeoutMillis
@@ -426,6 +466,8 @@ fun ScreenViewerScreen(
                             panState = panState,
                             touchSlop = touchSlop,
                             longPressMs = longPressMs,
+                            haptics = haptics,
+                            view = view,
                         )
                     }
                 },
@@ -463,7 +505,7 @@ fun ScreenViewerScreen(
 
             if (!fullScreen && !isKeyboardOpen) {
                 Text(
-                    "Tap click · Drag click-drag · Hold right-click · Two fingers scroll & zoom",
+                    "Pan · Tap click · Hold right-click · Hold-drag mouse · Pinch zoom",
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(WindowInsets.navigationBars)
@@ -479,74 +521,36 @@ fun ScreenViewerScreen(
             if (fullScreen && !isKeyboardOpen) {
                 Row(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
+                        .align(Alignment.TopEnd)
                         .windowInsetsPadding(WindowInsets.statusBars)
-                        .padding(AndySpace.Space3),
+                        .padding(AndySpace.Space3)
+                        .clip(AndyShape.Interactive)
+                        .background(tokens.palette.sidebarBg.copy(alpha = 0.85f))
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(AndyShape.Interactive)
-                            .background(tokens.palette.sidebarBg.copy(alpha = 0.85f))
-                            .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    IconButton(
+                        onClick = { setKeyboardOpen(!isKeyboardOpen) },
+                        modifier = Modifier.size(36.dp),
                     ) {
-                        Text(
-                            host.displayName,
-                            color = tokens.palette.textPrimary,
-                            fontFamily = DisplayFont,
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        Text(
-                            when (state) {
-                                is VncConnectionState.Connected -> "Connected"
-                                is VncConnectionState.Connecting -> "Connecting…"
-                                is VncConnectionState.Error -> "Error"
-                                VncConnectionState.Disconnected -> "Disconnected"
-                            },
-                            color = tokens.palette.textTertiary,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
+                        Icon(
+                            Icons.Outlined.Keyboard,
+                            contentDescription = if (isKeyboardOpen) "Hide keyboard" else "Show keyboard",
+                            tint = if (isKeyboardOpen) tokens.accent else tokens.palette.textPrimary,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
-                    Row(
-                        modifier = Modifier
-                            .clip(AndyShape.Interactive)
-                            .background(tokens.palette.sidebarBg.copy(alpha = 0.85f))
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    IconButton(
+                        onClick = { onFullScreenChange(false) },
+                        modifier = Modifier.size(36.dp),
                     ) {
-                        IconButton(
-                            onClick = { setKeyboardOpen(!isKeyboardOpen) },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                Icons.Outlined.Keyboard,
-                                contentDescription = if (isKeyboardOpen) "Hide keyboard" else "Show keyboard",
-                                tint = if (isKeyboardOpen) tokens.accent else tokens.palette.textPrimary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                        IconButton(
-                            onClick = { onFullScreenChange(false) },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                Icons.Outlined.FullscreenExit,
-                                contentDescription = "Exit full screen",
-                                tint = tokens.accent,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
+                        Icon(
+                            Icons.Outlined.FullscreenExit,
+                            contentDescription = "Exit full screen",
+                            tint = tokens.accent,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }
@@ -818,9 +822,10 @@ private fun DisplayChip(label: String, selected: Boolean, onClick: () -> Unit) {
 /**
  * One touch gesture, start to finish.
  *
- * One finger always drives the mouse (tap / hold / click-drag) at any zoom level, so a
- * drag never silently turns into a pan. Two fingers zoom, and pan when zoomed in or
- * scroll the wheel when the image already fits.
+ * Navigate-first: one-finger drag pans when the image overflows; tap left-clicks;
+ * long-press + release right-clicks; long-press then drag arms a mouse click-drag
+ * (haptic on arm). Two fingers pinch-zoom and pan, or scroll the wheel when nothing
+ * overflows.
  *
  * Every event goes to [RfbClient.postPointer], which is a plain ordered queue. The
  * previous code launched a coroutine per event, so button-down could reach the socket
@@ -835,8 +840,19 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
     panState: MutableState<Offset>,
     touchSlop: Float,
     longPressMs: Long,
+    haptics: HapticFeedback,
+    view: android.view.View,
 ) {
     fun mapping() = computeMapping(viewportState.value, crop, zoomState.floatValue, panState.value)
+    fun applyPanDelta(delta: Offset) {
+        if (!canPan(viewportState.value, crop, zoomState.floatValue)) return
+        panState.value = clampPan(
+            viewportState.value,
+            crop,
+            zoomState.floatValue,
+            panState.value + delta,
+        )
+    }
 
     val down = awaitFirstDown(requireUnconsumed = false)
     var lastPos = down.position
@@ -848,15 +864,13 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
             when {
                 pressed.size >= 2 -> return@withTimeoutOrNull Gesture.Multi
                 pressed.isEmpty() -> {
-                    // Prefer the lift position — fingers often settle a few pixels
-                    // between down and up, and that final spot is what you meant.
                     event.changes.firstOrNull()?.let { lastPos = it.position }
                     return@withTimeoutOrNull Gesture.Tap
                 }
                 else -> {
                     lastPos = pressed.first().position
                     if ((lastPos - down.position).getDistance() > touchSlop) {
-                        return@withTimeoutOrNull Gesture.Drag
+                        return@withTimeoutOrNull Gesture.Pan
                     }
                 }
             }
@@ -867,6 +881,7 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
 
     if (classification == Gesture.Tap) {
         mapping().toRemote(lastPos.x, lastPos.y)?.let { (x, y) ->
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             client.postPointer(x, y, BUTTON_LEFT)
             client.postPointer(x, y, 0)
         }
@@ -875,22 +890,19 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
 
     var mode = classification
     var mouseDown = false
+    var longPressArmed = false
     val pinch = PinchState()
 
     when (mode) {
         Gesture.LongPress -> {
-            mapping().toRemote(lastPos.x, lastPos.y)?.let { (x, y) ->
-                client.postPointer(x, y, BUTTON_RIGHT)
-                client.postPointer(x, y, 0)
-            }
+            // View API — Compose LocalHapticFeedback often no-ops for LongPress during
+            // pointerInput coroutines; this is the "armed for right-click / hold-drag" cue.
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            longPressArmed = true
+            lastPos = down.position
         }
-        Gesture.Drag -> {
-            // Press where the finger actually landed, then move — pressing at the
-            // slop-exceeded point loses the drag origin (text selection starts wrong).
-            mapping().toRemote(down.position.x, down.position.y)?.let { (x, y) ->
-                mouseDown = true
-                client.postPointer(x, y, BUTTON_LEFT)
-            }
+        Gesture.Pan -> {
+            applyPanDelta(lastPos - down.position)
         }
         else -> Unit
     }
@@ -898,7 +910,16 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
     while (true) {
         val event = awaitPointerEvent()
         val pressed = event.changes.filter { it.pressed }
-        if (pressed.isEmpty()) break
+        if (pressed.isEmpty()) {
+            if (longPressArmed && !mouseDown) {
+                event.changes.firstOrNull()?.let { lastPos = it.position }
+                mapping().toRemote(lastPos.x, lastPos.y)?.let { (x, y) ->
+                    client.postPointer(x, y, BUTTON_RIGHT)
+                    client.postPointer(x, y, 0)
+                }
+            }
+            break
+        }
 
         if (pressed.size >= 2) {
             if (mouseDown) {
@@ -907,6 +928,7 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
                 }
                 mouseDown = false
             }
+            longPressArmed = false
             mode = Gesture.Multi
             pinch.apply(
                 event = event,
@@ -917,22 +939,46 @@ private suspend fun AwaitPointerEventScope.handleViewerGesture(
                 zoomState = zoomState,
                 panState = panState,
                 touchSlop = touchSlop,
+                haptics = haptics,
             )
             continue
         }
 
-        if (mode == Gesture.Drag) {
-            val change = pressed.first()
-            lastPos = change.position
-            mapping().toRemoteClamped(lastPos.x, lastPos.y)?.let { (x, y) ->
-                // Covers the case where the press itself landed in the letterbox and so
-                // was never sent: the first in-bounds move becomes the button-down.
-                mouseDown = true
-                client.postPointer(x, y, BUTTON_LEFT)
+        val change = pressed.first()
+        val pos = change.position
+
+        when {
+            mouseDown -> {
+                lastPos = pos
+                mapping().toRemoteClamped(lastPos.x, lastPos.y)?.let { (x, y) ->
+                    client.postPointer(x, y, BUTTON_LEFT)
+                }
+                if (change.positionChanged()) change.consume()
             }
-            if (change.positionChanged()) change.consume()
-        } else {
-            pressed.forEach { if (it.positionChanged()) it.consume() }
+            longPressArmed -> {
+                lastPos = pos
+                if ((pos - down.position).getDistance() > touchSlop) {
+                    longPressArmed = false
+                    // Press at the original contact, then track to the current point.
+                    mapping().toRemote(down.position.x, down.position.y)?.let { (x, y) ->
+                        mouseDown = true
+                        client.postPointer(x, y, BUTTON_LEFT)
+                    }
+                    mapping().toRemoteClamped(pos.x, pos.y)?.let { (x, y) ->
+                        mouseDown = true
+                        client.postPointer(x, y, BUTTON_LEFT)
+                    }
+                }
+                if (change.positionChanged()) change.consume()
+            }
+            mode == Gesture.Pan -> {
+                applyPanDelta(pos - lastPos)
+                lastPos = pos
+                if (change.positionChanged()) change.consume()
+            }
+            mode == Gesture.Multi -> {
+                if (change.positionChanged()) change.consume()
+            }
         }
     }
 
@@ -948,6 +994,8 @@ private class PinchState {
     private var armed = false
     private var lastCentroidSize = 0f
     private var scrollAccum = 0f
+    private var hitMinZoom = false
+    private var hitMaxZoom = false
 
     @Suppress("LongParameterList")
     fun apply(
@@ -959,6 +1007,7 @@ private class PinchState {
         zoomState: MutableFloatState,
         panState: MutableState<Offset>,
         touchSlop: Float,
+        haptics: HapticFeedback,
     ) {
         val panChange = event.calculatePan()
         if (!armed) {
@@ -971,10 +1020,23 @@ private class PinchState {
 
         val centroid = event.calculateCentroid(useCurrent = true)
         val oldZoom = zoomState.floatValue
-        val newZoom = (oldZoom * event.calculateZoom()).coerceIn(1f, MAX_ZOOM)
+        val rawZoom = oldZoom * event.calculateZoom()
+        val newZoom = rawZoom.coerceIn(1f, MAX_ZOOM)
+        if (rawZoom < 1f && !hitMinZoom) {
+            hitMinZoom = true
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        } else if (rawZoom > MAX_ZOOM && !hitMaxZoom) {
+            hitMaxZoom = true
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        } else if (newZoom > 1f && newZoom < MAX_ZOOM) {
+            hitMinZoom = false
+            hitMaxZoom = false
+        }
 
-        if (newZoom <= FIT_ZOOM_EPSILON && oldZoom <= FIT_ZOOM_EPSILON) {
-            // Nothing to pan at fit-zoom, so two-finger travel drives the scroll wheel.
+        if (!canPan(viewport, crop, oldZoom) && !canPan(viewport, crop, newZoom) &&
+            newZoom <= 1.001f && oldZoom <= 1.001f
+        ) {
+            // Nothing to pan when the image already covers exactly, so scroll the wheel.
             scrollAccum += panChange.y
             val target = computeMapping(viewport, crop, oldZoom, panState.value)
                 .toRemoteClamped(centroid.x, centroid.y)

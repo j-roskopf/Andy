@@ -191,6 +191,35 @@ class WebChatHttpServerTest {
     }
 
     @Test
+    fun chatJsonIncludesPlanModeAndImplementPlanEndpoint() = runBlocking {
+        agents.setPlanMode("acp-1", true)
+        val client = HttpClient(CIO)
+        try {
+            val detail = client.get("http://127.0.0.1:$port/api/chats/acp-1") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            assertEquals(HttpStatusCode.OK, detail.status)
+            val body = detail.bodyAsText()
+            assertTrue(body.contains("\"planMode\":true"), body)
+            assertTrue(body.contains("\"status\":\"Done\""), body)
+
+            val implement = client.post("http://127.0.0.1:$port/api/chats/acp-1/implement-plan") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+            assertEquals(HttpStatusCode.OK, implement.status, implement.bodyAsText())
+            assertEquals("acp-1" to "Implement the plan.", agents.lastResume)
+            assertTrue(
+                agents.tasks.value.first { it.id == "acp-1" }.planMode.not(),
+                "implement should clear plan mode",
+            )
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun authPluginRejectsMissingTokenForNonLoopback() {
         val limiter = AuthFailureLimiter(10, 60_000, 60_000) { 0L }
         assertEquals(
@@ -854,6 +883,37 @@ class WebChatHttpServerTest {
                 } else {
                     it
                 }
+            }
+        }
+
+        override fun updatePlanMode(taskId: String, planMode: Boolean) {
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) task.copy(planMode = planMode) else task
+            }
+        }
+
+        var lastResume: Pair<String, String>? = null
+        override fun resume(
+            taskId: String,
+            followUp: String,
+            imagePaths: List<String>,
+            skills: List<app.andy.model.AgentSkill>,
+            contextBundleIds: List<String>,
+            provenance: app.andy.model.AgentContextualProvenance?,
+        ) {
+            lastResume = taskId to followUp
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) {
+                    task.copy(status = AgentStatus.Working, planMode = false)
+                } else {
+                    task
+                }
+            }
+        }
+
+        fun setPlanMode(taskId: String, planMode: Boolean) {
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) task.copy(planMode = planMode, status = AgentStatus.Done) else task
             }
         }
 

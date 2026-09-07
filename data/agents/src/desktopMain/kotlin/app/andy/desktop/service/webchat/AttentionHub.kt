@@ -84,7 +84,13 @@ class AttentionHub(
             if (task.automationSuppressOsNotify) continue
             if (task.automationNotifyFailedOnly && kind == AgentAttentionKind.Done) continue
             if (!tryMarkNotified(task.id, kind.name)) continue
-            val event = AgentAttentionEvent(task.id, task.projectId, task.notificationTitle, kind)
+            val event = AgentAttentionEvent(
+                taskId = task.id,
+                projectId = task.projectId,
+                title = task.notificationTitle,
+                kind = kind,
+                planMode = kind == AgentAttentionKind.Done && task.planMode,
+            )
             _events.tryEmit(event)
             emitted += event
         }
@@ -110,9 +116,9 @@ class AttentionHub(
     companion object {
         private const val SAME_KIND_WINDOW_MS = 5_000L
 
-        fun subtitle(kind: AgentAttentionKind): String = when (kind) {
+        fun subtitle(kind: AgentAttentionKind, planMode: Boolean = false): String = when (kind) {
             AgentAttentionKind.Blocked -> "Needs your input"
-            AgentAttentionKind.Done -> "Agent completed"
+            AgentAttentionKind.Done -> if (planMode) "Plan ready" else "Agent completed"
             AgentAttentionKind.Error -> "Agent failed"
         }
 
@@ -122,7 +128,8 @@ class AttentionHub(
                 put("taskId", event.taskId)
                 put("projectId", event.projectId.orEmpty())
                 put("title", event.title)
-                put("subtitle", subtitle(event.kind))
+                put("subtitle", subtitle(event.kind, event.planMode))
+                put("planMode", event.planMode)
             }.toString()
     }
 }

@@ -20,6 +20,7 @@ data class ChatAttentionEvent(
     val projectId: String?,
     val title: String,
     val kind: ChatAttentionKind,
+    val planMode: Boolean = false,
 )
 
 class ChatAttentionTracker(
@@ -30,6 +31,7 @@ class ChatAttentionTracker(
         val status: String,
         val inputRequestId: String?,
         val finishedAtMillis: Long,
+        val planMode: Boolean,
     )
 
     private val previous = mutableMapOf<String, Tracked>()
@@ -79,6 +81,7 @@ class ChatAttentionTracker(
                 projectId = chat.projectId.takeIf { it.isNotBlank() },
                 title = notificationTitle(chat),
                 kind = kind,
+                planMode = kind == ChatAttentionKind.Done && chat.planMode,
             )
         }
         previous.keys.retainAll(chats.map { it.id }.toSet())
@@ -128,9 +131,9 @@ class ChatAttentionTracker(
             return if (flat.length <= 60) flat else flat.take(59) + "…"
         }
 
-        fun subtitle(kind: ChatAttentionKind): String = when (kind) {
+        fun subtitle(kind: ChatAttentionKind, planMode: Boolean = false): String = when (kind) {
             ChatAttentionKind.Blocked -> "Needs your input"
-            ChatAttentionKind.Done -> "Agent completed"
+            ChatAttentionKind.Done -> if (planMode) "Plan ready" else "Agent completed"
             ChatAttentionKind.Error -> "Agent failed"
         }
 
@@ -138,6 +141,7 @@ class ChatAttentionTracker(
             status = chat.status.trim(),
             inputRequestId = chat.userInputRequest?.id,
             finishedAtMillis = chat.finishedAtMillis,
+            planMode = chat.planMode,
         )
     }
 }

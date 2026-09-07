@@ -1047,6 +1047,8 @@ fun Server.registerAgentProjectTools(
                 put("status", task?.status?.name.orEmpty())
                 put("lane", task?.lane?.name.orEmpty())
                 put("autonomy", task?.autonomy?.name.orEmpty())
+                put("planMode", task?.planMode == true)
+                put("workflowStage", task?.workflowStage?.name.orEmpty())
                 put("statusConfident", task?.statusConfident ?: false)
                 put(
                     "tmuxAlive",

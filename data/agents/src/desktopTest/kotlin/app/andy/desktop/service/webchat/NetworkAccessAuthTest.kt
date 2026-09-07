@@ -153,12 +153,36 @@ class NetworkAccessAuthTest {
                 evaluateNetworkAccessAuth("10.0.0.8", "bad", "secret", limiter),
             )
         }
+        // Further bad credentials stay rate-limited…
         assertEquals(
             HttpStatusCode.TooManyRequests,
-            evaluateNetworkAccessAuth("10.0.0.8", "secret", "secret", limiter),
+            evaluateNetworkAccessAuth("10.0.0.8", "still-bad", "secret", limiter),
         )
+        // …but a valid credential must still succeed and clear the cooldown.
+        assertNull(evaluateNetworkAccessAuth("10.0.0.8", "secret", "secret", limiter))
         now += 61_000
         assertNull(evaluateNetworkAccessAuth("10.0.0.8", "secret", "secret", limiter))
+    }
+
+    @Test
+    fun rateLimitDoesNotBlockValidCredentialsDuringCooldown() {
+        var now = 1_000L
+        val limiter = AuthFailureLimiter(maxFailures = 2, windowMillis = 60_000, cooldownMillis = 60_000) { now }
+        val store = NetworkAccessSessionStore(clock = { now })
+        val session = store.exchangeMasterToken("secret", "secret")!!
+        repeat(2) {
+            assertEquals(
+                HttpStatusCode.Unauthorized,
+                evaluateNetworkAccessAuth("10.0.0.8", "bad", "secret", limiter, sessionStore = store),
+            )
+        }
+        assertEquals(
+            HttpStatusCode.TooManyRequests,
+            evaluateNetworkAccessAuth("10.0.0.8", "bad", "secret", limiter, sessionStore = store),
+        )
+        assertNull(
+            evaluateNetworkAccessAuth("10.0.0.8", session, "secret", limiter, sessionStore = store),
+        )
     }
 
     @Test

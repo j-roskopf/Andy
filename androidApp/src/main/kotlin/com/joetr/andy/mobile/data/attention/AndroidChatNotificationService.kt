@@ -35,7 +35,7 @@ class AndroidChatNotificationService(
 
     fun show(event: ChatAttentionEvent) {
         ensureChannel()
-        val subtitle = ChatAttentionTracker.subtitle(event.kind)
+        val subtitle = ChatAttentionTracker.subtitle(event.kind, event.planMode)
         val open = Intent(appContext, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP

@@ -79,6 +79,10 @@
   let chatWorking = false;
   let chatLoading = false;
   let optimisticUserText = null;
+  // Authoritative status captured before an optimistic "Working" override, so a failed
+  // request can restore it instead of leaving a stale "Working" (which would hide the
+  // plan-approval card and mislabel the chat until a reload).
+  let optimisticStatus = null;
   let socketPreferQueryAuth = false;
   let socketConnecting = false;
 
@@ -366,7 +370,7 @@
           btn.innerHTML = `
             <strong>${escapeHtml(chat.title || chat.id)}</strong>
             <div class="row-meta">
-              <span class="badge">${escapeHtml(chat.status || "?")}</span>
+              <span class="badge">${escapeHtml(displayStatusLabel(chat))}</span>
               <span>${escapeHtml(chat.agent || "")}</span>
               ${chat.unread ? "<span>unread</span>" : ""}
             </div>`;
@@ -387,6 +391,56 @@
     }
   }
 
+  function awaitingPlanConfirmation(chat, eventList) {
+    if (!chat) return false;
+    if (String(chat.status || "").toLowerCase() !== "done") return false;
+    if (chat.userInputRequest) return false;
+    if (chat.planMode) return true;
+    // Only trust an explicit transcript. Falling back to the module-level `events`
+    // would leak one chat's plan into list rows (which don't pass a transcript).
+    return latestPlanHasPendingEntries(eventList);
+  }
+
+  function latestPlanHasPendingEntries(list) {
+    const items = Array.isArray(list) ? list : [];
+    let planIndex = -1;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i]?.type === "plan") {
+        planIndex = i;
+        break;
+      }
+    }
+    if (planIndex < 0) return false;
+    for (let i = planIndex + 1; i < items.length; i++) {
+      if (items[i]?.type === "user") return false;
+    }
+    const plan = items[planIndex] || {};
+    const entries = Array.isArray(plan.entries) ? plan.entries : [];
+    if (!entries.length) return !!(plan.markdown || "").trim();
+    return entries.some((entry) => {
+      const status = String(entry?.status || "").trim().toLowerCase();
+      return !["completed", "complete", "done", "cancelled", "canceled", "file"].includes(status);
+    });
+  }
+
+  function showImplementPlan(chat, eventList) {
+    return awaitingPlanConfirmation(chat, eventList) &&
+      String(chat?.workflowStage || "").toLowerCase() !== "spec";
+  }
+
+  function displayStatusLabel(chat, eventList) {
+    if (awaitingPlanConfirmation(chat, eventList)) return "plan ready";
+    return chat?.status || "?";
+  }
+
+  function setChatMetaLabel() {
+    if (!chatMeta) return;
+    const status = chatWorking
+      ? "Working"
+      : displayStatusLabel(chatMeta, events);
+    $("chat-meta").textContent = `${chatMeta.agent || ""} · ${status}`;
+  }
+
   function setChatLoading(loading) {
     chatLoading = loading;
     $("chat-loading").classList.toggle("hidden", !loading);
@@ -396,10 +450,20 @@
   function setChatWorking(working, label) {
     chatWorking = !!working;
     if (chatMeta) {
-      const status = working ? (label || "Working") : (chatMeta.status || "done");
-      $("chat-meta").textContent = `${chatMeta.agent || ""} · ${status}`;
+      if (working) {
+        if (optimisticStatus === null) optimisticStatus = chatMeta.status;
+        chatMeta.status = label || "Working";
+      } else if (optimisticStatus !== null) {
+        // Restore the authoritative status only if our optimistic value still owns the
+        // field; a fresher socket value (e.g. the server really did start) wins.
+        const optimistic = label || "Working";
+        if (chatMeta.status === optimistic) chatMeta.status = optimisticStatus;
+        optimisticStatus = null;
+      }
+      setChatMetaLabel();
     }
     renderTranscript();
+    renderPlanApproval();
   }
 
   function shouldShowThinkingIndicator() {
@@ -446,14 +510,17 @@
       const body = await api(`/api/chats/${encodeURIComponent(id)}`);
       chatMeta = body.chat;
       $("chat-title").textContent = chatMeta.title || id;
-      const status = chatMeta.status || "";
-      $("chat-meta").textContent = `${chatMeta.agent || ""} · ${status}`;
       events = Array.isArray(body.events) ? body.events : [];
       pendingInput = chatMeta.userInputRequest || null;
-      chatWorking = /^(working|starting|queued)$/i.test(status);
+      chatWorking = /^(working|starting|queued)$/i.test(chatMeta.status || "");
+      setChatMetaLabel();
       setChatLoading(false);
       renderTranscript();
       renderPermission();
+      renderPlanApproval();
+      $("composer-input").placeholder = awaitingPlanConfirmation(chatMeta, events)
+        ? "Refine the plan…"
+        : "Message…";
       await refreshSlashCommandsForChat();
       connectSocket(id);
     } catch (err) {
@@ -546,25 +613,34 @@
       if (events.some((e) => e.type === "user")) {
         optimisticUserText = null;
       }
+      if (batch.chat) {
+        chatMeta = Object.assign(chatMeta || {}, batch.chat);
+      }
       if (Object.prototype.hasOwnProperty.call(batch, "userInputRequest")) {
         pendingInput = batch.userInputRequest;
+        if (chatMeta) chatMeta.userInputRequest = batch.userInputRequest;
       }
       if (batch.done) {
         pendingInput = null;
         chatWorking = false;
-        if (chatMeta) chatMeta.status = batch.terminalStatus || "done";
-        $("chat-meta").textContent = `${chatMeta?.agent || ""} · ${batch.terminalStatus || "done"}`;
+        if (chatMeta) {
+          if (!batch.chat) {
+            chatMeta.status = batch.terminalStatus === "error" ? "Error" : "Done";
+          }
+          chatMeta.userInputRequest = null;
+        }
       } else if (Array.isArray(batch.events) && batch.events.length && chatMeta) {
         chatWorking = true;
-        if (chatMeta) chatMeta.status = "Working";
-        $("chat-meta").textContent = `${chatMeta.agent || ""} · Working`;
+        if (!batch.chat) chatMeta.status = "Working";
       }
+      setChatMetaLabel();
       const maybeCommands = commandsFromEvents(batch.events || []);
       if (maybeCommands.length) {
         refreshSlashCommandsForChat();
       }
       renderTranscript();
       renderPermission();
+      renderPlanApproval();
     };
     socket.onclose = (ev) => {
       socketConnecting = false;
@@ -606,7 +682,7 @@
   }
 
   function isVisibleTranscriptEvent(type) {
-    return type === "user" || type === "assistant" || type === "thinking" || type === "error" || type === "permission-resolved";
+    return type === "user" || type === "assistant" || type === "thinking" || type === "error" || type === "permission-resolved" || type === "plan";
   }
 
   function renderTranscript() {
@@ -636,6 +712,22 @@
         el.className = "bubble permission-resolved";
         el.textContent = `Permission ${ev.allowed ? "allowed" : "rejected"}: ${ev.optionId || "unknown option"}`;
         if (ev.note) el.textContent += ` (${ev.note})`;
+      } else if (type === "plan") {
+        el.className = "bubble plan";
+        const entries = Array.isArray(ev.entries) ? ev.entries : [];
+        const md = (ev.markdown || "").trim();
+        const awaiting = awaitingPlanConfirmation(chatMeta, events);
+        let body = `<div class="plan-header"><span class="plan-mark">≡</span> Plan${
+          awaiting ? ' <span class="muted">Awaiting approval</span>' : ""
+        }</div>`;
+        if (md) body += `<pre class="plan-body">${escapeHtml(md)}</pre>`;
+        if (entries.length) {
+          body += `<ol class="plan-entries">${entries.map((entry) =>
+            `<li>${escapeHtml(entry.content || "")}</li>`
+          ).join("")}</ol>`;
+        }
+        if (!md && !entries.length) body += `<div class="plan-body">Plan ready</div>`;
+        el.innerHTML = body;
       }
       root.appendChild(el);
     }
@@ -661,6 +753,7 @@
       box.innerHTML = "";
       return;
     }
+    $("plan-approval")?.classList.add("hidden");
     box.classList.remove("hidden");
     const questions = pendingInput.questions;
     const answers = {};
@@ -769,6 +862,101 @@
     syncSubmit();
   }
 
+  function renderPlanApproval() {
+    const box = $("plan-approval");
+    if (!box) return;
+    if (pendingInput || !awaitingPlanConfirmation(chatMeta, events) || chatWorking) {
+      box.classList.add("hidden");
+      box.innerHTML = "";
+      return;
+    }
+    const canImplement = showImplementPlan(chatMeta, events);
+    box.classList.remove("hidden");
+    box.innerHTML = `
+      <h2>Plan · Awaiting approval</h2>
+      <p>${canImplement
+        ? "This turn finished in plan mode. Nothing was changed. Implement when you're ready, or leave feedback and refine below."
+        : "This turn finished in plan mode. Nothing was changed. Review the plan in Projects, or leave feedback and refine below."}</p>
+      <input id="plan-feedback" type="text" placeholder="Optional feedback if refining…" autocomplete="off" />
+      <div class="plan-approval-actions">
+        <button id="plan-refine" type="button" class="ghost" disabled>Refine</button>
+        ${canImplement ? '<button id="plan-implement" type="button" class="primary">Implement plan</button>' : ""}
+      </div>`;
+    const feedback = $("plan-feedback");
+    const refine = $("plan-refine");
+    const implement = $("plan-implement");
+    feedback.addEventListener("input", () => {
+      refine.disabled = !feedback.value.trim();
+    });
+    refine.addEventListener("click", async () => {
+      const message = feedback.value.trim();
+      if (!message || !currentChatId) return;
+      feedback.value = "";
+      refine.disabled = true;
+      try {
+        optimisticUserText = message;
+        setChatWorking(true);
+        await api(`/api/chats/${encodeURIComponent(currentChatId)}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        renderTranscript();
+      } catch (err) {
+        optimisticUserText = null;
+        if (err.message !== "unauthorized") {
+          $("chat-error").textContent = err.message || "Refine failed";
+          $("chat-error").classList.remove("hidden");
+        }
+        setChatWorking(false);
+      }
+    });
+    if (implement) {
+      implement.addEventListener("click", async () => {
+        try {
+          setChatWorking(true);
+          try {
+            await api(`/api/chats/${encodeURIComponent(currentChatId)}/implement-plan`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+          } catch (err) {
+            // Older hosts lack /implement-plan — mirror desktop via plan-mode + reply.
+            if (err.status !== 404) throw err;
+            try {
+              await api(`/api/chats/${encodeURIComponent(currentChatId)}/plan-mode`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ planMode: false }),
+              });
+            } catch (_) {
+              // plan-mode may also be missing; still send the implement follow-up.
+            }
+            await api(`/api/chats/${encodeURIComponent(currentChatId)}/reply`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: "Implement the plan." }),
+            });
+          }
+          if (chatMeta) {
+            chatMeta.planMode = false;
+            chatMeta.status = "Working";
+            optimisticStatus = null; // real state change; don't restore the stale capture
+          }
+          renderPlanApproval();
+          setChatMetaLabel();
+        } catch (err) {
+          setChatWorking(false);
+          if (err.message !== "unauthorized") {
+            $("chat-error").textContent = err.message || "Implement failed";
+            $("chat-error").classList.remove("hidden");
+          }
+        }
+      });
+    }
+  }
+
   async function respond(requestId, answers) {
     try {
       ensureSocket();
@@ -779,7 +967,12 @@
         body: JSON.stringify({ requestId, answers }),
       });
       pendingInput = null;
+      if (chatMeta) chatMeta.userInputRequest = null;
       renderPermission();
+      renderPlanApproval();
+      $("composer-input").placeholder = awaitingPlanConfirmation(chatMeta, events)
+        ? "Refine the plan…"
+        : "Message…";
     } catch (err) {
       if (err.message !== "unauthorized") {
         $("chat-error").textContent = err.message || "Respond failed";

@@ -61,7 +61,13 @@ class DesktopAgentAttentionCoordinator(
             val prefs = workspace()
             if (prefs.agentNotificationTiming == AgentNotificationTiming.BackgroundOnly && isForeground()) return@forEach
             if (!AgentNotificationDedup.tryMarkNotified(task.id, kind.name)) return@forEach
-            val event = AgentAttentionEvent(task.id, task.projectId, task.notificationTitle, kind)
+            val event = AgentAttentionEvent(
+                task.id,
+                task.projectId,
+                task.notificationTitle,
+                kind,
+                planMode = kind == AgentAttentionKind.Done && task.planMode,
+            )
             // When the chat is already open, skip the OS banner (redundant) but keep sound.
             val showOs = prefs.agentOsNotificationsEnabled && !isViewing(task.id)
             if (showOs) notifications.show(event)

@@ -123,15 +123,10 @@ internal val NetworkAccessAuthPlugin = createApplicationPlugin(
             return@onCall
         }
 
+        // Resolve credentials before enforcing the IP cooldown. Mobile clients that keep a
+        // dead session (e.g. AttentionPushService after a desktop restart) can trip the
+        // limiter; a freshly exchanged password session must still be able to get through.
         val limiter = if (path == "/api/auth/login") loginLimiter else ipLimiter
-        if (limiter.isBlocked(remote)) {
-            call.respondText(
-                """{"error":"too many failed auth attempts"}""",
-                status = HttpStatusCode.TooManyRequests,
-            )
-            return@onCall
-        }
-
         val expectedMaster = pluginConfig.tokenProvider().trim()
         val provided = call.request.extractAccessToken()
         val resolved = pluginConfig.sessionStore.resolveAuth(provided, expectedMaster)
@@ -157,6 +152,14 @@ internal val NetworkAccessAuthPlugin = createApplicationPlugin(
             call.attributes.put(
                 NetworkAccessAuthFingerprintKey,
                 resolved.fingerprint,
+            )
+            return@onCall
+        }
+
+        if (limiter.isBlocked(remote)) {
+            call.respondText(
+                """{"error":"too many failed auth attempts"}""",
+                status = HttpStatusCode.TooManyRequests,
             )
             return@onCall
         }
@@ -335,12 +338,15 @@ internal fun evaluateNetworkAccessAuth(
         return HttpStatusCode.Forbidden
     }
     if (loopback && !networkAccessEnabled) return null
-    if (limiter.isBlocked(remoteHost)) return HttpStatusCode.TooManyRequests
     val resolved = sessionStore.resolveAuth(tokenHeaderOrQuery, expectedToken)
-        ?: return HttpStatusCode.Unauthorized.also { limiter.recordFailure(remoteHost) }
-    if (!scopeAllows(requiredScope, resolved.scope)) return HttpStatusCode.Forbidden
-    limiter.clear(remoteHost)
-    return null
+    if (resolved != null) {
+        if (!scopeAllows(requiredScope, resolved.scope)) return HttpStatusCode.Forbidden
+        limiter.clear(remoteHost)
+        return null
+    }
+    if (limiter.isBlocked(remoteHost)) return HttpStatusCode.TooManyRequests
+    limiter.recordFailure(remoteHost)
+    return HttpStatusCode.Unauthorized
 }
 
 internal class AuthFailureLimiter(

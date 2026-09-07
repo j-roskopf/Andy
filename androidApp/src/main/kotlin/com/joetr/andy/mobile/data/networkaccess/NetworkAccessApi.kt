@@ -2,6 +2,7 @@ package com.joetr.andy.mobile.data.networkaccess
 
 import com.joetr.andy.mobile.data.attention.ChatAttentionEvent
 import com.joetr.andy.mobile.data.attention.ChatAttentionKind
+import app.andy.model.IMPLEMENT_PLAN_PROMPT
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -174,6 +175,35 @@ class NetworkAccessClient(
         return response.body()
     }
 
+    /**
+     * Exit plan mode and resume with the desktop Implement prompt.
+     *
+     * Prefers `POST …/implement-plan` when the host supports it. Older hosts return 404 for
+     * that route — fall back to optional `…/plan-mode` + `…/reply`, which every Network Access
+     * build already serves.
+     */
+    suspend fun implementPlan(chatId: String): OkResponse {
+        val response = rawRequest(HttpMethod.Post, "/api/chats/${chatId.encodeURL()}/implement-plan") {
+            contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        if (response.status == HttpStatusCode.NotFound || response.status.value == 404) {
+            runCatching { updatePlanMode(chatId, planMode = false) }
+            return reply(chatId, IMPLEMENT_PLAN_PROMPT)
+        }
+        ensureOk(response)
+        return response.body()
+    }
+
+    suspend fun updatePlanMode(chatId: String, planMode: Boolean): OkResponse {
+        val response = rawRequest(HttpMethod.Post, "/api/chats/${chatId.encodeURL()}/plan-mode") {
+            contentType(ContentType.Application.Json)
+            setBody(UpdatePlanModeRequest(planMode = planMode))
+        }
+        ensureOk(response)
+        return response.body()
+    }
+
     suspend fun respond(chatId: String, requestId: String, answers: Map<String, String>): OkResponse {
         val response = rawRequest(HttpMethod.Post, "/api/chats/${chatId.encodeURL()}/respond") {
             contentType(ContentType.Application.Json)
@@ -261,18 +291,24 @@ class NetworkAccessClient(
             throw e
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
+            val sessionExpired = msg.contains("401") ||
+                msg.contains("unauthorized", ignoreCase = true) ||
+                msg.contains("4401")
             val hint = when {
                 msg.contains("404", ignoreCase = true) ||
                     msg.contains("Connection refused", ignoreCase = true) ->
                     " (restart Andy Desktop / andyd with the latest build)"
-                msg.contains("401") || msg.contains("unauthorized", ignoreCase = true) ||
-                    msg.contains("4401") ->
+                sessionExpired ->
                     " (session expired — sign in again)"
                 msg.contains("Handshake", ignoreCase = true) ->
                     " (TLS/WebSocket upgrade failed — check Network Access URL)"
                 else -> ""
             }
-            throw NetworkAccessException("Attention push failed: ${msg.take(120)}$hint", cause = e)
+            throw NetworkAccessException(
+                "Attention push failed: ${msg.take(120)}$hint",
+                unauthorized = sessionExpired,
+                cause = e,
+            )
         }
     }
 
@@ -284,11 +320,13 @@ class NetworkAccessClient(
             ?: return null
         val title = (obj["title"] as? JsonPrimitive)?.content.orEmpty().ifBlank { "Chat" }
         val projectId = (obj["projectId"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+        val planMode = (obj["planMode"] as? JsonPrimitive)?.booleanOrNull == true
         return ChatAttentionEvent(
             chatId = taskId,
             projectId = projectId,
             title = title,
             kind = kind,
+            planMode = planMode,
         )
     }
 

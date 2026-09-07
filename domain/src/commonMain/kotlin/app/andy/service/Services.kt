@@ -500,7 +500,14 @@ enum class AgentAttentionKind {
     Error,
 }
 
-data class AgentAttentionEvent(val taskId: String, val projectId: String?, val title: String, val kind: AgentAttentionKind)
+data class AgentAttentionEvent(
+    val taskId: String,
+    val projectId: String?,
+    val title: String,
+    val kind: AgentAttentionKind,
+    /** When [kind] is Done and the turn finished in Andy plan mode. */
+    val planMode: Boolean = false,
+)
 data class OpenAgentTaskRequest(val taskId: String, val projectId: String?)
 
 /**
