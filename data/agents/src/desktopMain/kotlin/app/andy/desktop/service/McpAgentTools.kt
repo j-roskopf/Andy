@@ -13,7 +13,8 @@ import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.acpSupported
 import app.andy.model.defaultLane
-import app.andy.model.defaultSandboxMode
+import app.andy.model.permissionAutonomy
+import app.andy.model.permissionSandbox
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
@@ -537,9 +538,10 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put(
                     "description",
-                    "ReadOnly | Standard | Full. When omitted, inherits from callerTaskId " +
-                        "(or the MCP session's andyTaskId) when that parent task is known; " +
-                        "otherwise Standard.",
+                    "ReadOnly | Standard | Full. When omitted, inherits the parent's permission " +
+                        "dial: an explicit parent sandboxMode (e.g. None / sandbox disabled) wins " +
+                        "over a stale autonomy value; otherwise the parent's autonomy. Falls back " +
+                        "to Standard when no parent is known.",
                 )
             },
             "sandboxMode" to buildJsonObject {
@@ -595,18 +597,16 @@ fun Server.registerAgentProjectTools(
         val autonomy = autonomyName?.let { name ->
             AgentAutonomy.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                 ?: error("unknown autonomy: $name")
-        } ?: parentTask?.autonomy ?: AgentAutonomy.Standard
+        } ?: parentTask?.permissionAutonomy() ?: AgentAutonomy.Standard
         val sandboxModeName = str(args, "sandboxMode")
         val sandboxMode = sandboxModeName?.let { name ->
             AgentSandboxMode.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                 ?: error("unknown sandboxMode: $name")
-        } ?: parentTask?.let { parent ->
-            // If the child explicitly asks for ReadOnly but omits sandboxMode, we must not
-            // inherit a permissive/unset sandbox from the parent (or you can end up with
-            // a supposedly read-only task getting `sandboxMode=None`).
-            val inherited = parent.sandboxMode ?: parent.autonomy.defaultSandboxMode()
-            if (autonomy == AgentAutonomy.ReadOnly) AgentSandboxMode.ReadOnly else inherited
-        }
+        } ?: parentTask?.permissionSandbox()
+        // When autonomy is explicitly ReadOnly and sandboxMode is omitted, keep the parent's
+        // sandbox (including None). ACP advisors rely on that for network while edit tools
+        // stay blocked by autonomy; CLI adapters that key only on sandbox (Codex) must map
+        // ReadOnly autonomy to a read-only sandbox themselves.
         val runtime = parseLocalAgentRuntime(str(args, "runtime"))
             ?: parentTask?.takeIf { it.agent == agent }?.localRuntime
         val model = str(args, "model")?.takeIf { it.isNotBlank() }?.let { raw ->
@@ -1316,16 +1316,17 @@ fun Server.registerAgentProjectTools(
 }
 
 /**
- * When `chat.start` omits autonomy, prefer the orchestrating parent's dial so
- * andy-loop / handoff workers keep Full (or whatever the parent was launched with).
- * Explicit `autonomy` always wins; missing parent falls back to Standard.
+ * When `chat.start` omits autonomy, prefer the orchestrating parent's permission
+ * dial (explicit sandboxMode wins) so andy-loop / handoff workers match the
+ * parent's permissions chip. Explicit `autonomy` always wins; missing parent
+ * falls back to Standard.
  */
 internal fun inheritedAutonomy(
     agentRuns: AgentRunService,
     explicitCallerTaskId: String?,
     sessionCallerTaskId: String?,
 ): AgentAutonomy {
-    return inheritedParentTask(agentRuns, explicitCallerTaskId, sessionCallerTaskId)?.autonomy
+    return inheritedParentTask(agentRuns, explicitCallerTaskId, sessionCallerTaskId)?.permissionAutonomy()
         ?: AgentAutonomy.Standard
 }
 

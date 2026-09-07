@@ -81,6 +81,7 @@ fun ProjectsScreen(
     host: SavedHost?,
     repository: HostRepository,
     networkClient: NetworkAccessClient?,
+    okHttpClient: okhttp3.OkHttpClient,
     onClientReady: (NetworkAccessClient) -> Unit,
     onSignedOut: () -> Unit = {},
     onOpenChat: (String) -> Unit,
@@ -168,7 +169,10 @@ fun ProjectsScreen(
         val legacyToken = repository.legacyNetworkAccessToken(host.id)
         when {
             !storedSession.isNullOrBlank() -> {
-                val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
+                val client = NetworkAccessClient(
+                    host.resolvedNetworkAccessBaseUrl(),
+                    okHttpClient = okHttpClient,
+                )
                 client.sessionToken = storedSession
                 try {
                     onClientReady(client)
@@ -182,7 +186,10 @@ fun ProjectsScreen(
                 }
             }
             !legacyToken.isNullOrBlank() -> {
-                val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
+                val client = NetworkAccessClient(
+                    host.resolvedNetworkAccessBaseUrl(),
+                    okHttpClient = okHttpClient,
+                )
                 try {
                     client.loginWithToken(legacyToken)
                     completeLogin(client)
@@ -317,7 +324,10 @@ fun ProjectsScreen(
                                     loading = true
                                     error = null
                                     try {
-                                        val client = NetworkAccessClient(host.resolvedNetworkAccessBaseUrl())
+                                        val client = NetworkAccessClient(
+                    host.resolvedNetworkAccessBaseUrl(),
+                    okHttpClient = okHttpClient,
+                )
                                         if (authModePassword) {
                                             client.loginWithPassword(authCredentialInput)
                                         } else {

@@ -8,194 +8,169 @@
 [![As Seen In - jetc.dev Newsletter Issue #323](https://img.shields.io/badge/As_Seen_In-jetc.dev_Newsletter_Issue_%23323-blue?logo=Jetpack+Compose&logoColor=white)](https://jetc.dev/issues/323.html)
 [![Featured in Kotlin Weekly Issue #521](https://img.shields.io/badge/Featured%20in-Kotlin%20Weekly%20Issue%20%23521-blue?logo=kotlin&logoColor=white)](https://mailchi.mp/kotlinweekly/kotlin-weekly-521)
 
+**A workspace for coding agents that keeps mobile work close.**
 
-Andy is a desktop helper for Android, Kotlin, and Compose Multiplatform
-developers. Use it to manage devices and emulators, manage projects with AI, mirror screens, inspect
-apps, and drive day-to-day mobile workflows from one place. The desktop app is
-the recommended experience and includes the full feature set. A smaller subset
-of Andy is also available on the web at
-[andy.joetr.com](https://andy.joetr.com).
+Andy is a local-first desktop app for people who build software using coding agents from multiple providers, with a strong focus on mobile. You run agents next to devices, projects, and tools. You can also drive the same work from a phone, a terminal, or web.
 
-**iOS support** is available on macOS and covers most day-to-day Simulator
-workflows: create/boot/clone/erase/rename/delete simulators, stream a live
-mirror with touch input, browse apps and their sandboxed files/Prefs/SQLite
-databases, tail `simctl log stream`, drive URL-scheme intents, capture bugs,
-and reach Simulator-only controls (appearance, Dynamic Type incl. a sweep
-board, status bar studio + screenshot, location, a privacy grant/revoke/reset
-matrix, clipboard, and a push-notification workbench). Crash reports
-(`.ips`) are listed from `~/Library/Logs/DiagnosticReports` with best-effort
-`atos` symbolication when a matching `.dSYM` can be found via Spotlight.
+[Download](https://github.com/j-roskopf/Andy/releases/latest)
+·
+[Web](https://andy.joetr.com)
+·
+[Daemon and CLI](docs/ANDYD.md)
+·
+[Android companion](docs/ANDROID_MOBILE.md)
 
-**Physical iOS devices are view-only.** Andy can mirror a physical iPhone/iPad
-over USB once you trust the computer on-device — no Developer Mode required
-for that. Everything else (touch input, Apps, Files, Logcat, Controls) needs
-Developer Mode enabled on the device (Settings → Privacy & Security →
-Developer Mode, then restart); Andy shows a banner on Live explaining this
-when it detects a physical target. Android remains the primary platform, and
-on-device Accessibility inspection for iOS is not implemented yet.
+## How the pieces fit
 
-In my own words as the author: I find myself in Android Studio less these days, but still want some of the tooling offered in Android Studio in a lower performance overhead option. 
+| Layer | Role |
+| --- | --- |
+| **Desktop app** | Full workspace. Agents, projects, devices, mirror, and debug tools. |
+| **`andyd` daemon** | Shared control plane for agent and project state. Serves MCP. |
+| **CLI (`andy`)** | Terminal client for chats, devices, and automation (macOS and Linux). |
+| **Android companion** | Phone client for host screen control and project chats. |
+| **Network Access web** | Small chat page for ACP chats from other devices on your network. |
+| **Andy for web** | Browser subset for device work through WebUSB or Tracebox. |
 
-## Download
+> Andy puts coding agents in one place with mobile tools. The desktop app has the full set. The phone, CLI, and web clients connect to the same work when you need them away from the desk.
 
-[Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
+## Capabilities
 
-## Features
+### 1. Projects as agent workspaces
 
-### Devices
+A project is a repo path plus context. Each project has tabs for chats, tasks, artifacts, automations, kanban, runbook actions, a markdown scratchpad, and nested git worktrees.
 
-Discover connected Android devices and created emulators in one place. Search and filter by device type or API level, start emulators, jump into a live session, and stop running emulators without leaving Andy. Pair physical devices over Wi‑Fi from a QR/pairing dialog, then reconnect or forget saved pairs without re-plugging USB.
+- Start agent chats that inherit project context.
+- Keep per-project agent profiles (provider, model, autonomy).
+- Run shell actions in a docked Terminal.
+- Set optional environment variables per project.
 
-Opt into multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, emulator start/stop, Controls toggles, and Screenshot across a primary device plus fan-out targets (bounded concurrency). Save device groups, labels, and notes so serials stay readable across many emulators.
+**Workflows (desktop).** Drive Spec → Build ↔ Review ↔ Verification from the tasks tab. Create or refine specs. Open plan snapshots into builds. Gate review verdicts. Track verification criteria and attempt history. Jump into related agent runs.
 
-On macOS, the Devices screen also lists iOS Simulators for basic management: boot, shut down, open in Simulator.app, and jump into Live.
+**Artifacts (desktop).** Browse Media and Documents for workflow outputs, uploads, and pinned files. Preview text. Reveal files on disk. Pin or unpin entries. An unscoped Agents catalog collects artifacts that are not tied to a project.
 
-### Remote Sessions
+**Automations (desktop).** Schedule recurring agent work with once, hourly, daily, weekday, weekly, interval, or cron schedules. Choose standalone, dedicated-thread, or heartbeat mode. Set failure policy, max iterations, and notifications. Arm with Resume, run by hand, or drive from MCP `automation.*` tools while `andyd` is up.
 
-Connect Andy Desktop to another Mac or Linux host over SSH (sidebar host switcher). Andy tunnels the remote `andyd` socket and tmux sessions, routes ADB through SSH for mirroring and device tools, and swaps the agent backend to the remote machine — credentials go through the system SSH askpass; Andy does not store secrets. Saved hosts reconnect with one click; remote mirror tuning presets help over high-latency links. While connected, local-only panes (Catalog, Computer Files, Network, Snapshots, Performance, Tracing, Design, Inspector, Bugs, Recordings) stay hidden. Desktop only.
+**Kanban (desktop).** Track work on a drag-and-drop board. Andy starts with To-Do, Doing, and Done lanes. Add, rename, reorder, or delete lanes. Create cards with a title, description, and tags. Assign cards to agent chats. Start a spec from a card. The board is local. It is not available while Andy is connected to a remote `andyd`.
 
-### Virtual Device Creation
+### 2. Coding agents
 
-Create new Android Virtual Devices from SDK profiles and system images. Andy can install the selected image, configure orientation, RAM, storage, CPU, GPU, locale, cameras, hardware keyboard, and optionally launch the emulator after creation.
+Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, or local Ollama / LM Studio backends (through OpenCode, Pi, or Goose).
 
-### System Image Catalog
+- Compose prompts with images, `@file` mentions, and `/` skills.
+- Choose model, autonomy, and provider sandbox or approvals.
+- Isolate a run in a git worktree when you need a clean boundary.
+- Toggle plan mode. Set a persistent `/goal` for Codex and Claude Code.
+- Import a vendor thread or session id to resume an existing conversation.
+- Attach Andy MCP so the agent can drive devices and emulators.
+- Start temporary chats that do not persist. Promote them when ready.
+- Open side chats for a read-only second opinion.
+- Pin priority chats at the top of project and agent inboxes.
+- Follow the live transcript (thinking, tools, images, mermaid, cost and tokens).
+- Review file diffs when a task ends. Open file links in Andy's code viewer.
+- Send or queue follow-ups. Archive chats or mark them unread.
+- Check provider quota from the inbox. Use voice dictation when enabled in Settings.
 
-Browse installed and available Android emulator system images. Filter by API, variant, or ABI, download missing images, and remove unused installed images when no AVD depends on them.
+### 3. Mobile-first device work
 
-### Snapshots
+Android is the primary platform. On macOS, Andy also covers day-to-day iOS Simulator work.
 
-Save, restore, and delete emulator snapshots for any created AVD. This makes it quick to return a test device to a known state before reproducing bugs or validating flows.
+**Devices.** Discover connected Android devices and created emulators. Search and filter by type or API level. Start or stop emulators. Jump into a live session. Pair physical devices over Wi‑Fi from a QR or pairing dialog. Save pairs, reconnect, or forget them without USB. Use multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, Controls, and Screenshot across targets. Save device groups, labels, and notes.
 
-### Live Mirror
+**Virtual devices and catalog.** Create AVDs from SDK profiles and system images. Set orientation, RAM, storage, CPU, GPU, locale, cameras, and keyboard. Browse installed and available system images. Download or remove images when no AVD depends on them.
 
-Stream a selected Android device or emulator into Andy with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text input commands directly from the desktop UI. Record from the Live toolbar into Andy's Recordings library (trim + GIF/WebP/MP4/PNG-sequence export), and annotate screenshots with redaction, shapes, text, and an optional device frame before saving. Drag an APK onto the mirror to install it, pull clipboard text from the device, and tune max size, bitrate, FPS, and renderer mode (accelerated vs legacy) from the Live side panel. Foldable AVDs can switch hinge posture from Live or Controls.
+**Snapshots.** Save, restore, and delete emulator snapshots so you can return a test device to a known state.
 
-Grid mode mirrors up to four batch targets at once (lower resolution/FPS), with optional synchronized input scaled per device. Bug capture, network proxy, and Perfetto tracing remain single-target.
+**Live mirror.** Stream an Android device or emulator with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text. Record into the Recordings library. Annotate screenshots with redaction, shapes, text, and an optional device frame. Drag an APK onto the mirror to install it. Tune size, bitrate, FPS, and renderer. Grid mode mirrors up to four targets. Dock Live, Logcat, Terminal, or Browser beside or below the main content. Pop the mirror into a focused window when you want it alone.
 
-Dock Live, Logcat, a project Terminal, or an embedded Browser beside or below the main content when you want the mirror and another workspace open at once. Terminal docks support recursive row/column splits. The Browser pane (macOS WKWebView) loads URLs with back/forward/refresh, element inspection, and annotation — select a DOM node, add a comment, and drop the snapshot into the active chat composer. A Local Servers flyout in the top chrome scans localhost listeners, opens them in the Browser dock, and can stop the process. On macOS, Andy can also mirror a booted iOS Simulator with touch input. Open the simulator in Simulator.app when you want the system UI, then return to Andy's embedded mirror when you are done.
+**iOS on macOS.** Manage Simulators (create, boot, clone, erase, rename, delete). Mirror a booted Simulator with touch. Browse apps and sandbox files, Prefs, and SQLite. Tail `simctl log stream`. Drive URL-scheme intents. Use Simulator controls for appearance, Dynamic Type, status bar, location, privacy, clipboard, and push notifications. List crash reports and try `atos` symbolication when a matching `.dSYM` is available. Physical iOS devices are view-only for USB mirror until Developer Mode is on for full control.
 
-### Recordings
+### 4. Debug and inspection tools
 
-Browse saved screen recordings independently of bug reports. Reveal in Finder/Explorer, copy the file path, export trimmed clips (GIF/WebP/MP4/PNG sequence) with a size estimate, and surface any capture warnings when remux falls back.
+| Surface | What you can do |
+| --- | --- |
+| **Apps** | Launch, stop, clear data, reset permissions, uninstall, review permissions and activities. |
+| **Logcat** | Stream logs with pause, clear, search, package filter, and level toggles. Group stack traces. Deobfuscate with R8 / ProGuard `mapping.txt`. Browse dropbox crashes and ANRs. |
+| **Intents** | Build and send activity, deep link, service, and broadcast intents. See the `am` command before you send it. |
+| **Files** | Browse device paths. Pull, push, and delete. |
+| **Shared Preferences** | Inspect and edit `shared_prefs` for a debuggable package. |
+| **App Databases** | Browse and edit SQLite for a debuggable app. Run or save SQL. Pull a copy to the host. |
+| **Network** | Run a debug-app HTTPS proxy with mitmproxy. Inspect headers and bodies. Organize by host and path. |
+| **Proxy rules** | Match URL patterns and methods. Change status, headers, or response bodies. |
+| **Controls** | Toggle airplane mode, Wi‑Fi, data, Bluetooth, dark mode, font scale, animation scale, taps, pointer, layout bounds, TalkBack, and more. Emulator extras cover GPS routes, sensors, GSM, thermal, hinge posture, battery, and locale. |
+| **Performance** | Sample CPU, memory, frames, battery, thermal, and process metrics. Capture heap dumps and batterystats summaries. |
+| **Tracing** | Capture Perfetto traces with presets. Keep a local library. Open traces in the Perfetto UI. |
+| **Design** | Overlay grid, ruler, zoom, colors, and an optional image on the live mirror. |
+| **Accessibility** | Dump and inspect the accessibility hierarchy beside the mirror. |
+| **Inspector** | Capture the on-screen view hierarchy, properties, 2.5D layers, and structural diffs. No on-device agent required. |
+| **Bugs** | Capture actions, video frames, logcat, metadata, and notes. Replay, scrub, export, or delete. Use Explain… to start a read-only agent chat with selected evidence after you confirm the sheet. |
+| **Recordings** | Browse screen recordings. Export trimmed GIF, WebP, MP4, or PNG sequence. |
+| **Android Auto** | Launch Google's Desktop Head Unit beside Live when the DHU toolchain is installed. |
+| **Computer files** | Browse host folders. Open files in a syntax-themed editor. Search across indexed roots. |
 
-### Android Auto (DHU)
+### 5. Remote connection paths
 
-Launch Google's Desktop Head Unit beside Live when the Android Auto DHU toolchain is installed. Andy checks readiness, starts/stops the DHU session, and shows console output — the DHU runs in its own window.
+Andy is built so you can leave the desk and still reach agents and devices.
 
-### Pop-Out Mirror
+| Path | How it works |
+| --- | --- |
+| **Desktop SSH host switcher** | Connect Andy Desktop to another Mac or Linux host over SSH. Andy tunnels the remote `andyd` socket and tmux sessions. It routes ADB through SSH for mirror and device tools. Credentials go through system SSH askpass. Andy does not store secrets. Saved hosts reconnect with one click. |
+| **CLI remote** | `andy remote user@host` opens a subshell to a remote `andyd`. `andy --remote user@host …` runs a one-shot tunnel. |
+| **Network Access web** | Optional static chat PWA from Settings → MCP. Prefer Tailscale Serve to `127.0.0.1`. LAN bind is also available. Auth uses a bearer token or master password. Web Push can notify other devices. |
+| **Android companion** | Save Tailscale hosts. Control the host screen over VNC. Open project chats through Network Access. Store secrets with encrypted prefs. Get attention alerts when chats block, finish, or fail. |
+| **Phone SSH** | From any SSH client on a phone, connect to a Mac or Linux host that runs `andyd`, then run `andy` inside that session. |
+| **Andy for web** | Use [andy.joetr.com](https://andy.joetr.com) with WebUSB or the Tracebox bridge for a smaller device-focused subset. |
 
-Open the device mirror in a separate focused window. The pop-out keeps the same input and hardware controls available when you want to watch or drive the device beside the main workspace.
+Full remote and daemon detail is in [docs/ANDYD.md](docs/ANDYD.md). Phone setup is in [docs/ANDROID_MOBILE.md](docs/ANDROID_MOBILE.md).
 
-### Apps
+### 6. CLI
 
-Inspect installed packages on the selected device. Launch, stop, clear data, reset permissions, uninstall user apps, and review declared permissions and activities from a split app/details view.
+The Rust CLI (`andy`) drives agent chats and device or network automation from the terminal on **macOS and Linux**. Windows users should use the desktop app.
 
-### Logcat
+`andy` talks to `andyd` over `~/.andy/andyd.sock`. The CLI starts the daemon when needed. Agent sessions use Andy's bundled tmux at `~/.andy/bin/tmux`.
 
-Stream device logs with live pause, clear, search, package filtering, and per-level toggles. The main Logcat screen includes resizable columns, while Live keeps a compact log panel next to the mirror.
+```sh
+curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
+echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+```
 
-Andy can group stack traces and deobfuscate them with a built-in R8/ProGuard `mapping.txt` parser (auto-discovered from the project directory, or pinned in Settings). A Crashes tab lists dropbox crashes and ANRs and can load/export entries for the same retrace path.
+Requires **Java 21+**. From source: `./gradlew installAndyCli installAndyd`.
 
-### Intents
+```sh
+andy tui
+andy chat list
+andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
+andy attach <taskId>
+andy project list
+andy remote user@host.local
+andy device list
+andy emulator start Pixel_7 --wait
+andy network rule upsert --url-pattern '*/api/*' --status-code 500
+andy device screenshot -o /tmp/screen.png
+andy tool list
+```
 
-Build and send Android activity, deep link, service, and broadcast intents. Andy shows the generated `am` command before sending it so you can verify the exact action, component, and data URI.
+Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`, `Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`.
 
-### Files & Data
+Curated groups cover `device`, `emulator`, `avd`, `system-image`, `snapshot`, `input`, `app`, `intent`, `file`, and `network`. Other MCP tools stay under `andy tool call`. See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference.
 
-Browse device file paths such as `/sdcard`, `/data/local/tmp`, and `/storage/emulated/0`. Navigate directories, inspect mode, size, and modified timestamps, and use the file service for pull, push, and delete workflows.
+### 7. Android companion app
 
-### Shared Preferences
+Andy on Android is a remote-control companion for a Mac or Linux host that already runs Andy Desktop or `andyd`. It is not a full desktop shell on the phone.
 
-Inspect `shared_prefs` XML for a selected debuggable package. Browse files and typed keys, edit values in place, and add or delete entries without dropping to `adb shell`.
+1. **Hosts** — Save Tailscale MagicDNS or `100.x` addresses, VNC port, Network Access URL, and secrets (encrypted on device).
+2. **Screen** — Connect to the host VNC server. Use touchpad gestures and a soft keyboard.
+3. **Projects** — Sign in to Network Access. Browse project-grouped chats. Read transcripts. Send follow-ups. Start new ACP chats.
+4. **Settings** — See build info. Install updates from GitHub Releases (`Andy-*.apk`).
 
-### App Databases
+Typical path: keep `andyd` up, enable Network Access, run `tailscale serve`, enable Screen Sharing or a VNC server on `:5900`, then connect from the phone on the same Tailscale account.
 
-Browse SQLite databases for a debuggable app. List databases and tables with row counts, inspect and edit cells, run or save SQL queries, and pull a database copy to the host when you need offline analysis.
+Build and install a debug build with `./gradlew :androidApp:installDebug`. Details: [docs/ANDROID_MOBILE.md](docs/ANDROID_MOBILE.md).
 
-### Network
+### 8. Companion web page and Andy for web
 
-Run a debug-app HTTPS proxy backed by mitmproxy. Start and stop capture, configure device proxy routing, install the local CA, inspect request and response headers or bodies, and organize traffic by host and path.
+**Network Access web** is the small chat UI that `andyd` serves when Network Access is on. Use it from a phone browser or any device on Tailscale or LAN. It covers ACP-lane chats with token auth.
 
-### Proxy Rules
-
-Create ordered network rewrite rules that match URL patterns and optional HTTP methods. Rules can change status codes, set or remove headers, and provide response bodies for debug-app testing.
-
-### Projects
-
-Organize Android, Kotlin, and Compose Multiplatform work into project spaces with a repo directory and optional environment variables. Each project canvas has tabs for chats, workflow tasks, artifacts, automations, kanban, runbook shell actions, a markdown scratchpad, and nested git worktrees. Start agent chats that inherit the project's context, run actions in a docked Terminal, and keep per-project agent profiles (provider, model, autonomy) for workflow stages.
-
-### Project Workflows
-
-Drive Spec → Build ↔ Review ↔ Verification from the project tasks tab. Create or refine specs (optional grill-me pass), open plan snapshots into builds, gate review verdicts, track verification criteria and attempt history, and jump into the related agent runs. Desktop only.
-
-### Artifacts
-
-Browse a per-project Artifacts + Media catalog from the Artifacts tab under Projects. Workflow outputs, uploads, and pinned files land in Media or Documents views; preview text, reveal on disk, pin/unpin, upload new files, and open entries from workflow tasks. An unscoped Agents catalog collects artifacts not tied to a project. Desktop only.
-
-### Automations
-
-Schedule recurring agent work from the Automations tab under Projects. Create paused-until-resume automations with once, hourly, daily, weekday, weekly, interval, or cron schedules; choose standalone, dedicated-thread, or heartbeat mode; set failure policy, max iterations, and notifications. Arm with Resume, run manually, or drive from MCP `automation.*` tools while `andyd` is up. Desktop only.
-
-### Kanban
-
-Track work on a per-project drag-and-drop board from the Kanban tab under Projects. Andy starts you with To-Do, Doing, and Done lanes; add, rename, reorder, or delete lanes; and create cards with a title, description, and tags. Drag cards between lanes or reorder within a lane, assign cards to agent chats, and start a spec from a card. The board persists locally with Andy's agent store. Desktop only — unavailable while Andy is connected to a running `andyd` (quit the daemon and restart Andy to edit the board).
-
-### Agents
-
-Dispatch coding tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, or local Ollama/LM Studio backends (via OpenCode, Pi, or Goose runtimes) from Andy. Compose prompts with images, `@file` mentions, and `/` skills; choose model, autonomy, and provider sandbox/approvals; optionally isolate the run in a git worktree; toggle plan mode; set a persistent `/goal` (Codex and Claude Code); import a vendor thread/session id to resume an existing provider conversation; and attach Andy MCP so the agent can drive devices and emulators. Start temporary chats that never persist (filtered from MCP, web, automations, and kanban) or promote them when ready. Open side chats docked beside a parent task for read-only second opinions without handing off the work. Pin priority chats (working, blocked, unread, queued, or recently failed) at the top of project and agent inboxes. Follow the live transcript (thinking, tools, inline tool images, mermaid diagram previews, cost/tokens), review file diffs when the task finishes, open file links in Andy's code viewer, send or queue follow-ups, archive or mark chats unread, and check provider quota from the inbox. Voice dictation is available when enabled in Settings.
-
-### Controls
-
-Toggle common device state without memorizing `adb shell` commands. Andy includes controls for airplane mode, Wi-Fi, mobile data, Bluetooth, dark mode, font scale, animation scale, show taps, pointer location, layout bounds, TalkBack, don't-keep-activities, and hardware buttons.
-
-On emulators, Controls also injects GPS (including GPX/KML route playback), sensors, GSM calls/SMS/network type, thermal status, and foldable hinge posture. Battery level/charging overrides work on physical devices too (with a prominent Reset). Runtime locale supports `cmd locale`, setprop+restart, per-app locales, and pseudo-locales (`en-XA` / `ar-XB`).
-
-### Performance
-
-Monitor device performance samples over time. Andy displays CPU, memory, frame rendering, battery, thermal status, process metrics, and frame timing bars that make slower-than-60-fps frames stand out. The Memory tab captures heap dumps, shows `dumpsys meminfo` breakdowns, and summarizes batterystats wakelocks/alarms/jobs.
-
-### Tracing
-
-Capture Perfetto traces from Android 9+ devices with quick-start presets for general, battery, thermal, graphics, Chrome, and V8 workloads. Tune duration and buffer size, edit the textproto config, keep a local trace library, and open completed traces in the Perfetto UI through Andy's local viewer.
-
-### Design
-
-Overlay design tools on top of the live device mirror. Use a grid, ruler, zoom controls, configurable overlay colors, a pointer color picker, and an optional imported image overlay to inspect spacing and visual details while interacting with the app.
-
-### Accessibility
-
-Dump and inspect the Android accessibility hierarchy beside the live mirror. Hover or select nodes to highlight bounds, filter to interesting nodes, toggle layout bounds, and review labels, state, geometry, and simple accessibility issues.
-
-### Inspector
-
-Capture the on-screen view hierarchy beside the live mirror: a tree pane, a read-only properties pane (identity, geometry, state, semantics, raw dumpsys attributes), and the mirror with overlay, plus a 2.5D window z-order layer view (tilt/spacing), structural snapshot diffing, and text/id/class search. Andy merges `uiautomator dump` with `dumpsys activity top`'s unmerged view tree by bounds and class, and reads `dumpsys window` for layering — no on-device agent required. Composable names, modifier chains, and recomposition counts are out of scope; those need a JVMTI agent Andy doesn't ship.
-
-### Bug Capture
-
-Capture reproducible bug reports from Live. Andy saves recent actions, live video frames, logcat, device metadata, and notes, then lets you replay, scrub, export, or delete reports from the Bugs screen.
-
-An "Explain…" action sits beside a selected crash, network exchange, hierarchy node, and investigation moment. It opens a confirmation sheet showing the editable prompt and exactly which evidence would be attached — events, time window, size, exclusions, and redactions — before starting a read-only agent chat. Nothing is sent to a provider until you confirm the sheet, and the resulting chat links back to the investigation moment it came from. Desktop only.
-
-### Settings
-
-Customize appearance (accent, background, code and terminal themes), show or hide sidebar pages, and tune agent behavior: orchestration provider defaults per role (Implementation, UI/design, Research, Planning, Audit), immediate vs queued follow-ups, keep sessions alive after quit, transcript expand/collapse, chat retention sweeps, OS notifications and dock badges, and voice dictation setup. Proxy settings cover start-on-launch and corporate TLS trust. The MCP panel enables Andy's local MCP server, lists available tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf. Optional Network Access serves a static web chat PWA for ACP-lane chats from other devices (Tailscale Serve or LAN bind, bearer-token auth, Web Push notifications) — see [docs/ANDYD.md](docs/ANDYD.md#network-access-optional-web-client).
-
-### Updates
-
-Check for desktop app updates and confirm installation from inside Andy. Version metadata is generated at build time and the app can surface a close-and-install prompt when an update is ready. The same Settings area can install or update the CLI runtime bundle (`andy`, `andyd`, managed tmux, status hook, and orchestration skills) without leaving the app.
-
-### Computer File Browsing
-
-Browse the host filesystem from multi-root folders, open files in a syntax-themed editor with an inline find bar (Cmd/Ctrl+F, next/prev), and search across indexed roots without leaving Andy. File changes under watched roots refresh via FSEvents (macOS) or directory watching.
-
-### Andy for web
-
-The browser build at [andy.joetr.com](https://andy.joetr.com) provides a
-smaller subset of Andy's functionality. For the complete experience, use the
-desktop app. The browser build can connect directly with WebUSB or through
-Andy's pinned tracebox distribution. The bridge keeps ADB on loopback and
-permits only Perfetto's standard local origins, `https://andy.joetr.com`, and
-the computer's detected private IPv4 origin on port `10000`.
+**Andy for web** at [andy.joetr.com](https://andy.joetr.com) is a separate browser build with a smaller device-focused feature set. Connect with WebUSB or Andy's Tracebox distribution:
 
 ```sh
 adb start-server
@@ -204,12 +179,23 @@ chmod +x andy-tracebox
 ./andy-tracebox
 ```
 
-The source manifest, checksum verification, launcher, and release packager are
-maintained in [`tools/andy-tracebox`](tools/andy-tracebox/README.md).
+Tracebox source and packaging live in [`tools/andy-tracebox`](tools/andy-tracebox/README.md).
+
+### 9. Settings, MCP, and updates
+
+Customize appearance, sidebar pages, and agent behavior. Set orchestration defaults per role. Tune follow-ups, session lifetime, transcript layout, chat retention, notifications, and voice dictation. Configure proxy start-on-launch and corporate TLS trust.
+
+The MCP panel enables Andy's local MCP server, lists tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf.
+
+Check for desktop updates from inside Andy. The same Settings area can install or update the CLI runtime bundle (`andy`, `andyd`, managed tmux, status hook, and orchestration skills).
+
+## Download
+
+[Download the latest release](https://github.com/j-roskopf/Andy/releases/latest)
 
 ## Screenshots
 
-The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state; PR CI verifies screenshots on macOS only.
+The images below are approved macOS visual-test baselines. The full [screenshot scenario matrix](docs/SCREENSHOT_SCENARIO_MATRIX.md) records fixture state. PR CI verifies screenshots on macOS only.
 
 | Devices | Catalog |
 | --- | --- |
@@ -256,99 +242,16 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Inspector layers | Bug Capture |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-layers.png" alt="Andy view hierarchy 2.5D layer view" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> |
-| Recordings export | |
+| Recordings export | Settings |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-recordings-export.png" alt="Andy recordings export" width="480"> | |
-| Settings | Mirror pop-out |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-recordings-export.png" alt="Andy recordings export" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> |
+| Mirror pop-out | |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |
-
-## CLI
-
-Andy ships a Rust CLI (`andy`) for driving agent chats **and** device/network
-automation from the terminal on **macOS and Linux only**. The CLI is not
-supported on Windows — use the [desktop app](#download) there instead.
-
-The CLI talks to the same control plane as the desktop app: a background daemon
-(`andyd`) that owns agent/project state, spawns provider CLIs into Andy-managed
-tmux sessions, and serves MCP over `~/.andy/andyd.sock`.
-
-**`andy` auto-starts `andyd` when needed.** Agent sessions use Andy's bundled
-tmux at `~/.andy/bin/tmux` (installed by `install-andy.sh`, like bundled
-`scrcpy-server` for mirroring). You do not need to install tmux separately.
-
-### Installation
-
-```sh
-curl -fsSL https://github.com/j-roskopf/Andy/releases/latest/download/install-andy.sh | bash
-
-# Permanently add ~/.andy/bin to your PATH (pick your shell):
-echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.zshrc   # zsh
-# echo 'export PATH="$HOME/.andy/bin:$PATH"' >> ~/.bashrc  # bash
-```
-
-Restart your shell (or `source` the rc file you edited) so `andy` is on your `PATH`.
-
-Requires **Java 21+** for the `andyd` runtime. The installer places:
-
-| Path | Role |
-| --- | --- |
-| `~/.andy/bin/andy` | CLI |
-| `~/.andy/bin/andyd` | Daemon launcher |
-| `~/.andy/andyd/andyd.jar` | Daemon runtime |
-| `~/.andy/bin/tmux` | Andy-managed tmux for agent sessions |
-
-From source: `./gradlew installAndyCli installAndyd`
-
-### Quick start
-
-```sh
-andy tui # Main entry point into the CLI for chatting with Agents
-andy chat list
-andy chat start --agent ClaudeCode --directory "$PWD" "Reply with pong"
-andy attach <taskId>
-andy project list
-andy remote user@host.local               # subshell: andy cmds hit remote andyd
-andy --remote user@host.local chat list   # one-shot SSH tunnel
-
-# Device / network scripting (same MCP socket)
-andy device list
-andy emulator start Pixel_7 --wait
-andy network rule upsert --url-pattern '*/api/*' --status-code 500
-andy device screenshot -o /tmp/screen.png
-andy tool list   # full MCP catalog; `andy tool call <name>` for any tool
-```
-
-Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`,
-`Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`.
-
-`andy tui` groups chats by project (`n` new chat, `a` / Enter attach). `andy attach`
-opens the ACP viewer or a tmux pane by lane — detach with Esc/`q` (ACP) or F12 /
-Alt+d / Ctrl-b then d (tmux) without stopping the agent. Chat start also accepts
-`--project`, `--title`, image paths, `--pick-image`, and `--no-attach`.
-
-Device targeting: `--serial` on a command, or `ANDY_SERIAL`. Use global `--json`
-for machine-readable output. Curated groups cover `device`, `emulator`, `avd`,
-`system-image`, `snapshot`, `input`, `app`, `intent`, `file`, and `network`.
-Automation MCP tools (`automation.list`, `automation.create`, `automation.run`, …)
-and other agent/workflow tools stay under `andy tool call` (beyond the curated
-`andy chat` commands).
-
-See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference, TUI
-keybindings, remote access, GUI/daemon modes, and launchd packaging.
-
-## Testing
-
-PR CI runs `./gradlew desktopTest` on Linux/macOS/Windows, plus macOS-only
-`verifyRoborazziDesktop`. Opt-in suites that need a device, Simulator, or live
-agent CLI — and how to run them locally — are documented in
-[docs/TESTS.md](docs/TESTS.md).
+| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> | |
 
 ## Building from source
 
-`./gradlew run` and `./gradlew runDistributable` compile Andy's native terminal
-engine with Cargo, so **Rust** (stable) must be installed and on your `PATH`.
-Java 21+ is also required.
+`./gradlew run` and `./gradlew runDistributable` compile Andy's native terminal engine with Cargo. You need **Rust** (stable) on your `PATH` and **Java 21+**.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -358,20 +261,18 @@ source "$HOME/.cargo/env"
 
 Open a new terminal after install if `cargo` is still not found.
 
-## Runtime Requirements
+## Runtime requirements
 
 - Android SDK platform tools for device and emulator access.
-- Xcode command-line tools (`xcrun simctl`, `xcrun devicectl`, `xcodebuild`) on macOS for iOS Simulator management, catalog/platform downloads, physical-device status, Live mirror, and crash symbolication (`atos`).
-- Network capture uses Andy's pinned mitmproxy runtime at `~/.andy/proxy/venv`
-  (provisioned automatically; needs Python 3.12+). Optional fallback:
-  `brew install mitmproxy`.
-- Andy bundles `scrcpy-server` for embedded Android mirroring and installs a
-  managed `tmux` at `~/.andy/bin/tmux` for agent sessions (via `install-andy.sh`
-  or the desktop app). Override with `ANDY_TMUX` if needed.
-- Optional agent CLIs for Projects and Agents: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`). Ollama and LM Studio work as OpenAI-compatible backends when a server is running and configured in Settings.
+- Xcode command-line tools on macOS for iOS Simulator work, physical-device status, Live mirror, and crash symbolication.
+- Network capture uses Andy's pinned mitmproxy runtime at `~/.andy/proxy/venv` (needs Python 3.12+). Optional fallback: `brew install mitmproxy`.
+- Andy bundles `scrcpy-server` for Android mirroring and installs managed `tmux` at `~/.andy/bin/tmux` for agent sessions.
+- Optional agent CLIs: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`). Ollama and LM Studio work as OpenAI-compatible backends when a server is running and configured in Settings.
 
-## Icon Attribution
+## Icon attribution
+
 <a href="https://www.flaticon.com/free-icons/robot" title="robot icons">Robot icons created by Smashicons - Flaticon</a>
 
 ## Inspiration
-A lot of visual and functional inspiration was borrowed, with love, from [Emu](https://emu.marathonlabs.io/)
+
+Visual and functional ideas came, with thanks, from [Emu](https://emu.marathonlabs.io/).

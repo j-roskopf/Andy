@@ -8,7 +8,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /** Crop of the remote framebuffer — null [displayIndex] means the full desktop. */
-internal data class DisplayCrop(
+data class DisplayCrop(
     val displayIndex: Int?,
     val x: Int,
     val y: Int,
@@ -17,7 +17,7 @@ internal data class DisplayCrop(
 )
 
 /** Where [crop] lands inside the viewport, in view pixels. */
-internal data class ViewMapping(
+data class ViewMapping(
     val crop: DisplayCrop,
     val left: Float,
     val top: Float,

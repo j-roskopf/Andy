@@ -19,11 +19,11 @@ class AcpProcessLauncherTest {
                 "/opt/homebrew/bin/node",
                 "/opt/homebrew/bin/npx",
                 "-y",
-                "@agentclientprotocol/codex-acp@1.1.9",
+                "@agentclientprotocol/codex-acp@1.10.0",
             ),
             acpNpxCommand(
                 runtime,
-                listOf("-y", "@agentclientprotocol/codex-acp@1.1.9"),
+                listOf("-y", "@agentclientprotocol/codex-acp@1.10.0"),
                 isNodeScript = { true },
             ),
         )

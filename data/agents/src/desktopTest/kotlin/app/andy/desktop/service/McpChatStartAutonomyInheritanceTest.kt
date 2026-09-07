@@ -230,8 +230,34 @@ class McpChatStartAutonomyInheritanceTest {
             assertFalse(isError, text)
             val draft = fake.startCalls.single().draft
             assertEquals(AgentAutonomy.ReadOnly, draft.autonomy)
-            assertEquals(AgentSandboxMode.ReadOnly, draft.sandboxMode)
+            // Explicit ReadOnly keeps the parent's sandbox (None for Full) so advisors
+            // retain network approvals; edit tools stay gated by autonomy.
+            assertEquals(AgentSandboxMode.None, draft.sandboxMode)
             assertEquals("parent-1", draft.parentChatTaskId)
+        }
+    }
+
+    @Test
+    fun chatStartDerivesAutonomyFromParentSandboxWhenBothOmitted() = runBlocking {
+        withHarness(parentAutonomy = AgentAutonomy.ReadOnly) { fake, socket ->
+            fake.seedParent(
+                id = "parent-1",
+                autonomy = AgentAutonomy.ReadOnly,
+                sandboxMode = AgentSandboxMode.None,
+            )
+            val (isError, text) = callTool(
+                socket,
+                "chat.start",
+                mapOf(
+                    "prompt" to JsonPrimitive("implement it"),
+                    "agent" to JsonPrimitive("Cursor"),
+                    "callerTaskId" to JsonPrimitive("parent-1"),
+                ),
+            )
+            assertFalse(isError, text)
+            val draft = fake.startCalls.single().draft
+            assertEquals(AgentAutonomy.Full, draft.autonomy)
+            assertEquals(AgentSandboxMode.None, draft.sandboxMode)
         }
     }
 

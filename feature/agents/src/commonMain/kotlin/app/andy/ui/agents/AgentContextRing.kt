@@ -85,7 +85,6 @@ internal fun agentContextUsageSummary(status: AgentContextWindowStatus): String 
     return "${formatDecimal(percent, 1)}% · $used/${formatCompactTokenCount(capacity)} context used"
 }
 
-/** Compact ring gauge for the chat composer; hovering reveals a Context window breakdown, mirroring the indicator in tools like Synara. */
 @Composable
 internal fun AgentContextUsageIndicator(
     status: AgentContextWindowStatus?,

@@ -145,6 +145,8 @@ fun ScreenViewerScreen(
     modifier: Modifier = Modifier,
     keyboardOpen: Boolean = false,
     onKeyboardOpenChange: (Boolean) -> Unit = {},
+    rfbClient: RfbClient? = null,
+    presenter: RemoteFramePresenter? = null,
 ) {
     val tokens = andyTokens()
     var internalKeyboardOpen by remember { mutableStateOf(false) }
@@ -172,8 +174,10 @@ fun ScreenViewerScreen(
         return
     }
 
-    val client = remember { RfbClient() }
-    val presenter = remember { RemoteFramePresenter() }
+    val rememberedClient = remember { RfbClient() }
+    val rememberedPresenter = remember { RemoteFramePresenter() }
+    val client = rfbClient ?: rememberedClient
+    val framePresenter = presenter ?: rememberedPresenter
     val scope = rememberCoroutineScope()
     val state by client.state.collectAsStateWithLifecycle()
     val framebuffer by client.framebuffer.collectAsStateWithLifecycle()
@@ -193,12 +197,21 @@ fun ScreenViewerScreen(
     val softKeyboard = LocalSoftwareKeyboardController.current
     val view = LocalView.current
 
-    DisposableEffect(Unit) {
-        onDispose { client.close() }
+    // ViewModel-owned clients outlive this composable across tab switches. Closing them here
+    // called Inflater.end(), so returning to Screen failed with "Inflater has been closed".
+    // Disconnect releases the socket; LaunchedEffect reconnects on re-entry.
+    DisposableEffect(client, rfbClient) {
+        onDispose {
+            if (rfbClient == null) {
+                client.close()
+            } else {
+                client.disconnect()
+            }
+        }
     }
 
     suspend fun connectWithQuality(quality: VncStreamQuality) {
-        presenter.clear()
+        framePresenter.clear()
         val password = repository.vncPassword(host.id)
         client.connect(
             host = host.vncHost(),
@@ -235,7 +248,7 @@ fun ScreenViewerScreen(
 
     // Resample whenever a frame lands or the view transform moves. `conflate` collapses
     // bursts so a slow sample never queues work behind itself.
-    LaunchedEffect(client, presenter, crop) {
+    LaunchedEffect(client, framePresenter, crop) {
         combine(
             client.framebuffer,
             client.frameVersion,
@@ -244,12 +257,12 @@ fun ScreenViewerScreen(
             .conflate()
             .collect { (fb, transform) ->
                 if (fb == null) {
-                    presenter.clear()
+                    framePresenter.clear()
                     return@collect
                 }
                 val mapping = computeMapping(transform.viewport, crop, transform.zoom, transform.pan)
                 withContext(Dispatchers.Default) {
-                    presenter.present(fb, mapping, transform.viewport)
+                    framePresenter.present(fb, mapping, transform.viewport)
                 }
             }
     }
@@ -436,7 +449,7 @@ fun ScreenViewerScreen(
                 }
                 else -> {
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val presented = presenter.frame.value ?: return@Canvas
+                        val presented = framePresenter.frame.value ?: return@Canvas
                         val mapping = computeMapping(
                             viewportState.value,
                             crop,

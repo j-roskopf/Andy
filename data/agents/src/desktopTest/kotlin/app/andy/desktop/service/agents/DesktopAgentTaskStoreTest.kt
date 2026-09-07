@@ -241,6 +241,24 @@ class DesktopAgentTaskStoreTest {
     }
 
     @Test
+    fun loadsContradictorySandboxDefaultsAsAlignedAutonomy() = withStore { store ->
+        val contradictory = AgentProviderDefaults(
+            autonomy = AgentAutonomy.ReadOnly,
+            sandboxMode = AgentSandboxMode.None,
+        )
+        store.save(
+            AgentStoreState(
+                providerDefaults = mapOf(AgentKind.Cursor to contradictory),
+                lastUsedAgent = AgentKind.Cursor,
+            ),
+        )
+
+        val loaded = store.load().providerDefaults.getValue(AgentKind.Cursor)
+        assertEquals(AgentAutonomy.Full, loaded.autonomy)
+        assertEquals(AgentSandboxMode.None, loaded.sandboxMode)
+    }
+
+    @Test
     fun roundTripsLocalRuntimeOnTaskAndDefaults() = withStore { store ->
         val task = AgentTask(
             id = "local-1",

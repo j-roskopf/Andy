@@ -19,8 +19,10 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.joetr.andy.MainActivity
 import com.joetr.andy.R
+import com.joetr.andy.mobile.AndyApplication
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
+import com.joetr.andy.mobile.data.secrets.KeystoreSecretStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -136,7 +138,18 @@ class AttentionPushService : Service() {
         }
         connectedBaseUrl = baseUrl
         connectedToken = token
-        val next = NetworkAccessClient(baseUrl, longLived = true).also { it.sessionToken = token }
+        val next = NetworkAccessClient(
+            baseUrl = baseUrl,
+            okHttpClient = (application as? com.joetr.andy.mobile.AndyApplication)
+                ?.graph?.longLivedOkHttp
+                ?: okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .writeTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
+                    .build(),
+            longLived = true,
+        ).also { it.sessionToken = token }
         client = next
         listenJob = scope.launch {
             launch { pushLoop(next) }
@@ -372,35 +385,53 @@ class AttentionPushService : Service() {
             context.startService(intent)
         }
 
-        private fun prefs(context: Context) = EncryptedSharedPreferences.create(
-            context.applicationContext,
-            PREFS,
-            MasterKey.Builder(context.applicationContext)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build(),
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+        private fun secrets(context: Context): KeystoreSecretStore {
+            val app = context.applicationContext as? AndyApplication
+            return app?.graph?.secretStore ?: KeystoreSecretStore(context.applicationContext)
+        }
 
         private fun persistSession(context: Context, baseUrl: String, token: String, hostName: String) {
-            prefs(context).edit()
-                .putString(KEY_BASE, baseUrl)
-                .putString(KEY_TOKEN, token)
-                .putString(KEY_HOST, hostName)
-                .remove("master_token")
-                .apply()
+            migrateLegacyPrefsIfNeeded(context)
+            val store = secrets(context)
+            store.put(KEY_BASE, baseUrl)
+            store.put(KEY_TOKEN, token)
+            store.put(KEY_HOST, hostName)
+            store.remove("master_token")
         }
 
         private fun clearSession(context: Context) {
-            prefs(context).edit().clear().apply()
+            migrateLegacyPrefsIfNeeded(context)
+            val store = secrets(context)
+            store.clearKeys(listOf(KEY_BASE, KEY_TOKEN, KEY_HOST, "master_token"))
         }
 
         private fun loadSession(context: Context): Session? {
-            val p = prefs(context)
-            val base = p.getString(KEY_BASE, null)?.takeIf { it.isNotBlank() } ?: return null
-            val token = p.getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
-            val host = p.getString(KEY_HOST, null).orEmpty().ifBlank { "Andy host" }
+            migrateLegacyPrefsIfNeeded(context)
+            val store = secrets(context)
+            val base = store.get(KEY_BASE)?.takeIf { it.isNotBlank() } ?: return null
+            val token = store.get(KEY_TOKEN)?.takeIf { it.isNotBlank() } ?: return null
+            val host = store.get(KEY_HOST).orEmpty().ifBlank { "Andy host" }
             return Session(base, token, host)
+        }
+
+        private fun migrateLegacyPrefsIfNeeded(context: Context) {
+            val store = secrets(context)
+            if (store.get(KEY_BASE) != null || store.get(KEY_TOKEN) != null) return
+            val legacy = runCatching {
+                EncryptedSharedPreferences.create(
+                    context.applicationContext,
+                    PREFS,
+                    MasterKey.Builder(context.applicationContext)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .build(),
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                )
+            }.getOrNull() ?: return
+            legacy.getString(KEY_BASE, null)?.let { store.put(KEY_BASE, it) }
+            legacy.getString(KEY_TOKEN, null)?.let { store.put(KEY_TOKEN, it) }
+            legacy.getString(KEY_HOST, null)?.let { store.put(KEY_HOST, it) }
+            legacy.edit().clear().apply()
         }
 
         private data class Session(val baseUrl: String, val token: String, val hostName: String)

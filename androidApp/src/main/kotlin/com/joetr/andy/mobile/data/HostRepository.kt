@@ -1,46 +1,57 @@
 package com.joetr.andy.mobile.data
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.joetr.andy.mobile.data.secrets.KeystoreSecretStore
 import com.joetr.andy.mobile.data.vnc.VncStreamQuality
+import com.joetr.andy.mobile.navigation.MobileTab
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metro.SingleIn
+import com.joetr.andy.mobile.di.MobileScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
+private val Context.hostMetaDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "andy_mobile_host_meta",
+)
+
 /**
- * Persists non-secret host metadata in encrypted prefs and keeps Network Access /
- * VNC secrets in separate encrypted keys — never logged.
- *
- * Network Access stores only the exchanged session token (not the master password or
- * long-lived access token). Legacy `na_token_*` values are migrated once via login.
+ * Host metadata in DataStore; VNC / Network Access secrets in [KeystoreSecretStore].
+ * Migrates once from legacy EncryptedSharedPreferences (`andy_mobile_hosts`).
  */
-class HostRepository(context: Context) {
+@SingleIn(MobileScope::class)
+@Inject
+class HostRepository(
+    context: Context,
+    private val secrets: KeystoreSecretStore,
+) {
     private val appContext = context.applicationContext
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val meta = appContext.hostMetaDataStore
 
-    private val masterKey = MasterKey.Builder(appContext)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val prefs = EncryptedSharedPreferences.create(
-        appContext,
-        "andy_mobile_hosts",
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
-
-    private val _hosts = MutableStateFlow(loadHosts())
+    private val _hosts = MutableStateFlow<List<SavedHost>>(emptyList())
     val hosts: StateFlow<List<SavedHost>> = _hosts.asStateFlow()
 
-    private val _selectedHostId = MutableStateFlow(prefs.getString(KEY_SELECTED, null))
+    private val _selectedHostId = MutableStateFlow<String?>(null)
     val selectedHostId: StateFlow<String?> = _selectedHostId.asStateFlow()
+
+    private val _selectedTab = MutableStateFlow(MobileTab.Hosts)
+    val selectedTab: StateFlow<MobileTab> = _selectedTab.asStateFlow()
 
     val selectedHost: SavedHost?
         get() {
@@ -48,9 +59,32 @@ class HostRepository(context: Context) {
             return _hosts.value.firstOrNull { it.id == id } ?: _hosts.value.firstOrNull()
         }
 
+    init {
+        // DataStore must not be touched via runBlocking on Main — it deadlocks.
+        runBlocking(Dispatchers.IO) {
+            migrateFromEncryptedPrefsIfNeeded()
+            _hosts.value = loadHosts()
+            _selectedHostId.value = meta.data.first()[KEY_SELECTED]
+            _selectedTab.value = MobileTab.entries
+                .firstOrNull { it.name == meta.data.first()[KEY_SELECTED_TAB] }
+                ?: MobileTab.Hosts
+        }
+    }
+
     fun selectHost(id: String?) {
         _selectedHostId.value = id
-        prefs.edit().putString(KEY_SELECTED, id).apply()
+        runBlocking(Dispatchers.IO) {
+            meta.edit { prefs ->
+                if (id == null) prefs.remove(KEY_SELECTED) else prefs[KEY_SELECTED] = id
+            }
+        }
+    }
+
+    fun selectTab(tab: MobileTab) {
+        _selectedTab.value = tab
+        runBlocking(Dispatchers.IO) {
+            meta.edit { prefs -> prefs[KEY_SELECTED_TAB] = tab.name }
+        }
     }
 
     suspend fun upsert(host: SavedHost) = withContext(Dispatchers.IO) {
@@ -72,68 +106,124 @@ class HostRepository(context: Context) {
     }
 
     fun networkAccessSession(hostId: String): String? =
-        prefs.getString(sessionKey(hostId), null)?.takeIf { it.isNotBlank() }
+        secrets.get(sessionKey(hostId))?.takeIf { it.isNotBlank() }
 
     /** Legacy master token storage — migrate once via login, then clear. */
     fun legacyNetworkAccessToken(hostId: String): String? =
-        prefs.getString(legacyTokenKey(hostId), null)?.takeIf { it.isNotBlank() }
+        secrets.get(legacyTokenKey(hostId))?.takeIf { it.isNotBlank() }
 
     fun vncPassword(hostId: String): String? =
-        prefs.getString(vncKey(hostId), null)?.takeIf { it.isNotBlank() }
+        secrets.get(vncKey(hostId))?.takeIf { it.isNotBlank() }
 
     fun vncStreamQuality(): VncStreamQuality =
-        VncStreamQuality.fromId(prefs.getString(KEY_VNC_QUALITY, null))
+        VncStreamQuality.fromId(runBlocking(Dispatchers.IO) { meta.data.first()[KEY_VNC_QUALITY] })
 
     fun saveVncStreamQuality(quality: VncStreamQuality) {
-        prefs.edit().putString(KEY_VNC_QUALITY, quality.name).apply()
+        runBlocking(Dispatchers.IO) {
+            meta.edit { it[KEY_VNC_QUALITY] = quality.name }
+        }
     }
 
     fun vncKeyboardBufferMode(): Boolean =
-        prefs.getBoolean(KEY_VNC_BUFFER_MODE, false)
+        runBlocking(Dispatchers.IO) { meta.data.first()[KEY_VNC_BUFFER_MODE] ?: false }
 
     fun saveVncKeyboardBufferMode(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_VNC_BUFFER_MODE, enabled).apply()
+        runBlocking(Dispatchers.IO) {
+            meta.edit { it[KEY_VNC_BUFFER_MODE] = enabled }
+        }
     }
 
     fun saveNetworkAccessSession(hostId: String, sessionToken: String?) {
-        prefs.edit().apply {
-            val value = sessionToken?.trim().orEmpty()
-            if (value.isEmpty()) remove(sessionKey(hostId)) else putString(sessionKey(hostId), value)
-            // Always drop legacy master-token storage once we have a session path.
-            remove(legacyTokenKey(hostId))
-        }.apply()
+        secrets.put(sessionKey(hostId), sessionToken)
+        // Always drop legacy master-token storage once we have a session path.
+        secrets.remove(legacyTokenKey(hostId))
     }
 
     fun clearLegacyNetworkAccessToken(hostId: String) {
-        prefs.edit().remove(legacyTokenKey(hostId)).apply()
+        secrets.remove(legacyTokenKey(hostId))
     }
 
     fun saveVncPassword(hostId: String, password: String?) {
-        prefs.edit().apply {
-            val value = password.orEmpty()
-            if (value.isEmpty()) remove(vncKey(hostId)) else putString(vncKey(hostId), value)
-        }.apply()
+        secrets.put(vncKey(hostId), password)
     }
 
     fun clearSecrets(hostId: String) {
-        prefs.edit()
-            .remove(sessionKey(hostId))
-            .remove(legacyTokenKey(hostId))
-            .remove(vncKey(hostId))
-            .apply()
+        secrets.clearKeys(
+            listOf(sessionKey(hostId), legacyTokenKey(hostId), vncKey(hostId)),
+        )
     }
 
-    private fun loadHosts(): List<SavedHost> {
-        val raw = prefs.getString(KEY_HOSTS, null) ?: return emptyList()
+    private suspend fun loadHosts(): List<SavedHost> {
+        val raw = meta.data.first()[KEY_HOSTS] ?: return emptyList()
         return runCatching {
             json.decodeFromString(ListSerializer(SavedHost.serializer()), raw)
         }.getOrDefault(emptyList())
     }
 
-    private fun persistHosts(hosts: List<SavedHost>) {
-        prefs.edit()
-            .putString(KEY_HOSTS, json.encodeToString(ListSerializer(SavedHost.serializer()), hosts))
-            .apply()
+    private suspend fun persistHosts(hosts: List<SavedHost>) {
+        meta.edit {
+            it[KEY_HOSTS] = json.encodeToString(ListSerializer(SavedHost.serializer()), hosts)
+        }
+    }
+
+    private suspend fun migrateFromEncryptedPrefsIfNeeded() {
+        val already = meta.data.first()[KEY_MIGRATED] == true
+        if (already) return
+
+        val legacy = runCatching {
+            val masterKey = MasterKey.Builder(appContext)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                appContext,
+                LEGACY_PREFS,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }.getOrNull()
+
+        if (legacy != null) {
+            meta.edit { prefs ->
+                legacy.getString(LEGACY_HOSTS, null)?.let { prefs[KEY_HOSTS] = it }
+                legacy.getString(LEGACY_SELECTED, null)?.let { prefs[KEY_SELECTED] = it }
+                legacy.getString(LEGACY_VNC_QUALITY, null)?.let { prefs[KEY_VNC_QUALITY] = it }
+                if (legacy.contains(LEGACY_VNC_BUFFER)) {
+                    prefs[KEY_VNC_BUFFER_MODE] = legacy.getBoolean(LEGACY_VNC_BUFFER, false)
+                }
+            }
+
+            val hostsJson = legacy.getString(LEGACY_HOSTS, null)
+            val hostIds = if (hostsJson != null) {
+                runCatching {
+                    json.decodeFromString(ListSerializer(SavedHost.serializer()), hostsJson)
+                        .map { it.id }
+                }.getOrDefault(emptyList())
+            } else {
+                emptyList()
+            }
+
+            hostIds.forEach { id ->
+                legacy.getString(sessionKey(id), null)?.let { secrets.put(sessionKey(id), it) }
+                legacy.getString(legacyTokenKey(id), null)?.let { secrets.put(legacyTokenKey(id), it) }
+                legacy.getString(vncKey(id), null)?.let { secrets.put(vncKey(id), it) }
+            }
+
+            // Also migrate any leftover secret keys by scanning known prefixes.
+            legacy.all.keys.forEach { key ->
+                when {
+                    key.startsWith("na_session_") ||
+                        key.startsWith("na_token_") ||
+                        key.startsWith("vnc_pass_") -> {
+                        legacy.getString(key, null)?.let { secrets.put(key, it) }
+                    }
+                }
+            }
+
+            legacy.edit().clear().apply()
+        }
+
+        meta.edit { it[KEY_MIGRATED] = true }
     }
 
     private fun sessionKey(hostId: String) = "na_session_$hostId"
@@ -141,9 +231,17 @@ class HostRepository(context: Context) {
     private fun vncKey(hostId: String) = "vnc_pass_$hostId"
 
     companion object {
-        private const val KEY_HOSTS = "hosts_json"
-        private const val KEY_SELECTED = "selected_host_id"
-        private const val KEY_VNC_QUALITY = "vnc_stream_quality"
-        private const val KEY_VNC_BUFFER_MODE = "vnc_keyboard_buffer_mode"
+        private const val LEGACY_PREFS = "andy_mobile_hosts"
+        private const val LEGACY_HOSTS = "hosts_json"
+        private const val LEGACY_SELECTED = "selected_host_id"
+        private const val LEGACY_VNC_QUALITY = "vnc_stream_quality"
+        private const val LEGACY_VNC_BUFFER = "vnc_keyboard_buffer_mode"
+
+        private val KEY_HOSTS = stringPreferencesKey("hosts_json")
+        private val KEY_SELECTED = stringPreferencesKey("selected_host_id")
+        private val KEY_SELECTED_TAB = stringPreferencesKey("selected_tab")
+        private val KEY_VNC_QUALITY = stringPreferencesKey("vnc_stream_quality")
+        private val KEY_VNC_BUFFER_MODE = booleanPreferencesKey("vnc_keyboard_buffer_mode")
+        private val KEY_MIGRATED = booleanPreferencesKey("migrated_from_encrypted_prefs")
     }
 }

@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
+        android:name=".mobile.AndyApplication"
         android:allowBackup="false"
         android:label="Andy"
         android:icon="@mipmap/ic_launcher"

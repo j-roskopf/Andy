@@ -25,6 +25,11 @@ import java.util.concurrent.TimeUnit
 
 class AndroidUpdateInstaller(
     private val appContext: Context,
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .build(),
 ) {
     suspend fun install(
         update: AvailableUpdate,
@@ -38,7 +43,7 @@ class AndroidUpdateInstaller(
             )
         }
 
-        val apk = downloadApk(appContext, asset, onProgress)
+        val apk = downloadApk(asset, onProgress)
         try {
             onProgress(
                 UpdateInstallProgress(
@@ -61,6 +66,73 @@ class AndroidUpdateInstaller(
         appContext.startActivity(intent)
         return UpdateInstallResult.OpenedReleasePage("Andy opened the latest release page.")
     }
+
+    private fun downloadApk(
+        asset: ReleaseAsset,
+        onProgress: (UpdateInstallProgress) -> Unit,
+    ): File {
+        val target = File(
+            appContext.cacheDir,
+            "updates/${asset.name.replace(Regex("""[^A-Za-z0-9._-]"""), "_")}",
+        )
+        target.parentFile?.mkdirs()
+        val expectedSha256 = asset.sha256Digest.normalizedSha256Digest()
+        val digest = if (expectedSha256 != null) MessageDigest.getInstance("SHA-256") else null
+        val request = Request.Builder()
+            .url(asset.downloadUrl)
+            .header("User-Agent", "Andy/${AndyBuildInfo.versionName}")
+            .build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                target.delete()
+                error("Update download failed: HTTP ${response.code}")
+            }
+            val body = response.body ?: run {
+                target.delete()
+                error("Update download failed: empty body")
+            }
+            val totalBytes = body.contentLength().takeIf { it > 0 } ?: asset.sizeBytes.takeIf { it > 0 }
+            var downloadedBytes = 0L
+            onProgress(
+                UpdateInstallProgress(
+                    phase = UpdateInstallPhase.Downloading,
+                    message = "Downloading Andy update...",
+                    fraction = progressFraction(downloadedBytes, totalBytes),
+                ),
+            )
+            target.outputStream().use { output ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(DownloadBufferSize)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        if (read == 0) continue
+                        output.write(buffer, 0, read)
+                        digest?.update(buffer, 0, read)
+                        downloadedBytes += read
+                        onProgress(
+                            UpdateInstallProgress(
+                                phase = UpdateInstallPhase.Downloading,
+                                message = "Downloading Andy update...",
+                                fraction = progressFraction(downloadedBytes, totalBytes),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+        if (expectedSha256 != null) {
+            onProgress(
+                UpdateInstallProgress(
+                    phase = UpdateInstallPhase.ReadyToInstall,
+                    message = "Verifying update...",
+                ),
+            )
+            val actual = digest?.digest()?.joinToString("") { byte -> "%02x".format(byte) }
+            check(actual == expectedSha256) { "Downloaded update failed SHA-256 verification." }
+        }
+        return target
+    }
 }
 
 private fun openUnknownAppSourcesSettings(context: Context) {
@@ -68,71 +140,6 @@ private fun openUnknownAppSourcesSettings(context: Context) {
         .setData("package:${context.packageName}".toUri())
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     context.startActivity(intent)
-}
-
-private fun downloadApk(
-    context: Context,
-    asset: ReleaseAsset,
-    onProgress: (UpdateInstallProgress) -> Unit,
-): File {
-    val target = File(context.cacheDir, "updates/${asset.name.replace(Regex("""[^A-Za-z0-9._-]"""), "_")}")
-    target.parentFile?.mkdirs()
-    val expectedSha256 = asset.sha256Digest.normalizedSha256Digest()
-    val digest = if (expectedSha256 != null) MessageDigest.getInstance("SHA-256") else null
-    val request = Request.Builder()
-        .url(asset.downloadUrl)
-        .header("User-Agent", "Andy/${AndyBuildInfo.versionName}")
-        .build()
-    AndroidUpdateHttpClient.newCall(request).execute().use { response ->
-        if (!response.isSuccessful) {
-            target.delete()
-            error("Update download failed: HTTP ${response.code}")
-        }
-        val body = response.body ?: run {
-            target.delete()
-            error("Update download failed: empty body")
-        }
-        val totalBytes = body.contentLength().takeIf { it > 0 } ?: asset.sizeBytes.takeIf { it > 0 }
-        var downloadedBytes = 0L
-        onProgress(
-            UpdateInstallProgress(
-                phase = UpdateInstallPhase.Downloading,
-                message = "Downloading Andy update...",
-                fraction = progressFraction(downloadedBytes, totalBytes),
-            ),
-        )
-        target.outputStream().use { output ->
-            body.byteStream().use { input ->
-                val buffer = ByteArray(DownloadBufferSize)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    if (read == 0) continue
-                    output.write(buffer, 0, read)
-                    digest?.update(buffer, 0, read)
-                    downloadedBytes += read
-                    onProgress(
-                        UpdateInstallProgress(
-                            phase = UpdateInstallPhase.Downloading,
-                            message = "Downloading Andy update...",
-                            fraction = progressFraction(downloadedBytes, totalBytes),
-                        ),
-                    )
-                }
-            }
-        }
-    }
-    if (expectedSha256 != null) {
-        onProgress(
-            UpdateInstallProgress(
-                phase = UpdateInstallPhase.ReadyToInstall,
-                message = "Verifying update...",
-            ),
-        )
-        val actual = digest?.digest()?.joinToString("") { byte -> "%02x".format(byte) }
-        check(actual == expectedSha256) { "Downloaded update failed SHA-256 verification." }
-    }
-    return target
 }
 
 private fun progressFraction(downloadedBytes: Long, totalBytes: Long?): Float? =
@@ -212,12 +219,4 @@ class AndroidUpdateInstallReceiver : BroadcastReceiver() {
     companion object {
         const val ActionInstallStatus = "com.joetr.andy.UPDATE_INSTALL_STATUS"
     }
-}
-
-private val AndroidUpdateHttpClient: OkHttpClient by lazy {
-    OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .callTimeout(0, TimeUnit.MILLISECONDS)
-        .build()
 }

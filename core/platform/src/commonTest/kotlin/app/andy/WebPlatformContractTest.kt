@@ -35,8 +35,10 @@ class WebPlatformContractTest {
         assertFalse(PlatformCapabilities.Web.proxy)
         assertFalse(PlatformCapabilities.Web.mcp)
         assertFalse(PlatformCapabilities.Web.updates)
+        assertFalse(PlatformCapabilities.Web.remoteHosts)
         assertTrue(PlatformCapabilities.Web.acceleratedMirror)
         assertFalse(PlatformCapabilities.Desktop.acceleratedMirror)
+        assertTrue(PlatformCapabilities.Desktop.remoteHosts)
         assertFalse(PlatformCapabilities.Desktop.destinations.contains(AndyDestination.Tracing))
         assertTrue(
             PlatformCapabilities.Desktop.destinations.containsAll(

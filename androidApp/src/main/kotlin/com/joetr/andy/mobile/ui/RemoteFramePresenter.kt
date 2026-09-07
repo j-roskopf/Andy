@@ -12,7 +12,7 @@ import com.joetr.andy.mobile.data.vnc.Framebuffer
 import kotlin.math.roundToInt
 
 /** A viewport-resolution snapshot of the remote screen, plus the transform it was sampled with. */
-internal class PresentedFrame(
+class PresentedFrame(
     val image: ImageBitmap,
     val sampled: ViewMapping,
     val width: Int,
@@ -32,7 +32,7 @@ internal class PresentedFrame(
  * [Bitmap.setPixels] with the old dimensions — crashing with
  * `y + height must be <= bitmap.height()`.
  */
-internal class RemoteFramePresenter {
+class RemoteFramePresenter {
     val frame: MutableState<PresentedFrame?> = mutableStateOf(null)
 
     private var bitmap: Bitmap? = null

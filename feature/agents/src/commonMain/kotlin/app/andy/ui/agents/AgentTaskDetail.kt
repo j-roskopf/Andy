@@ -102,6 +102,7 @@ import app.andy.model.runtimeKind
 import app.andy.model.composerCommandToken
 import app.andy.model.modelConfigurationLabel
 import app.andy.model.parseAgentGoalCommand
+import app.andy.model.parseAndyLoopGoal
 import app.andy.model.latestPlanHasPendingEntries
 import app.andy.model.looksLikePlanMode
 import app.andy.model.shouldShowConnectionStallBanner
@@ -441,6 +442,7 @@ fun AgentTaskDetail(
             }
         }
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
+        val loopGoal = followUp.parseAndyLoopGoal()
         val sentText = if (goalCommand != null) {
             services.agentRuns.updateGoal(task.id, goalCommand.goal)
             val remainder = goalCommand.remainingPrompt
@@ -453,6 +455,9 @@ fun AgentTaskDetail(
             remainder
         } else {
             val trimmed = followUp.trim()
+            if (loopGoal != null) {
+                services.agentRuns.updateGoal(task.id, loopGoal)
+            }
             sendOrQueue(trimmed, selectedSkills)
             trimmed
         }
@@ -870,6 +875,34 @@ fun AgentTaskDetail(
             }
         }
 
+        val pinnedGoal = task.goal?.takeIf { task.userInputRequest == null }
+        // When the composer is hidden (live terminal), keep the goal strip on its own.
+        // When the composer is shown, the goal lives in ChatComposerLayout.contextBar so it
+        // sits flush against the input frame with no Column spacing gap.
+        if (pinnedGoal != null && !showFollowUpComposer) {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                GoalPursuitPinnedSection(
+                    task = task,
+                    goal = pinnedGoal,
+                    editorOpen = goalEditorOpen,
+                    editorText = goalEditorText,
+                    onEditorOpenChange = { goalEditorOpen = it },
+                    onEditorTextChange = { goalEditorText = it },
+                    onSaveGoal = { services.agentRuns.updateGoal(task.id, it) },
+                    onClearGoal = {
+                        services.agentRuns.updateGoal(task.id, null)
+                        goalEditorOpen = false
+                    },
+                    onPause = {
+                        scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) }
+                    },
+                    onResume = { prompt ->
+                        services.agentRuns.resume(task.id, prompt)
+                    },
+                )
+            }
+        }
+
         if (showFollowUpComposer) {
             val followUpDrawerItems = if (task.userInputRequest == null) {
                 chatComposerDrawerItemsFromPaths(
@@ -903,6 +936,29 @@ fun AgentTaskDetail(
                     ),
                 highlighted = followUpImageDragActive,
                 drawerItems = followUpDrawerItems,
+                contextBar = pinnedGoal?.let { goalText ->
+                    {
+                        GoalPursuitBar(
+                            task = task,
+                            goal = goalText,
+                            editorOpen = goalEditorOpen,
+                            editorText = goalEditorText,
+                            onEditorOpenChange = { goalEditorOpen = it },
+                            onEditorTextChange = { goalEditorText = it },
+                            onSaveGoal = { services.agentRuns.updateGoal(task.id, it) },
+                            onClearGoal = {
+                                services.agentRuns.updateGoal(task.id, null)
+                                goalEditorOpen = false
+                            },
+                            onPause = {
+                                scope.launch(Dispatchers.Default) { services.agentRuns.stop(task.id) }
+                            },
+                            onResume = { prompt ->
+                                services.agentRuns.resume(task.id, prompt)
+                            },
+                        )
+                    }
+                },
                 contextFraction = contextStatus?.fraction,
                 contextTooltip = contextStatus?.let { agentContextUsageSummary(it) },
                 onMentionClick = if (task.userInputRequest == null) {
@@ -926,70 +982,6 @@ fun AgentTaskDetail(
                 },
                 input = {
                 if (task.userInputRequest == null) {
-                    task.goal?.let { goal ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .pointerHoverIcon(PointerIcon.Hand)
-                                .clickable { goalEditorOpen = !goalEditorOpen }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Goal", color = Green.copy(alpha = 0.85f), fontFamily = MonoFont, fontSize = 10.sp)
-                            Text(
-                                goal,
-                                color = TextPrimary,
-                                fontFamily = MonoFont,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(if (goalEditorOpen) "⌄" else "›", color = TextSecondary.copy(alpha = 0.6f), fontSize = 11.sp)
-                        }
-                    }
-                    if (goalEditorOpen) {
-                        Column(
-                            Modifier.fillMaxWidth(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("Persistent task goal", color = TextSecondary, fontFamily = MonoFont, fontSize = 10.sp)
-                            TextField(
-                                goalEditorText,
-                                { goalEditorText = it },
-                                singleLine = false,
-                                minLines = 2,
-                                maxLines = 4,
-                                modifier = Modifier.fillMaxWidth(),
-                                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp),
-                                colors = fieldColors(),
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    "Save goal",
-                                    color = if (goalEditorText.isNotBlank()) Cyan else TextSecondary,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier
-                                        .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable(enabled = goalEditorText.isNotBlank()) {
-                                            services.agentRuns.updateGoal(task.id, goalEditorText)
-                                            goalEditorOpen = false
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                                )
-                                Text(
-                                    "Clear goal",
-                                    color = TextSecondary,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier
-                                        .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable { services.agentRuns.updateGoal(task.id, null) }
-                                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                                )
-                            }
-                        }
-                    }
                     Box(Modifier.fillMaxWidth()) {
                         var followUpLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                         TextField(
