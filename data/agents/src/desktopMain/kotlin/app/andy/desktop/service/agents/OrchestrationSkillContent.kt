@@ -30,14 +30,16 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
     (OpenCode | Pi | Goose) and `model` are required.
 
     **Autonomy / sandbox inheritance:** when `autonomy` is omitted, Andy inherits the
-    parent's dial from `callerTaskId` or the MCP session's `andyTaskId` (wired
-    automatically when this task has Andy MCP attached). When `sandboxMode` is
-    omitted, Andy inherits the parent's sandbox (or that autonomy's default) so a
+    parent's permission dial from `callerTaskId` or the MCP session's `andyTaskId`
+    (wired automatically when this task has Andy MCP attached). An explicit parent
+    `sandboxMode` wins over a stale autonomy value (e.g. Cursor "sandbox disabled"
+    → Full), so workers match the permissions chip. When `sandboxMode` is omitted,
+    Andy inherits the parent's sandbox (or that autonomy's default) so a
     Full / allow-everything parent keeps network approvals on ReadOnly children
     such as advisors. When `parentChatTaskId` is omitted, it defaults to the
     parent id so spawn rows link back. The `andy` CLI also injects `ANDY_TASK_ID`
-    as `callerTaskId`. So a Full-permission orchestrator spawns Full workers
-    without re-prompting — unless you override (e.g. verifiers must set
+    as `callerTaskId`. So a Full-permission / sandbox-disabled orchestrator spawns
+    Full workers without re-prompting — unless you override (e.g. verifiers must set
     `autonomy: "ReadOnly"`; omit `sandboxMode` unless you need a tighter sandbox).
     If no parent is known, autonomy defaults to Standard and sandbox stays unset.
 

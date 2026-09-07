@@ -40,6 +40,7 @@ import java.util.concurrent.TimeUnit
 
 class NetworkAccessClient(
     private val baseUrl: String,
+    okHttpClient: okhttp3.OkHttpClient? = null,
     longLived: Boolean = false,
 ) : Closeable {
     private val json = Json {
@@ -49,18 +50,39 @@ class NetworkAccessClient(
     }
 
     // OkHttp: reliable WSS through Tailscale Serve (CIO often fails TLS handshake on Android).
+    // Prefer an engine-configured client (known-good). A process-scoped OkHttp may be supplied
+    // as a base for connection reuse, but we always apply per-use timeouts via newBuilder().
     private val client = HttpClient(OkHttp) {
         expectSuccess = false
         engine {
-            config {
-                connectTimeout(15, TimeUnit.SECONDS)
-                if (longLived) {
-                    readTimeout(0, TimeUnit.MILLISECONDS)
-                    writeTimeout(0, TimeUnit.MILLISECONDS)
-                    pingInterval(20, TimeUnit.SECONDS)
-                } else {
-                    readTimeout(30, TimeUnit.SECONDS)
-                    writeTimeout(30, TimeUnit.SECONDS)
+            val base = okHttpClient
+            if (base != null) {
+                preconfigured = base.newBuilder().apply {
+                    connectTimeout(15, TimeUnit.SECONDS)
+                    if (longLived) {
+                        readTimeout(0, TimeUnit.MILLISECONDS)
+                        writeTimeout(0, TimeUnit.MILLISECONDS)
+                        pingInterval(20, TimeUnit.SECONDS)
+                        callTimeout(0, TimeUnit.MILLISECONDS)
+                    } else {
+                        readTimeout(30, TimeUnit.SECONDS)
+                        writeTimeout(30, TimeUnit.SECONDS)
+                        // Interactive calls must not inherit a long-lived ping interval.
+                        pingInterval(0, TimeUnit.SECONDS)
+                        callTimeout(0, TimeUnit.MILLISECONDS)
+                    }
+                }.build()
+            } else {
+                config {
+                    connectTimeout(15, TimeUnit.SECONDS)
+                    if (longLived) {
+                        readTimeout(0, TimeUnit.MILLISECONDS)
+                        writeTimeout(0, TimeUnit.MILLISECONDS)
+                        pingInterval(20, TimeUnit.SECONDS)
+                    } else {
+                        readTimeout(30, TimeUnit.SECONDS)
+                        writeTimeout(30, TimeUnit.SECONDS)
+                    }
                 }
             }
         }

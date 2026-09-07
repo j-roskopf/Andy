@@ -309,6 +309,17 @@ class CodexInteractiveAdapterTest {
     }
 
     @Test
+    fun readOnlyAutonomyForcesReadOnlySandboxEvenWhenNoneInherited() {
+        val argv = adapter.buildInteractiveCommand(
+            "/bin/codex",
+            task(AgentKind.Codex, autonomy = AgentAutonomy.ReadOnly).copy(sandboxMode = AgentSandboxMode.None),
+            mcpUrl = null,
+        )
+        assertTrue("--sandbox" in argv && "read-only" in argv, "argv=$argv")
+        assertTrue("--dangerously-bypass-approvals-and-sandbox" !in argv)
+    }
+
+    @Test
     fun sendsAttachedImagesWithNativeFlag() {
         val argv = adapter.buildInteractiveCommand(
             "/bin/codex",

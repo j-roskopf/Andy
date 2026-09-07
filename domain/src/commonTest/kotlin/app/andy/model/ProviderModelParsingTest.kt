@@ -386,6 +386,24 @@ class ProviderModelParsingTest {
     }
 
     @Test
+    fun codexCatalogIncludesGpt6Astra() {
+        val options = AgentModelCatalog.options(AgentKind.Codex)
+        assertEquals("gpt-6-astra", options.first().id)
+        assertEquals("GPT-6 Astra", options.first().label)
+        assertEquals(
+            listOf(
+                AgentReasoningEffort.Low,
+                AgentReasoningEffort.Medium,
+                AgentReasoningEffort.High,
+                AgentReasoningEffort.ExtraHigh,
+                AgentReasoningEffort.Max,
+            ),
+            options.first().efforts,
+        )
+        assertEquals("gpt-6-astra", AgentModelCatalog.option(AgentKind.Codex, "gpt-6-astra")?.id)
+    }
+
+    @Test
     fun claudeCodeCatalogMatchesNativePicker() {
         val options = AgentModelCatalog.options(AgentKind.ClaudeCode)
         assertEquals(

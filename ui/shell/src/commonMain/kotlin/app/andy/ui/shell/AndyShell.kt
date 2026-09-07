@@ -327,7 +327,7 @@ internal fun AndyShell(
                 updates = services.updates.takeIf { capabilities.updates },
                 mcpRunning = mcpRunning,
                 mcpPort = state.workspaceState.mcpServerPort,
-                remoteSession = services.remoteSession,
+                remoteSession = services.remoteSession.takeIf { capabilities.remoteHosts },
                 remoteSessionState = remoteSessionState,
                 // SidebarBg paints under the transparent macOS title bar; content clears the traffic lights.
                 contentTopPadding = contentTopPadding,

@@ -10,6 +10,7 @@ import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.isLocalModelBackend
+import app.andy.model.toAutonomy
 
 internal data class SideChatLaunchConfig(
     val agent: AgentKind,
@@ -18,12 +19,6 @@ internal data class SideChatLaunchConfig(
     val reasoningEffort: AgentReasoningEffort? = null,
     val sandboxMode: AgentSandboxMode = AgentSandboxMode.ReadOnly,
 )
-
-internal fun AgentSandboxMode.matchingAutonomy(): AgentAutonomy = when (this) {
-    AgentSandboxMode.ReadOnly -> AgentAutonomy.ReadOnly
-    AgentSandboxMode.WorkspaceWrite -> AgentAutonomy.Standard
-    AgentSandboxMode.None -> AgentAutonomy.Full
-}
 
 internal fun sideChatAgent(parent: AgentKind, statuses: List<AgentCliStatus>): AgentKind {
     val ready = statuses.filter { it.ready }.map { it.kind }.distinct()
@@ -87,7 +82,7 @@ internal fun sideChatDraft(
         directory = parent.cwd ?: parent.originDir,
         useWorktree = false,
         attachAndyMcp = false,
-        autonomy = sandbox.matchingAutonomy(),
+        autonomy = sandbox.toAutonomy(),
         sandboxMode = sandbox,
         model = if (launch != null) launch.model else defaults?.model,
         reasoningEffort = if (launch != null) launch.reasoningEffort else defaults?.reasoningEffort,

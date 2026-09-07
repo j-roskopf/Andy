@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.AgentAutonomy
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.defaultSandboxMode
@@ -20,7 +21,11 @@ class CodexAdapter : AgentCliAdapter {
         task.cwd?.let { add("-C"); add(AgentScratchWorkspace.resolveCwd(it)) }
         task.modelForCli()?.let { add("--model"); add(it) }
         task.reasoningEffort?.let { add("-c"); add("model_reasoning_effort=\"${it.cliValue}\"") }
-        when (if (task.planMode) AgentSandboxMode.ReadOnly else task.sandboxMode ?: task.autonomy.defaultSandboxMode()) {
+        when (if (task.planMode || task.autonomy == AgentAutonomy.ReadOnly) {
+            AgentSandboxMode.ReadOnly
+        } else {
+            task.sandboxMode ?: task.autonomy.defaultSandboxMode()
+        }) {
             AgentSandboxMode.ReadOnly -> { add("--sandbox"); add("read-only") }
             AgentSandboxMode.WorkspaceWrite -> { add("--sandbox"); add("workspace-write") }
             AgentSandboxMode.None -> add("--dangerously-bypass-approvals-and-sandbox")

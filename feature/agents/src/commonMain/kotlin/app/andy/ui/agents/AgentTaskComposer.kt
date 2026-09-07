@@ -81,6 +81,9 @@ import app.andy.model.hasAvailableAgentProvider
 import app.andy.model.HostSearchResult
 import app.andy.model.labelFor
 import app.andy.model.parseAgentGoalCommand
+import app.andy.model.resolvePersistedTaskGoal
+import app.andy.model.toAutonomy
+import app.andy.model.withAlignedPermissions
 import app.andy.onImageFilesDropped
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
@@ -378,6 +381,9 @@ private class AgentTaskComposerFormState(
         // Leave the sandbox unset unless it was explicitly saved. This lets the
         // provider derive it from whichever autonomy level the user chooses.
         sandboxMode = defaults?.sandboxMode
+        // Permissions chip is source of truth: an explicit sandbox (including legacy
+        // ReadOnly + "sandbox disabled" defaults) wins over a stale autonomy dial.
+        sandboxMode?.let { autonomy = it.toAutonomy() }
         // Never restore from provider defaults — plan mode is per-chat, not sticky.
         planMode = false
         confirmToolCalls = defaults?.confirmToolCalls == true
@@ -603,7 +609,8 @@ private class AgentTaskComposerForm(
     fun clearPrompt() = state.clearPrompt()
 
     fun buildDraft(): AgentTaskDraft {
-        val goalCommand = state.prompt.takeIf { AgentNativeSlashCommands.supportsGoal(state.agent) }?.parseAgentGoalCommand()
+        val supportsGoal = AgentNativeSlashCommands.supportsGoal(state.agent)
+        val goalCommand = state.prompt.takeIf { supportsGoal }?.parseAgentGoalCommand()
         return AgentTaskDraft(
             title = "",
             prompt = goalCommand?.remainingPrompt?.ifBlank { goalCommand.goal.orEmpty() } ?: state.prompt.trim(),
@@ -625,10 +632,10 @@ private class AgentTaskComposerForm(
             openClawNewSession = state.openClawNewSession,
             imagePaths = state.imagePaths,
             skills = selectedSkills,
-            goal = goalCommand?.goal,
+            goal = state.prompt.resolvePersistedTaskGoal(supportsGoal),
             maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
             temporary = state.temporary,
-        )
+        ).withAlignedPermissions()
     }
 
     fun selectSkill(skill: AgentSkill) {
@@ -1175,6 +1182,7 @@ private fun AgentChatComposer(
                                     text = { Text(mode.labelFor(state.agent.runtimeKind(state.localRuntime)), color = TextPrimary) },
                                     onClick = {
                                         state.sandboxMode = mode
+                                        state.autonomy = mode.toAutonomy()
                                         permissionsMenuExpanded = false
                                     },
                                 )

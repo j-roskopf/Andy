@@ -83,6 +83,37 @@ fun AgentAutonomy.defaultSandboxMode(): AgentSandboxMode = when (this) {
     AgentAutonomy.Full -> AgentSandboxMode.None
 }
 
+/** Inverse of [AgentAutonomy.defaultSandboxMode] — the permissions chip is the source of truth. */
+fun AgentSandboxMode.toAutonomy(): AgentAutonomy = when (this) {
+    AgentSandboxMode.ReadOnly -> AgentAutonomy.ReadOnly
+    AgentSandboxMode.WorkspaceWrite -> AgentAutonomy.Standard
+    AgentSandboxMode.None -> AgentAutonomy.Full
+}
+
+/**
+ * Autonomy implied by this task's visible permission setting.
+ * When [AgentTask.sandboxMode] is set (including contradictory legacy pairs like
+ * ReadOnly + sandbox disabled), sandbox wins so spawned children match the chip.
+ */
+fun AgentTask.permissionAutonomy(): AgentAutonomy =
+    sandboxMode?.toAutonomy() ?: autonomy
+
+/** Sandbox/permission mode implied for inheritance when a child omits `sandboxMode`. */
+fun AgentTask.permissionSandbox(): AgentSandboxMode =
+    sandboxMode ?: autonomy.defaultSandboxMode()
+
+/** Align sticky provider defaults so autonomy matches an explicit sandbox choice. */
+fun AgentProviderDefaults.withAlignedPermissions(): AgentProviderDefaults {
+    val mode = sandboxMode ?: return this
+    return copy(autonomy = mode.toAutonomy())
+}
+
+/** Align a launch draft the same way the composer permissions chip does. */
+fun AgentTaskDraft.withAlignedPermissions(): AgentTaskDraft {
+    val mode = sandboxMode ?: return this
+    return copy(autonomy = mode.toAutonomy())
+}
+
 fun AgentKind.sandboxControlLabel(): String = when (this) {
     AgentKind.Codex, AgentKind.Cursor -> "sandbox"
     AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
@@ -257,6 +288,7 @@ object AgentModelCatalog {
 
     fun options(agent: AgentKind): List<AgentModelOption> = when (agent) {
         AgentKind.Codex -> listOf(
+            AgentModelOption("gpt-6-astra", "GPT-6 Astra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh, AgentReasoningEffort.Max)),
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh, AgentReasoningEffort.Max)),
             AgentModelOption("gpt-5.6-terra", "GPT-5.6 Terra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gpt-5.6-luna", "GPT-5.6 Luna", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
@@ -955,6 +987,49 @@ fun String.parseAgentGoalCommand(): AgentGoalCommand? {
             AgentGoalCommand(AgentGoalCommandAction.Set, goal, lines.drop(1).joinToString("\n").trim())
         }
     }
+}
+
+private val andyLoopInvocation =
+    Regex("""^/andy-loop(?=\s|$)""", RegexOption.IGNORE_CASE)
+
+private val andyLoopFlag =
+    Regex(
+        """(?:^|\s)--(?:provider|verify-provider|max-iterations|max-time)(?:=|\s+)\S+""",
+        RegexOption.IGNORE_CASE,
+    )
+
+/**
+ * Extracts the objective from an `/andy-loop …` invocation after stripping known flags
+ * (`--provider`, `--verify-provider`, `--max-iterations`, `--max-time`).
+ * Only matches when the prompt itself starts with `/andy-loop`.
+ */
+fun String.parseAndyLoopGoal(): String? {
+    val trimmed = trim()
+    val match = andyLoopInvocation.find(trimmed) ?: return null
+    var args = trimmed.substring(match.range.last + 1).trim()
+    if (args.isEmpty()) return null
+    while (true) {
+        val stripped = args.replace(andyLoopFlag, " ").replace(Regex("""[ \t]{2,}"""), " ").trim()
+        if (stripped == args) break
+        args = stripped
+    }
+    return args.takeIf { it.isNotBlank() }
+}
+
+/**
+ * Goal to persist for a prompt: explicit `/goal` wins, otherwise the `/andy-loop` objective.
+ * `/goal clear` clears even when a loop invocation is also present.
+ */
+fun String.resolvePersistedTaskGoal(supportsNativeGoalCommand: Boolean): String? {
+    if (supportsNativeGoalCommand) {
+        parseAgentGoalCommand()?.let { command ->
+            return when (command.action) {
+                AgentGoalCommandAction.Clear -> null
+                AgentGoalCommandAction.Set -> command.goal
+            }
+        }
+    }
+    return parseAndyLoopGoal()
 }
 
 data class AgentFileChange(

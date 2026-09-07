@@ -25,7 +25,7 @@ object AcpRegistry {
         ),
         AgentKind.Codex to AcpLaunchSpec.Npx(
             packageName = "@agentclientprotocol/codex-acp",
-            version = "1.1.9",
+            version = "1.10.0",
         ),
         AgentKind.Cursor to AcpLaunchSpec.Native("cursor-agent", listOf("acp")),
         AgentKind.OpenCode to AcpLaunchSpec.Native("opencode", listOf("acp")),

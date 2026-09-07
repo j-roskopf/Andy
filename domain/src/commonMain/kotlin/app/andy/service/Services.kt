@@ -1067,6 +1067,8 @@ data class PlatformCapabilities(
     val acceleratedMirror: Boolean = false,
     /** True on macOS desktop where simctl/devicectl discovery is available. */
     val iosDeviceManagement: Boolean = false,
+    /** SSH host switcher (desktop OpenSSH → remote andyd). Unavailable in the browser. */
+    val remoteHosts: Boolean = false,
 ) {
     companion object {
         val Desktop = PlatformCapabilities(
@@ -1082,6 +1084,7 @@ data class PlatformCapabilities(
             iosDeviceManagement = true,
             // Overridden at service creation from the packaged native bridge (Mac only today).
             acceleratedMirror = false,
+            remoteHosts = true,
         )
 
         val Web = PlatformCapabilities(
@@ -1109,6 +1112,7 @@ data class PlatformCapabilities(
             updates = false,
             // Browser path: WebCodecs + WebGL when the runtime verifies hardware.
             acceleratedMirror = true,
+            remoteHosts = false,
         )
     }
 }

@@ -78,6 +78,8 @@ import app.andy.model.ProjectVerificationStatus
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.ProjectWorkflowState
 import app.andy.model.effectiveSandboxMode
+import app.andy.model.defaultSandboxMode
+import app.andy.model.toAutonomy
 import app.andy.model.grillMeInstallCommand
 import app.andy.model.isGrillMeSkillName
 import app.andy.model.labelFor
@@ -1383,9 +1385,15 @@ internal fun ProjectAgentProfileEditor(
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
                 verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                AgentAutonomy.entries.forEach { autonomy -> FilterPill(autonomy.label, profile.autonomy == autonomy, Cyan) { onChange(profile.copy(autonomy = autonomy)) } }
+                AgentAutonomy.entries.forEach { autonomy ->
+                    FilterPill(autonomy.label, profile.autonomy == autonomy, Cyan) {
+                        onChange(profile.copy(autonomy = autonomy, sandboxMode = autonomy.defaultSandboxMode()))
+                    }
+                }
                 AgentSandboxMode.entries.forEach { mode ->
-                    FilterPill(mode.labelFor(profile.runtimeKind()), profile.effectiveSandboxMode() == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) { onChange(profile.copy(sandboxMode = mode)) }
+                    FilterPill(mode.labelFor(profile.runtimeKind()), profile.effectiveSandboxMode() == mode, if (mode == AgentSandboxMode.None) Rust else Cyan) {
+                        onChange(profile.copy(sandboxMode = mode, autonomy = mode.toAutonomy()))
+                    }
                 }
             }
             if (role == ProjectTaskKind.Spec) {

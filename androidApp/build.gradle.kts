@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.kotlinSerialization)
+    alias(libs.plugins.metro)
 }
 
 android {
@@ -71,10 +72,15 @@ dependencies {
     implementation(project(":ui:core"))
     implementation(project(":ui:components"))
 
-    implementation("androidx.activity:activity-compose:1.10.1")
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.okhttp)
+    implementation(libs.jetbrains.navigation3.ui)
+    // Kept for one-shot migration from EncryptedSharedPreferences.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     implementation(compose.runtime)

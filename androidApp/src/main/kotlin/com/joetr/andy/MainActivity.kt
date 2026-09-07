@@ -17,7 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.joetr.andy.mobile.AndyMobileApp
-import com.joetr.andy.mobile.data.attention.AndroidChatNotificationService
+import com.joetr.andy.mobile.mobileGraph
 
 class MainActivity : ComponentActivity() {
     private var pendingOpenChatId by mutableStateOf<String?>(null)
@@ -33,10 +33,11 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        AndroidChatNotificationService(this).ensureChannel()
+        application.mobileGraph.notificationService.ensureChannel()
         pendingOpenChatId = intent.chatIdExtra()
         setContent {
             AndyMobileApp(
+                graph = application.mobileGraph,
                 pendingOpenChatId = pendingOpenChatId,
                 onPendingOpenChatConsumed = { pendingOpenChatId = null },
                 onRequestNotificationPermission = ::requestNotificationPermissionIfNeeded,

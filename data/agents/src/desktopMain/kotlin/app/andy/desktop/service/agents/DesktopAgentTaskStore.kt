@@ -10,6 +10,7 @@ import app.andy.model.AgentQuotaAccess
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentProviderDefaults
 import app.andy.model.parseLocalAgentRuntime
+import app.andy.model.withAlignedPermissions
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
@@ -587,13 +588,14 @@ internal fun AgentsFileDto.toModel(scrollbackFile: (String) -> File): AgentStore
 
 internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDefaults>? {
     val kind = AgentKind.entries.firstOrNull { it.name == agent } ?: return null
+    val sandbox = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode }
     return kind to AgentProviderDefaults(
         model = model.takeIf { it.isNotBlank() },
         reasoningEffort = AgentReasoningEffort.entries.firstOrNull { it.name == reasoningEffort },
         fastMode = fastMode,
         openClawNewSession = openClawNewSession,
         autonomy = AgentAutonomy.entries.firstOrNull { it.name == autonomy } ?: AgentAutonomy.Standard,
-        sandboxMode = AgentSandboxMode.entries.firstOrNull { it.name == sandboxMode },
+        sandboxMode = sandbox,
         planMode = planMode,
         confirmToolCalls = confirmToolCalls,
         useWorktree = useWorktree,
@@ -601,7 +603,8 @@ internal fun AgentProviderDefaultsDto.toModel(): Pair<AgentKind, AgentProviderDe
         maxBudgetUsd = maxBudgetUsd.takeIf { it > 0 },
         lane = AgentLaneKind.entries.firstOrNull { it.name == lane },
         localRuntime = parseLocalAgentRuntime(localRuntime),
-    )
+        // Align autonomy to an explicit sandbox so sticky "sandbox disabled" means Full.
+    ).withAlignedPermissions()
 }
 
 internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? {
