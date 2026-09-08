@@ -836,7 +836,7 @@
           `thinking-${item.index}`,
           "Thought",
           ev.text || "",
-          !!transcriptPrefs.showThinkingOnTimeline || !!transcriptPrefs.autoExpandToolSections,
+          !!transcriptPrefs.showThinkingOnTimeline,
         );
         continue;
       }

@@ -178,16 +178,16 @@ internal fun Application.installWebChatRoutes(
                     )
                 val body = call.receiveJsonObject()
                     ?: return@patch call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
-                val current = runCatching { store.load() }.getOrElse { WorkspaceState() }
-                val next = current.copy(
-                    agentTranscriptAutoExpandThinking = body.optionalBoolean("showThinkingOnTimeline")
-                        ?: current.agentTranscriptAutoExpandThinking,
-                    agentTranscriptAutoExpandTools = body.optionalBoolean("autoExpandToolSections")
-                        ?: current.agentTranscriptAutoExpandTools,
-                    agentTranscriptCollapseActivityBlocks = body.optionalBoolean("collapseActivityBetweenMessages")
-                        ?: current.agentTranscriptCollapseActivityBlocks,
-                )
-                store.save(next)
+                val next = store.update { current ->
+                    current.copy(
+                        agentTranscriptAutoExpandThinking = body.optionalBoolean("showThinkingOnTimeline")
+                            ?: current.agentTranscriptAutoExpandThinking,
+                        agentTranscriptAutoExpandTools = body.optionalBoolean("autoExpandToolSections")
+                            ?: current.agentTranscriptAutoExpandTools,
+                        agentTranscriptCollapseActivityBlocks = body.optionalBoolean("collapseActivityBetweenMessages")
+                            ?: current.agentTranscriptCollapseActivityBlocks,
+                    )
+                }
                 call.respondText(
                     next.toTranscriptSettingsJson().toString(),
                     ContentType.Application.Json,

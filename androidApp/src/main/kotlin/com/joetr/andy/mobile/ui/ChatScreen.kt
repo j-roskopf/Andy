@@ -267,8 +267,7 @@ fun ChatScreen(
                                             expanded = wireActivityExpanded(
                                                 key,
                                                 expandedOverrides,
-                                                transcriptPrefs.showThinkingOnTimeline ||
-                                                    transcriptPrefs.autoExpandToolSections,
+                                                transcriptPrefs.showThinkingOnTimeline,
                                             ),
                                             onToggle = {
                                                 expandedOverrides = if (key in expandedOverrides) {
