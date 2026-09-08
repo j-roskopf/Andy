@@ -198,6 +198,7 @@ private fun ChatComposerAttachmentItems(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         items.forEach { item ->
             if (item.imagePath != null) {

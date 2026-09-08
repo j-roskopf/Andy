@@ -39,6 +39,7 @@
       <header class="list-header">
         <h1>Chats</h1>
         <div class="list-header-actions">
+          <button id="btn-settings" class="ghost" type="button" title="Settings">Settings</button>
           <button id="btn-new" class="primary" type="button">New chat</button>
           <button id="btn-forget" class="ghost" type="button">Log out</button>
         </div>
@@ -47,6 +48,41 @@
       <p id="list-error" class="error list-error hidden"></p>
       <div id="chat-list" class="list"></div>
       <p id="list-empty" class="muted empty hidden">No ACP chats yet.</p>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <header class="topbar">
+        <button id="btn-settings-back" class="ghost icon-btn" type="button" aria-label="Back">‹</button>
+        <h1>Settings</h1>
+      </header>
+      <div class="settings-body">
+        <section class="settings-group">
+          <h2>Transcript</h2>
+          <p class="muted settings-desc">How thinking steps and tool calls appear in agent chats.</p>
+          <label class="settings-toggle">
+            <span>
+              <strong>Show thinking on timeline</strong>
+              <span class="muted">Keeps each thinking step as its own expanded row. Thoughts are not folded into the collapsed tool activity summary.</span>
+            </span>
+            <input id="pref-thinking-timeline" type="checkbox" />
+          </label>
+          <label class="settings-toggle">
+            <span>
+              <strong>Auto-expand tool sections</strong>
+              <span class="muted">Opens each tool call and file edit when it appears. You can still collapse sections manually.</span>
+            </span>
+            <input id="pref-auto-expand-tools" type="checkbox" />
+          </label>
+          <label class="settings-toggle">
+            <span>
+              <strong>Collapse activity between messages</strong>
+              <span class="muted">Groups consecutive tool steps into one block between user and assistant messages. Thinking stays separate when shown on the timeline.</span>
+            </span>
+            <input id="pref-collapse-activity" type="checkbox" />
+          </label>
+        </section>
+        <p id="settings-error" class="error hidden"></p>
+      </div>
     </section>
 
     <section id="view-chat" class="view view-chat hidden">

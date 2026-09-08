@@ -22,9 +22,11 @@ import app.andy.model.localModelLaunchError
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.parseLocalAgentRuntime
 import app.andy.model.prefixedLocalModelId
+import app.andy.model.WorkspaceState
 import app.andy.service.ActionConfigStore
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
+import app.andy.service.WorkspaceStore
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -37,6 +39,7 @@ import io.ktor.utils.io.readRemaining
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
+import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
@@ -105,15 +108,13 @@ internal fun Application.installWebChatRoutes(
     agentRuns: () -> AgentRunService?,
     projectWorkflows: () -> ProjectWorkflowService? = { null },
     actionConfig: () -> ActionConfigStore? = { null },
+    workspaceStore: () -> WorkspaceStore? = { null },
     push: WebPushService,
     attention: AttentionHub = AttentionHub(),
     networkAccess: NetworkAccessWebConfig = NetworkAccessWebConfig(),
 ) {
     routing {
-        staticResources("/", "webchat") {
-            default("index.html")
-        }
-
+        // API first so unknown /api paths never fall through to the SPA index.html default.
         route("/api") {
             post("/auth/login") {
                 val remote = call.remotePeerAddress()
@@ -152,6 +153,43 @@ internal fun Application.installWebChatRoutes(
                         put("expiresAtMillis", expiresAtMillis)
                         put("scope", "full")
                     }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            get("/settings/transcript") {
+                val store = workspaceStore()
+                    ?: return@get call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "workspace unavailable",
+                    )
+                val state = runCatching { store.load() }.getOrElse { WorkspaceState() }
+                call.respondText(
+                    state.toTranscriptSettingsJson().toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            patch("/settings/transcript") {
+                val store = workspaceStore()
+                    ?: return@patch call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "workspace unavailable",
+                    )
+                val body = call.receiveJsonObject()
+                    ?: return@patch call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
+                val current = runCatching { store.load() }.getOrElse { WorkspaceState() }
+                val next = current.copy(
+                    agentTranscriptAutoExpandThinking = body.optionalBoolean("showThinkingOnTimeline")
+                        ?: current.agentTranscriptAutoExpandThinking,
+                    agentTranscriptAutoExpandTools = body.optionalBoolean("autoExpandToolSections")
+                        ?: current.agentTranscriptAutoExpandTools,
+                    agentTranscriptCollapseActivityBlocks = body.optionalBoolean("collapseActivityBetweenMessages")
+                        ?: current.agentTranscriptCollapseActivityBlocks,
+                )
+                store.save(next)
+                call.respondText(
+                    next.toTranscriptSettingsJson().toString(),
                     ContentType.Application.Json,
                 )
             }
@@ -701,6 +739,20 @@ internal fun Application.installWebChatRoutes(
                 push.unsubscribe(endpoint)
                 call.respondText("""{"ok":true}""", ContentType.Application.Json)
             }
+
+            // Keep unknown /api paths as JSON 404s — never the SPA index.html (200 HTML).
+            get("{...}") {
+                call.respondJsonError(HttpStatusCode.NotFound, "not found")
+            }
+            post("{...}") {
+                call.respondJsonError(HttpStatusCode.NotFound, "not found")
+            }
+            patch("{...}") {
+                call.respondJsonError(HttpStatusCode.NotFound, "not found")
+            }
+            delete("{...}") {
+                call.respondJsonError(HttpStatusCode.NotFound, "not found")
+            }
         }
 
         webSocket("/ws/attention") {
@@ -875,6 +927,10 @@ internal fun Application.installWebChatRoutes(
                 close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "stream error"))
             }
         }
+
+        staticResources("/", "webchat") {
+            default("index.html")
+        }
     }
 }
 
@@ -926,4 +982,16 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
             }
         }
     }
+}
+
+private fun JsonObject.optionalBoolean(name: String): Boolean? {
+    val el = this[name] ?: return null
+    val prim = el as? JsonPrimitive ?: return null
+    return prim.booleanOrNull
+}
+
+private fun WorkspaceState.toTranscriptSettingsJson(): JsonObject = buildJsonObject {
+    put("showThinkingOnTimeline", agentTranscriptAutoExpandThinking)
+    put("autoExpandToolSections", agentTranscriptAutoExpandTools)
+    put("collapseActivityBetweenMessages", agentTranscriptCollapseActivityBlocks)
 }

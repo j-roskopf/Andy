@@ -63,8 +63,12 @@ import com.joetr.andy.mobile.data.networkaccess.UserInputRequestDto
 import com.joetr.andy.mobile.data.networkaccess.awaitingPlanConfirmation
 import com.joetr.andy.mobile.data.networkaccess.coalesceStreams
 import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
-import com.joetr.andy.mobile.data.networkaccess.isVisibleTranscript
+import com.joetr.andy.mobile.data.networkaccess.TranscriptSettingsDto
 import com.joetr.andy.mobile.data.networkaccess.latestPlanHasPendingEntries
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.ui.text.style.TextOverflow
 import com.joetr.andy.mobile.data.networkaccess.showImplementPlan
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.delay
@@ -90,6 +94,8 @@ fun ChatScreen(
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var optimistic by remember { mutableStateOf<String?>(null) }
+    var transcriptPrefs by remember { mutableStateOf(TranscriptSettingsDto()) }
+    var expandedOverrides by remember { mutableStateOf(setOf<String>()) }
     val agentId = chat?.agent.orEmpty()
     val slashCommands = rememberSlashCommands(client, agentId)
     val slashToken = remember(draft) { findActiveSlashToken(draft) }
@@ -99,6 +105,7 @@ fun ChatScreen(
     val statusLabel = chat?.displayStatusLabel(hasPendingPlanEntries).orEmpty()
 
     suspend fun loadOnce() {
+        runCatching { client.getTranscriptSettings() }.onSuccess { transcriptPrefs = it }
         val detail = client.chatDetail(chatId)
         chat = detail.chat
         events = detail.events.coalesceStreams()
@@ -107,6 +114,7 @@ fun ChatScreen(
     }
 
     LaunchedEffect(chatId) {
+        expandedOverrides = emptySet()
         try {
             loadOnce()
         } catch (e: Exception) {
@@ -141,7 +149,14 @@ fun ChatScreen(
         }
     }
 
-    val visibleCount = events.count { it.isVisibleTranscript() } + if (optimistic != null) 1 else 0
+    val displayItems = remember(events, transcriptPrefs) {
+        wireTranscriptDisplayItems(
+            events = events,
+            collapseActivityBetweenMessages = transcriptPrefs.collapseActivityBetweenMessages,
+            keepThinkingOnTimeline = transcriptPrefs.showThinkingOnTimeline,
+        )
+    }
+    val visibleCount = displayItems.size + if (optimistic != null) 1 else 0
     LaunchedEffect(visibleCount) {
         if (visibleCount > 0) {
             listState.animateScrollToItem(visibleCount - 1)
@@ -193,7 +208,6 @@ fun ChatScreen(
                 CircularProgressIndicator(color = tokens.accent)
             }
             else -> {
-                val visible = events.filter { it.isVisibleTranscript() }
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     state = listState,
@@ -201,18 +215,92 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                 ) {
                     items(
-                        visible,
-                        key = { "${it.atMillis}-${it.type}-${it.text.hashCode()}" },
-                        contentType = { it.type },
-                    ) { event ->
-                        if (event.type == "plan") {
-                            PlanDocumentCard(
-                                entries = event.entries,
-                                markdown = event.markdown,
-                                awaitingApproval = awaitingPlan,
-                            )
-                        } else {
-                            TranscriptBubble(event)
+                        displayItems.size,
+                        key = { idx ->
+                            when (val item = displayItems[idx]) {
+                                is WireDisplayItem.Event ->
+                                    "e-${item.index}-${item.event.type}-${item.event.atMillis}"
+                                is WireDisplayItem.ToolGroup ->
+                                    "g-${item.startIndex}-${item.events.size}"
+                            }
+                        },
+                        contentType = { idx ->
+                            when (displayItems[idx]) {
+                                is WireDisplayItem.Event -> "event"
+                                is WireDisplayItem.ToolGroup -> "group"
+                            }
+                        },
+                    ) { idx ->
+                        when (val item = displayItems[idx]) {
+                            is WireDisplayItem.ToolGroup -> {
+                                val key = "group-${item.startIndex}"
+                                ActivityRow(
+                                    headline = wireCompactActivityHeadline(item.events),
+                                    body = item.events.joinToString("\n\n") { wireActivityBody(it) },
+                                    expanded = wireActivityExpanded(
+                                        key,
+                                        expandedOverrides,
+                                        transcriptPrefs.autoExpandToolSections,
+                                    ),
+                                    onToggle = {
+                                        expandedOverrides = if (key in expandedOverrides) {
+                                            expandedOverrides - key
+                                        } else {
+                                            expandedOverrides + key
+                                        }
+                                    },
+                                )
+                            }
+                            is WireDisplayItem.Event -> {
+                                val event = item.event
+                                when (event.type) {
+                                    "plan" -> PlanDocumentCard(
+                                        entries = event.entries,
+                                        markdown = event.markdown,
+                                        awaitingApproval = awaitingPlan,
+                                    )
+                                    "thinking" -> {
+                                        val key = "thinking-${item.index}"
+                                        ActivityRow(
+                                            headline = "Thought",
+                                            body = event.text,
+                                            expanded = wireActivityExpanded(
+                                                key,
+                                                expandedOverrides,
+                                                transcriptPrefs.showThinkingOnTimeline ||
+                                                    transcriptPrefs.autoExpandToolSections,
+                                            ),
+                                            onToggle = {
+                                                expandedOverrides = if (key in expandedOverrides) {
+                                                    expandedOverrides - key
+                                                } else {
+                                                    expandedOverrides + key
+                                                }
+                                            },
+                                        )
+                                    }
+                                    "tool", "tool-result" -> {
+                                        val key = "tool-${item.index}"
+                                        ActivityRow(
+                                            headline = wireToolHeadline(event),
+                                            body = wireActivityBody(event),
+                                            expanded = wireActivityExpanded(
+                                                key,
+                                                expandedOverrides,
+                                                transcriptPrefs.autoExpandToolSections,
+                                            ),
+                                            onToggle = {
+                                                expandedOverrides = if (key in expandedOverrides) {
+                                                    expandedOverrides - key
+                                                } else {
+                                                    expandedOverrides + key
+                                                }
+                                            },
+                                        )
+                                    }
+                                    else -> TranscriptBubble(event)
+                                }
+                            }
                         }
                     }
                     optimistic?.let { text ->
@@ -521,6 +609,53 @@ private fun PlanApprovalCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ActivityRow(
+    headline: String,
+    body: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    val tokens = andyTokens()
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = AndySpace.Space1),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = tokens.palette.textTertiary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                headline,
+                style = MaterialTheme.typography.bodySmall,
+                color = tokens.palette.textTertiary,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (expanded && body.isNotBlank()) {
+            Text(
+                body,
+                modifier = Modifier.padding(
+                    start = AndySpace.Space8,
+                    end = AndySpace.Space1,
+                    bottom = AndySpace.Space2,
+                ),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont),
+                color = tokens.palette.textSecondary,
+            )
         }
     }
 }

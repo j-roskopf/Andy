@@ -52,6 +52,7 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -133,6 +134,64 @@ class WebChatHttpServerTest {
         runBlocking {
             mcp.stop()
             workspaceFile.delete()
+        }
+    }
+
+    @Test
+    fun transcriptSettingsGetAndPatch() = runBlocking {
+        val client = HttpClient(CIO)
+        try {
+            val get = client.get("http://127.0.0.1:$port/api/settings/transcript") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            assertEquals(HttpStatusCode.OK, get.status)
+            assertTrue(get.bodyAsText().contains("\"showThinkingOnTimeline\":false"), get.bodyAsText())
+            assertTrue(get.bodyAsText().contains("\"autoExpandToolSections\":false"), get.bodyAsText())
+            assertTrue(get.bodyAsText().contains("\"collapseActivityBetweenMessages\":false"), get.bodyAsText())
+
+            val patch = client.patch("http://127.0.0.1:$port/api/settings/transcript") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody(
+                    """{"showThinkingOnTimeline":true,"autoExpandToolSections":true,"collapseActivityBetweenMessages":true}""",
+                )
+            }
+            assertEquals(HttpStatusCode.OK, patch.status, patch.bodyAsText())
+            assertTrue(patch.bodyAsText().contains("\"showThinkingOnTimeline\":true"), patch.bodyAsText())
+
+            val loaded = workspaceStore.load()
+            assertEquals(true, loaded.agentTranscriptAutoExpandThinking)
+            assertEquals(true, loaded.agentTranscriptAutoExpandTools)
+            assertEquals(true, loaded.agentTranscriptCollapseActivityBlocks)
+
+            val partial = client.patch("http://127.0.0.1:$port/api/settings/transcript") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody("""{"autoExpandToolSections":false}""")
+            }
+            assertEquals(HttpStatusCode.OK, partial.status, partial.bodyAsText())
+            val afterPartial = workspaceStore.load()
+            assertEquals(true, afterPartial.agentTranscriptAutoExpandThinking)
+            assertEquals(false, afterPartial.agentTranscriptAutoExpandTools)
+            assertEquals(true, afterPartial.agentTranscriptCollapseActivityBlocks)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun unknownApiPathReturnsJsonNotHtml() = runBlocking {
+        val client = HttpClient(CIO)
+        try {
+            val response = client.get("http://127.0.0.1:$port/api/settings/does-not-exist") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            assertEquals(HttpStatusCode.NotFound, response.status)
+            val body = response.bodyAsText()
+            assertTrue(body.contains("\"error\""), body)
+            assertTrue(!body.contains("<!DOCTYPE", ignoreCase = true), body)
+        } finally {
+            client.close()
         }
     }
 

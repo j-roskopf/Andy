@@ -181,6 +181,13 @@ data class RespondRequest(
 @Serializable
 data class OkResponse(val ok: Boolean = true, val id: String = "")
 
+@Serializable
+data class TranscriptSettingsDto(
+    val showThinkingOnTimeline: Boolean = false,
+    val autoExpandToolSections: Boolean = false,
+    val collapseActivityBetweenMessages: Boolean = false,
+)
+
 data class ProjectGroup(
     val projectId: String,
     val projectName: String,
@@ -217,6 +224,7 @@ fun groupChatsByProject(
 
 fun ChatEventDto.isVisibleTranscript(): Boolean =
     type == "user" || type == "assistant" || type == "thinking" ||
+        type == "tool" || type == "tool-result" ||
         type == "error" || type == "permission-resolved" || type == "plan"
 
 /**

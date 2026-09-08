@@ -337,6 +337,7 @@ fun AndyMobileApp(
                                     SettingsScreen(
                                         modifier = contentModifier,
                                         updates = vm.updates,
+                                        networkClient = sessionClient,
                                     )
                                 }
                             }
