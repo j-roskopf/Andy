@@ -1181,6 +1181,7 @@
     const errorText = String(chatMeta?.errorMessage || "").trim();
     if (!recovery && !errorText) {
       box.classList.add("hidden");
+      $("chat-error").classList.add("hidden");
       return;
     }
     if (!recovery) {

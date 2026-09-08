@@ -117,7 +117,7 @@ interface IosDeviceService {
 
     /**
      * Headless input for callers that have no Live mirror surface (MCP, Actions, agents).
-     * Coordinates are in device points, matching [captureScreenshot] output. Simulator only:
+     * Coordinates are in device pixels, matching [captureScreenshot] output. Simulator only:
      * physical devices have no HID channel without an on-device runner.
      */
     suspend fun tap(udid: String, x: Int, y: Int): CommandResult =

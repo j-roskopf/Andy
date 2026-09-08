@@ -1030,7 +1030,8 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
     put("finishedAtMillis", finishedAtMillis ?: 0L)
     put("resumable", resumable)
     put("errorMessage", errorMessage.orEmpty())
-    providerAuthRecoveryJson()?.let { put("providerAuthRecovery", it) }
+    // Always emit so WebSocket `Object.assign` merges clear stale recovery metadata after sign-in.
+    put("providerAuthRecovery", providerAuthRecoveryJson() ?: JsonNull)
     userInputRequest?.let { request ->
         putJsonObject("userInputRequest") {
             put("id", request.id)

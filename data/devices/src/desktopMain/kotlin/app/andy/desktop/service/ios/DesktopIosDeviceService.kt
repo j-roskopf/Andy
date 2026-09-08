@@ -262,14 +262,21 @@ class DesktopIosDeviceService(
      * Warms the SimulatorKit HID channel for callers with no Live mirror session. Live normally
      * does this during connect; headless callers (MCP, Actions) have nothing attached, so
      * Simulator.app has to be started and SimDeviceIO opened here first. An already-warm channel
-     * short-circuits — reconnecting would tear down an active Live session's capture.
+     * short-circuits only when it belongs to the requested [udid] — reconnecting would tear down
+     * an active Live session's capture, but reusing a warm session attached to another simulator
+     * would silently drive the wrong device.
      */
     private suspend fun prepareHeadlessInput(udid: String): CommandResult {
         val target = IosTargetRegistry.target(udid)
         if (target != null && target.kind != IosTargetKind.Simulator) {
             return CommandResult.failure("Input is not supported on physical iOS devices")
         }
-        if (NativeIosSimJni.ensureInputReady()) return CommandResult.success("Simulator input ready")
+        if (NativeIosSimJni.ensureInputReady() && NativeIosSimJni.connectedUdid == udid) {
+            return CommandResult.success("Simulator input ready")
+        }
+        if (NativeIosSimJni.connectedUdid != null) {
+            NativeIosSimJni.disconnect()
+        }
         val prepared = prepareEmbeddedMirror(udid)
         if (!prepared.isSuccess) return prepared
         NativeIosSimJni.connect(udid)
@@ -280,9 +287,14 @@ class DesktopIosDeviceService(
         }
     }
 
-    /** Device points to the 0..1 space SimulatorKit's Indigo HID events expect. */
+    /**
+     * Device pixels to the 0..1 space SimulatorKit's Indigo HID events expect. Headless callers
+     * pick coordinates off [captureScreenshot] output, which is the native-resolution `simctl`
+     * PNG (e.g. 1170x2532), so normalization must use pixel dimensions — not `contentSizePoints`,
+     * which reports logical points (390x844) and would map taps 3x too small.
+     */
     private fun normalizedPoint(x: Int, y: Int): Pair<Float, Float> {
-        val size = NativeIosSimJni.contentSizePoints()
+        val size = NativeIosSimJni.connectedPixelSize ?: NativeIosSimJni.contentSizePoints()
         return iosNormalizedTouchCoordinates(x, y, size.getOrElse(0) { 390 }, size.getOrElse(1) { 844 })
     }
 
