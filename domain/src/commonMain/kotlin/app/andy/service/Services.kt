@@ -114,6 +114,30 @@ interface IosDeviceService {
     /** Downloads the latest iOS platform/runtime via `xcodebuild -downloadPlatform iOS` (Phase 5.1). */
     suspend fun downloadPlatform(): CommandResult =
         CommandResult.failure("Platform download is unavailable")
+
+    /**
+     * Headless input for callers that have no Live mirror surface (MCP, Actions, agents).
+     * Coordinates are in device points, matching [captureScreenshot] output. Simulator only:
+     * physical devices have no HID channel without an on-device runner.
+     */
+    suspend fun tap(udid: String, x: Int, y: Int): CommandResult =
+        CommandResult.failure("Tap is unavailable for this target")
+
+    suspend fun swipe(
+        udid: String,
+        startX: Int,
+        startY: Int,
+        endX: Int,
+        endY: Int,
+        durationMillis: Int = 300,
+    ): CommandResult = CommandResult.failure("Swipe is unavailable for this target")
+
+    suspend fun inputText(udid: String, text: String): CommandResult =
+        CommandResult.failure("Text input is unavailable for this target")
+
+    /** [button] is `home` or `power`. */
+    suspend fun pressButton(udid: String, button: String): CommandResult =
+        CommandResult.failure("Hardware buttons are unavailable for this target")
 }
 
 interface AvdService {
@@ -706,6 +730,17 @@ interface AgentRunService {
         CommandResult.failure("This provider does not support desktop continuation")
     /** @deprecated Prefer the embedded terminal pane; retained as a copy/paste escape hatch. */
     suspend fun openInTerminal(taskId: String): CommandResult
+    /**
+     * Shell command that starts interactive provider sign-in on the Andy host
+     * (see [app.andy.model.providerLoginCommand]).
+     */
+    fun providerLoginCommand(agent: AgentKind): String = app.andy.model.providerLoginCommand(agent)
+    /**
+     * Opens a host terminal running the provider login command.
+     * OAuth still requires the user to finish in that terminal / browser.
+     */
+    suspend fun openProviderLogin(agent: AgentKind): CommandResult =
+        CommandResult.failure("Provider login is unavailable")
     suspend fun openSkill(path: String): CommandResult
     suspend fun worktreeDiffSummary(taskId: String): String?
     suspend fun changeSummary(taskId: String): AgentChangeSummary?

@@ -589,6 +589,9 @@ internal class ShellState(
      * Marks targets taken over by the main Live destination or a pop-out. Paused leaves stop
      * holding their pooled engine so the takeover can connect without two sessions on one serial;
      * the hold is restored when the target is no longer paused.
+     *
+     * Safe to call during composition: [onLiveMirrorHold] / [onLiveMirrorRelease] must only mutate
+     * the mirror pool (sync refcounts), not Compose state.
      */
     fun setPausedLiveTargetIds(paused: Set<String>) {
         if (paused == pausedLiveTargetIds) return

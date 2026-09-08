@@ -262,8 +262,23 @@ andy tool call chat.archive --arg taskId=…  # agent/workflow tools: escape hat
 ```
 
 Curated groups: `device`, `emulator`, `avd`, `system-image`, `snapshot`,
-`input`, `app`, `intent`, `file`, `network`. Extra tool args:
+`input`, `app`, `intent`, `file`, `network`, `ios`. Extra tool args:
 `--arg key=value` (JSON literals coerced) and `--json-args '{…}'`.
+
+### iOS MCP (hybrid)
+
+Shared tools (`list_devices`, `screenshot`, `tap`/`swipe`/`input_text`/`press_key`,
+`list_apps` / install/launch, `file_*`, `logcat_snapshot`, `list_crashes`,
+`send_intent`) accept an Android serial **or** an iOS UDID via `serial`.
+
+- **Simulator:** full surface — input uses SimulatorKit HID; apps/files/logs/crashes
+  use `simctl`; Controls live under curated `ios_*` tools (`andy ios …`).
+- **Physical:** management only via `devicectl` (apps, files, crash logs, screenshot
+  from the Live mirror when connected). Input, Controls, and log streaming return
+  clear unsupported errors. Developer Mode must be enabled on-device for apps/files.
+
+Simulator-only tools: `ios_boot`, `ios_shutdown`, `ios_create_simulator`,
+`ios_set_appearance`, `ios_push`, and the rest of the `ios_*` group.
 
 `andy attach` / TUI attach resolves the task `lane` first:
 

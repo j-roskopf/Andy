@@ -1100,6 +1100,26 @@ class McpAgentRunClient(
         }.getOrElse { CommandResult.failure(it.message ?: "failed") }
     }
 
+    override suspend fun openProviderLogin(agent: AgentKind): CommandResult = withContext(Dispatchers.IO) {
+        val raw = runCatching {
+            callTool(
+                "chat.provider_login",
+                mapOf("agent" to JsonPrimitive(agent.name)),
+            )
+        }.getOrElse { return@withContext CommandResult.failure(it.message ?: "provider login failed") }
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+        val opened = obj?.get("opened")?.jsonPrimitive?.booleanOrNull == true
+        val command = obj?.get("command")?.jsonPrimitive?.contentOrNull
+            ?: providerLoginCommand(agent)
+        val message = obj?.get("message")?.jsonPrimitive?.contentOrNull
+        when {
+            opened -> CommandResult.success(message ?: "opened login terminal on host")
+            else -> CommandResult.failure(
+                message ?: "Could not open host terminal — copy and run: $command",
+            )
+        }
+    }
+
     private fun isMacOs(): Boolean =
         System.getProperty("os.name").orEmpty().contains("mac", ignoreCase = true)
 

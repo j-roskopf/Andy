@@ -3595,12 +3595,31 @@ class DesktopAgentRunService(
     override suspend fun openInTerminal(taskId: String): CommandResult = withContext(Dispatchers.IO) {
         val command = interactiveResumeCommand(taskId)
             ?: return@withContext CommandResult.failure("task not found")
+        openHostTerminal(command)
+    }
+
+    override suspend fun openProviderLogin(agent: AgentKind): CommandResult = withContext(Dispatchers.IO) {
+        val result = openHostTerminal(app.andy.model.providerLoginTerminalCommand(agent))
+        if (result.isSuccess) {
+            CommandResult.success(app.andy.model.providerLoginOpenedMessage(agent))
+        } else {
+            result
+        }
+    }
+
+    /**
+     * Opens macOS Terminal.app with [command]. On other platforms returns a failure
+     * that still carries the command so clients can copy it.
+     */
+    internal fun openHostTerminal(command: String): CommandResult {
         val osName = System.getProperty("os.name")?.lowercase().orEmpty()
         if (!osName.contains("mac")) {
-            return@withContext CommandResult.failure("Opening a terminal is only automated on macOS — the command has been copied instead")
+            return CommandResult.failure(
+                "Opening a terminal is only automated on macOS — copy and run: $command",
+            )
         }
         val escaped = command.replace("\\", "\\\\").replace("\"", "\\\"")
-        runCatching {
+        return runCatching {
             val process = ProcessBuilder(
                 "osascript",
                 "-e", "tell application \"Terminal\" to activate",

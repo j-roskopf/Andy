@@ -2,7 +2,7 @@ use andy_cli::attach;
 use andy_cli::chats;
 use andy_cli::daemon;
 use andy_cli::device_cli::{
-    self, AppCmd, AvdCmd, DeviceCmd, EmulatorCmd, FileCmd, InputCmd, IntentCmd, NetworkCmd,
+    self, AppCmd, AvdCmd, DeviceCmd, EmulatorCmd, FileCmd, InputCmd, IntentCmd, IosCmd, NetworkCmd,
     SnapshotCmd, SystemImageCmd,
 };
 use andy_cli::file_picker;
@@ -80,6 +80,9 @@ enum Commands {
     /// Network proxy, mock rules, recorded requests
     #[command(subcommand)]
     Network(NetworkCmd),
+    /// iOS Simulator lifecycle and controls
+    #[command(subcommand)]
+    Ios(IosCmd),
     /// Generic MCP tool list / call (full parity escape hatch)
     #[command(subcommand)]
     Tool(ToolCmd),
@@ -273,6 +276,7 @@ async fn dispatch_command(cmd: Commands, client: &mut McpClient, json_out: bool)
         Commands::Intent(cmd) => device_cli::run_intent(client, cmd, json_out).await?,
         Commands::File(cmd) => device_cli::run_file(client, cmd, json_out).await?,
         Commands::Network(cmd) => device_cli::run_network(client, cmd, json_out).await?,
+        Commands::Ios(cmd) => device_cli::run_ios(client, cmd, json_out).await?,
         Commands::Tool(cmd) => tool_cmd::run_tool(client, cmd, json_out).await?,
         Commands::Tui | Commands::Remote { .. } => unreachable!("handled in main"),
     }

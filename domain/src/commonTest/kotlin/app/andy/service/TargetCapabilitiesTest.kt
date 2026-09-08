@@ -36,14 +36,17 @@ class TargetCapabilitiesTest {
     }
 
     @Test
-    fun physicalIsViewOnlyUntilDeveloperMode() {
+    fun physicalUnlocksAppsAndFilesButStaysViewOnly() {
         val caps = TargetCapabilities.Physical
         assertTrue(caps.destinationAvailable(AndyDestination.Live))
         assertTrue(caps.destinationAvailable(AndyDestination.Design))
         assertTrue(caps.destinationAvailable(AndyDestination.Recordings))
         assertTrue(caps.destinationAvailable(AndyDestination.Bugs))
-        assertFalse(caps.destinationAvailable(AndyDestination.Apps))
+        assertTrue(caps.destinationAvailable(AndyDestination.Apps))
+        assertTrue(caps.destinationAvailable(AndyDestination.Files))
         assertFalse(caps.destinationAvailable(AndyDestination.Controls))
+        assertFalse(caps.destinationAvailable(AndyDestination.Logcat))
+        assertFalse(caps.destinationAvailable(AndyDestination.Intents))
         assertFalse(caps.input)
         assertTrue(caps.requiresDeveloperMode)
     }

@@ -1,8 +1,9 @@
 package app.andy.desktop.service
 
-import app.andy.desktop.service.agents.AgentWorkflowArtifacts
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.desktop.service.agents.AgentWorkflowArtifacts
 import app.andy.desktop.service.agents.appendAgentStatus
+import app.andy.desktop.service.agents.providerAuthRecoveryJson
 import app.andy.domain.excludingTemporary
 import app.andy.model.AgentStatus
 import app.andy.model.AgentAutonomy
@@ -207,6 +208,7 @@ fun Server.registerAgentProjectTools(
                         put("acpSessionId", task.acpSessionId.orEmpty())
                         put("stopReason", task.stopReason.orEmpty())
                         put("errorMessage", task.errorMessage.orEmpty())
+                        task.providerAuthRecoveryJson()?.let { put("providerAuthRecovery", it) }
                         put("automationId", task.automationId.orEmpty())
                         put("automationNotifyFailedOnly", task.automationNotifyFailedOnly)
                         put("automationSuppressOsNotify", task.automationSuppressOsNotify)
@@ -1058,6 +1060,8 @@ fun Server.registerAgentProjectTools(
                 put("tmuxSession", TmuxAndy.sessionName(id))
                 put("cwd", task?.cwd.orEmpty())
                 put("originDir", task?.originDir.orEmpty())
+                put("errorMessage", task?.errorMessage.orEmpty())
+                task?.providerAuthRecoveryJson()?.let { put("providerAuthRecovery", it) }
                 put(
                     "messageDeliveryMode",
                     (agentRuns as? DesktopAgentRunService)
@@ -1125,6 +1129,58 @@ fun Server.registerAgentProjectTools(
                 put("taskId", id)
                 put("status", status.name.lowercase())
                 put("artifactDir", artifactDir.absolutePath)
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "chat.provider_login",
+        description = "Open a host terminal to sign into a provider CLI (Claude /login, etc.). " +
+            "OAuth still requires the user on the Andy host. Returns the login command for copy/paste clients.",
+        properties = mapOf(
+            "agent" to buildJsonObject {
+                put("type", "string")
+                put("description", "AgentKind name or cli name (e.g. ClaudeCode, claude)")
+            },
+            "taskId" to buildJsonObject {
+                put("type", "string")
+                put("description", "Optional chat id — uses that chat's agent when agent is omitted")
+            },
+        ),
+    ) { args ->
+        val taskId = str(args, "taskId")
+        val agentName = str(args, "agent")?.trim().orEmpty()
+        val agent = when {
+            agentName.isNotEmpty() ->
+                AgentKind.entries.firstOrNull {
+                    it.name.equals(agentName, ignoreCase = true) ||
+                        it.cliName.equals(agentName, ignoreCase = true)
+                } ?: error("unknown agent: $agentName")
+            !taskId.isNullOrBlank() ->
+                agentRuns.tasks.value.firstOrNull { it.id == taskId }?.agent
+                    ?: error("task not found: $taskId")
+            else -> error("agent or taskId required")
+        }
+        val command = agentRuns.providerLoginCommand(agent)
+        val result = agentRuns.openProviderLogin(agent)
+        val opened = result.isSuccess
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("agent", agent.name)
+                put("command", command)
+                put("opened", opened)
+                put("instructions", app.andy.model.providerLoginInstructions(agent))
+                put("remoteInstructions", app.andy.model.providerLoginRemoteInstructions(agent))
+                put(
+                    "message",
+                    when {
+                        opened ->
+                            result.stdout.ifBlank { app.andy.model.providerLoginOpenedMessage(agent) }
+                        else ->
+                            result.stderr.ifBlank { "Could not open Terminal on the Andy host" }
+                    },
+                )
             }.toString(),
         )
     }

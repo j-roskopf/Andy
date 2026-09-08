@@ -186,6 +186,9 @@ fun AndyMobileApp(
         val selectedId by repository.selectedHostId.collectAsStateWithLifecycle()
         val selectedHost = hosts.firstOrNull { it.id == selectedId } ?: hosts.firstOrNull()
         val sessionClient = sessionManager.client
+        // Activity-scoped so project list / expand state survives Chat pushes that
+        // temporarily remove the Tabs entry from composition.
+        val projectsVm: ProjectsViewModel = viewModel(factory = graph.factory<ProjectsViewModel>())
 
         NavDisplay(
             backStack = backStack,
@@ -298,13 +301,13 @@ fun AndyMobileApp(
                                     )
                                 }
                                 MobileTab.Projects -> {
-                                    val vm: ProjectsViewModel = viewModel(factory = graph.factory<ProjectsViewModel>())
                                     ProjectsScreen(
                                         modifier = contentModifier,
                                         host = selectedHost,
                                         repository = repository,
                                         networkClient = sessionClient,
                                         okHttpClient = graph.interactiveOkHttp,
+                                        viewModel = projectsVm,
                                         onClientReady = { client ->
                                             sessionManager.adoptClient(client)
                                             val token = client.sessionToken

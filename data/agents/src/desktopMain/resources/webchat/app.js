@@ -476,6 +476,7 @@
     }
     renderTranscript();
     renderPlanApproval();
+    renderProviderAuth();
   }
 
   function shouldShowThinkingIndicator() {
@@ -514,6 +515,7 @@
     slashCommands = [];
     hideSlashMenu();
     $("chat-error").classList.add("hidden");
+    renderProviderAuth();
     $("reconnect").classList.add("hidden");
     $("transcript").innerHTML = "";
     $("permission").classList.add("hidden");
@@ -532,6 +534,7 @@
       renderTranscript();
       renderPermission();
       renderPlanApproval();
+      renderProviderAuth();
       $("composer-input").placeholder = awaitingPlanConfirmation(chatMeta, events)
         ? "Refine the plan…"
         : "Message…";
@@ -655,6 +658,7 @@
       renderTranscript();
       renderPermission();
       renderPlanApproval();
+      renderProviderAuth();
     };
     socket.onclose = (ev) => {
       socketConnecting = false;
@@ -1162,6 +1166,79 @@
     }
   }
 
+  function providerAuthRecovery() {
+    const recovery = chatMeta?.providerAuthRecovery;
+    if (!recovery || recovery.needed === false) return null;
+    const command = String(recovery.command || "").trim();
+    if (!command) return null;
+    return recovery;
+  }
+
+  function renderProviderAuth() {
+    const box = $("provider-auth");
+    if (!box) return;
+    const recovery = providerAuthRecovery();
+    const errorText = String(chatMeta?.errorMessage || "").trim();
+    if (!recovery && !errorText) {
+      box.classList.add("hidden");
+      return;
+    }
+    if (!recovery) {
+      // Show plain task error without Sign-in controls when recovery metadata is absent.
+      box.classList.add("hidden");
+      if (errorText) {
+        $("chat-error").textContent = errorText;
+        $("chat-error").classList.remove("hidden");
+      }
+      return;
+    }
+    $("chat-error").classList.add("hidden");
+    box.classList.remove("hidden");
+    $("provider-auth-error").textContent =
+      errorText || "Not logged in — sign in on the Andy host, then retry";
+    $("provider-auth-instructions").textContent =
+      recovery.remoteInstructions ||
+      recovery.instructions ||
+      "This browser can’t finish provider OAuth. Sign in on your Mac, then retry here.";
+  }
+
+  async function copyProviderLoginCommand(command) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  async function openProviderLogin() {
+    const recovery = providerAuthRecovery();
+    if (!recovery || !currentChatId) return;
+    const notice = $("provider-auth-notice");
+    const command = String(recovery.command || "").trim();
+    await copyProviderLoginCommand(command);
+    try {
+      const body = await api(`/api/chats/${encodeURIComponent(currentChatId)}/provider-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const cmd = String(body.command || command).trim();
+      if (notice) {
+        notice.classList.remove("hidden");
+        notice.textContent = body.opened
+          ? (body.message || "Opened Terminal on your Mac. Switch to that computer, finish sign-in, then retry here.")
+          : `${body.message || "Couldn’t open Terminal on the Mac"} — run there: ${cmd}`;
+      }
+    } catch (err) {
+      if (notice) {
+        notice.classList.remove("hidden");
+        notice.textContent = `${err.message || "Sign-in request failed"} — on your Mac run: ${command}`;
+      }
+    }
+  }
+
   async function respond(requestId, answers) {
     try {
       ensureSocket();
@@ -1522,6 +1599,20 @@
   $("btn-new-back").addEventListener("click", () => { location.hash = "#/"; });
   $("btn-reconnect").addEventListener("click", () => {
     if (currentChatId) connectSocket(currentChatId);
+  });
+  $("btn-provider-login")?.addEventListener("click", () => {
+    openProviderLogin().catch(() => {});
+  });
+  $("btn-provider-copy")?.addEventListener("click", async () => {
+    const recovery = providerAuthRecovery();
+    const command = String(recovery?.command || "").trim();
+    const notice = $("provider-auth-notice");
+    if (!command) return;
+    const copied = await copyProviderLoginCommand(command);
+    if (notice) {
+      notice.classList.remove("hidden");
+      notice.textContent = copied ? `Copied for your Mac: ${command}` : `On your Mac run: ${command}`;
+    }
   });
   $("btn-notify").addEventListener("click", () => enableNotifications().catch((e) => alert(e.message)));
 

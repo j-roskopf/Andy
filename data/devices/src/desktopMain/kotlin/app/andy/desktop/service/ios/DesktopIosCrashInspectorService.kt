@@ -5,10 +5,12 @@ import app.andy.desktop.parser.IosParsers
 import app.andy.desktop.service.CommandRunner
 import app.andy.model.CrashKind
 import app.andy.model.CrashRecord
+import app.andy.model.IosTargetKind
 import app.andy.service.CommandResult
 import app.andy.service.CrashInspectorService
 import app.andy.service.IosTargetRegistry
 import java.io.File
+import java.nio.file.Files
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -19,6 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 
 private const val IpsPrefix = "ips:"
+private const val DevicectlPrefix = "devicectl:"
 
 /**
  * Reads simulator crash reports from the host `~/Library/Logs/DiagnosticReports` (§Phase 3.2).
@@ -26,6 +29,9 @@ private const val IpsPrefix = "ips:"
  * crash log — this service filters to reports whose binary image path resolves under
  * `CoreSimulator/Devices/<udid>` for the selected target, plus best-effort `atos` symbolication
  * against `.dSYM` bundles discovered via Spotlight (`mdfind`).
+ *
+ * Physical devices keep their reports on-device in the `systemCrashLogs` domain, so those are
+ * listed with `devicectl device info files` and fetched on demand with `device copy from`.
  */
 class DesktopIosCrashInspectorService(
     private val runner: CommandRunner,
@@ -33,7 +39,11 @@ class DesktopIosCrashInspectorService(
 ) : CrashInspectorService {
     private val json = Json { ignoreUnknownKeys = true }
 
+    private fun isPhysical(serial: String): Boolean =
+        IosTargetRegistry.target(serial)?.kind == IosTargetKind.Physical
+
     override suspend fun listCrashes(serial: String): List<CrashRecord> = withContext(Dispatchers.IO) {
+        if (isPhysical(serial)) return@withContext listPhysicalCrashes(serial)
         val target = IosTargetRegistry.target(serial)
         val files = diagnosticReportsDir.listFiles { file -> file.isFile && file.extension.equals("ips", ignoreCase = true) }
             ?: return@withContext emptyList()
@@ -67,6 +77,7 @@ class DesktopIosCrashInspectorService(
     }
 
     override suspend fun loadCrash(serial: String, id: String): String = withContext(Dispatchers.IO) {
+        if (id.startsWith(DevicectlPrefix)) return@withContext loadPhysicalCrash(serial, id.removePrefix(DevicectlPrefix))
         val path = id.removePrefix(IpsPrefix)
         val file = File(path)
         if (!file.isFile) return@withContext "Crash report not found: $path"
@@ -85,6 +96,52 @@ class DesktopIosCrashInspectorService(
             out.writeText(text)
             CommandResult.success(out.absolutePath)
         }.getOrElse { CommandResult.failure(it.message ?: "Export failed") }
+    }
+
+    private suspend fun listPhysicalCrashes(serial: String): List<CrashRecord> {
+        val response = runner.runDevicectlJson(
+            listOf(
+                "device", "info", "files", "--device", serial,
+                "--domain-type", "systemCrashLogs", "--no-recurse",
+            ),
+        )
+        if (!response.result.isSuccess) return emptyList()
+        return IosParsers.parseDevicectlFiles(response.output)
+            .filter { !it.isDirectory && it.name.endsWith(".ips", ignoreCase = true) }
+            .map { file ->
+                // The listing carries no crash detail; the process name is the leading segment of
+                // Apple's `<Process>-<date>-<seq>.ips` convention, and the rest arrives on load.
+                val processName = file.name.removeSuffix(".ips").substringBefore('-').ifBlank { file.name }
+                CrashRecord(
+                    id = "$DevicectlPrefix${file.path}",
+                    kind = CrashKind.NativeCrash,
+                    packageName = processName,
+                    timestampMillis = 0L,
+                    summary = file.name,
+                )
+            }
+    }
+
+    private suspend fun loadPhysicalCrash(serial: String, remotePath: String): String {
+        val destination = Files.createTempDirectory("andy-ios-crash").toFile()
+        return try {
+            val response = runner.runDevicectlJson(
+                listOf(
+                    "device", "copy", "from", "--device", serial,
+                    "--domain-type", "systemCrashLogs",
+                    "--source", remotePath, "--destination", destination.absolutePath,
+                ),
+                timeoutSeconds = 120,
+            )
+            if (!response.result.isSuccess) {
+                return response.toCommandResult("Failed to read $remotePath", "").stderr
+            }
+            val copied = destination.walkTopDown().firstOrNull { it.isFile }
+                ?: return "Crash report not found on device: $remotePath"
+            runCatching { copied.readText() }.getOrElse { it.message ?: "Failed to read crash report" }
+        } finally {
+            destination.deleteRecursively()
+        }
     }
 
     /**

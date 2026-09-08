@@ -1,7 +1,11 @@
 package app.andy.desktop.service.ios
 
 import app.andy.desktop.service.CommandRunner
+import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
+import app.andy.model.IosTargetState
 import app.andy.service.CommandResult
+import app.andy.service.IosTargetRegistry
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.AfterTest
@@ -11,9 +15,48 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
+private const val PhysicalUdid = "00008140-00026112260B001C"
+
 class DesktopIosFileServiceTest {
     private val tempDirs = mutableListOf<File>()
     private val udid = "AAAAAAAAAAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+
+    @Test
+    fun hostPathFromSimctlStripsFileUrl() {
+        assertEquals(
+            "/Users/joer/Library/Developer/CoreSimulator/Devices/UDID/data",
+            hostPathFromSimctl("file:///Users/joer/Library/Developer/CoreSimulator/Devices/UDID/data"),
+        )
+        assertEquals(
+            "/plain/path",
+            hostPathFromSimctl("/plain/path"),
+        )
+    }
+
+    private fun registerPhysicalDevice() {
+        IosTargetRegistry.update(
+            listOf(
+                IosTarget(
+                    udid = PhysicalUdid,
+                    displayName = "iPhone 16 Pro",
+                    kind = IosTargetKind.Physical,
+                    state = IosTargetState.Unknown,
+                ),
+            ),
+        )
+    }
+
+    /** Mimics devicectl: writes the JSON payload to the `--json-output` path, not stdout. */
+    private fun devicectlRunner(
+        commands: MutableList<List<String>>,
+        payloads: (List<String>) -> Pair<CommandResult, String?>,
+    ) = CommandRunner { command, _ ->
+        commands += command
+        val (result, json) = payloads(command)
+        val outputIndex = command.indexOf("--json-output")
+        if (json != null && outputIndex >= 0) File(command[outputIndex + 1]).writeText(json)
+        result
+    }
 
     private fun newTempDir(): File =
         File.createTempFile("andy-ios-file-test", "").also {
@@ -38,6 +81,7 @@ class DesktopIosFileServiceTest {
     fun cleanup() {
         tempDirs.forEach { it.deleteRecursively() }
         tempDirs.clear()
+        IosTargetRegistry.update(emptyList())
     }
 
     @Test
@@ -202,5 +246,99 @@ class DesktopIosFileServiceTest {
         val result = service(devicesRoot = devicesRoot).delete(udid, outside.absolutePath)
         assertFalse(result.isSuccess)
         assertTrue(outside.exists())
+    }
+
+    @Test
+    fun physicalRootListsInstalledAppsAsSyntheticDirectories() = runBlocking {
+        registerPhysicalDevice()
+        val commands = mutableListOf<List<String>>()
+        val runner = devicectlRunner(commands) {
+            CommandResult.success() to """
+                {"result":{"apps":[
+                  {"bundleIdentifier":"com.example.myapp","name":"My App"},
+                  {"bundleIdentifier":"com.apple.Maps","name":"Maps","defaultApp":true}
+                ]}}
+            """.trimIndent()
+        }
+
+        val entries = DesktopIosFileService(runner).list(PhysicalUdid, "/")
+
+        assertEquals(listOf("Maps", "My App"), entries.map { it.name })
+        assertEquals(listOf("/com.apple.Maps", "/com.example.myapp"), entries.map { it.path })
+        assertTrue(entries.all { it.isDirectory })
+        assertTrue(commands.single().contains("--include-all-apps"))
+    }
+
+    @Test
+    fun physicalSubdirectoryListingScopesToTheAppDataContainer() = runBlocking {
+        registerPhysicalDevice()
+        val commands = mutableListOf<List<String>>()
+        val runner = devicectlRunner(commands) {
+            CommandResult.success() to """
+                {"result":{"files":[
+                  {"name":"cache.db","path":"cache.db","type":"regularFile","size":64},
+                  {"name":"images","path":"images","type":"directory"}
+                ]}}
+            """.trimIndent()
+        }
+
+        val entries = DesktopIosFileService(runner).list(PhysicalUdid, "/com.example.myapp/Library/Caches")
+
+        assertEquals(listOf("images", "cache.db"), entries.map { it.name })
+        assertEquals(
+            listOf("/com.example.myapp/Library/Caches/images", "/com.example.myapp/Library/Caches/cache.db"),
+            entries.map { it.path },
+        )
+        val command = commands.single()
+        assertEquals(
+            listOf(
+                "xcrun", "devicectl", "device", "info", "files", "--device", PhysicalUdid,
+                "--domain-type", "appDataContainer", "--domain-identifier", "com.example.myapp",
+                "--subdirectory", "Library/Caches", "--no-recurse",
+            ),
+            command.dropLast(2),
+        )
+    }
+
+    @Test
+    fun physicalPullAndPushUseDeviceCopyWithContainerRelativePaths() = runBlocking {
+        registerPhysicalDevice()
+        val commands = mutableListOf<List<String>>()
+        val runner = devicectlRunner(commands) { CommandResult.success() to null }
+        val service = DesktopIosFileService(runner)
+
+        val pulled = service.pull(PhysicalUdid, "/com.example.myapp/Documents/notes.txt", "/tmp/notes.txt")
+        val pushed = service.push(PhysicalUdid, "/tmp/notes.txt", "/com.example.myapp/Documents/notes.txt")
+
+        assertTrue(pulled.isSuccess, pulled.stderr)
+        assertTrue(pushed.isSuccess, pushed.stderr)
+        assertEquals(
+            listOf(
+                listOf(
+                    "xcrun", "devicectl", "device", "copy", "from", "--device", PhysicalUdid,
+                    "--domain-type", "appDataContainer", "--domain-identifier", "com.example.myapp",
+                    "--source", "Documents/notes.txt", "--destination", "/tmp/notes.txt",
+                ),
+                listOf(
+                    "xcrun", "devicectl", "device", "copy", "to", "--device", PhysicalUdid,
+                    "--domain-type", "appDataContainer", "--domain-identifier", "com.example.myapp",
+                    "--source", "/tmp/notes.txt", "--destination", "Documents/notes.txt",
+                ),
+            ),
+            commands.map { it.dropLast(2) },
+        )
+    }
+
+    @Test
+    fun physicalDeleteIsRejectedBeforeTouchingTheDevice() = runBlocking {
+        registerPhysicalDevice()
+        val commands = mutableListOf<List<String>>()
+        val runner = devicectlRunner(commands) { CommandResult.success() to null }
+
+        val result = DesktopIosFileService(runner).delete(PhysicalUdid, "/com.example.myapp/Documents/notes.txt")
+
+        assertFalse(result.isSuccess)
+        assertTrue(result.stderr.contains("not supported"), result.stderr)
+        assertTrue(commands.isEmpty())
     }
 }

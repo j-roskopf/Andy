@@ -25,14 +25,14 @@ class ProviderAuthFailureTest {
     @Test
     fun claudeHintMentionsLoginSlashCommand() {
         assertEquals(
-            "Not logged in — run `claude` in a terminal and sign in (`/login`), then retry",
+            "Not logged in — sign in on the Andy host (`claude`, then /login), then retry",
             providerAuthFailureHint(
                 AgentKind.ClaudeCode,
                 "Failed to authenticate: OAuth session expired and could not be refreshed",
             ),
         )
         assertEquals(
-            "Not logged in — run `codex` in a terminal and sign in, then retry",
+            "Not logged in — sign in on the Andy host (`codex login`), then retry",
             providerAuthFailureHint(AgentKind.Codex, "Please log in"),
         )
         assertNull(providerAuthFailureHint(AgentKind.ClaudeCode, "connection refused"))
@@ -41,7 +41,7 @@ class ProviderAuthFailureTest {
     @Test
     fun friendlyAcpMessagePrefersAuthHintOverRawTransportError() {
         assertEquals(
-            "Not logged in — run `claude` in a terminal and sign in (`/login`), then retry",
+            "Not logged in — sign in on the Andy host (`claude`, then /login), then retry",
             friendlyAcpFailureMessage(
                 agent = AgentKind.ClaudeCode,
                 phase = AcpFailurePhase.Prompt,

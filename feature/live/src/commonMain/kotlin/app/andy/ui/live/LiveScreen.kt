@@ -903,10 +903,12 @@ private fun PhysicalIosDeveloperModeBanner(status: IosDeveloperModeStatus?) {
     ) {
         Text(
             text = when {
-                enabled -> "Developer Mode enabled — full tooling available."
+                enabled ->
+                    "Developer Mode enabled — apps, files, and crash logs available. " +
+                        "Input and Controls remain simulator-only."
                 else ->
                     "Live mirroring only needs USB + \"Trust This Computer\". Input is view-only on " +
-                        "physical devices; Apps/Files/Logs/Controls need Developer Mode: " +
+                        "physical devices; Apps and Files need Developer Mode: " +
                         "Settings → Privacy & Security → Developer Mode, then restart the device."
             },
             color = if (enabled) Green else Yellow,

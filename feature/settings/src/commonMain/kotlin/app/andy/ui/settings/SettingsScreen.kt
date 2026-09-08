@@ -2121,7 +2121,7 @@ private fun McpServerPanel(
 ) {
     SettingsGroup(
         title = "Server",
-        description = "Expose Andy's Android control automation as an MCP server for Claude Code, Codex, Cursor, and similar tools.",
+        description = "Expose Andy's Android and iOS device automation as an MCP server for Claude Code, Codex, Cursor, and similar tools.",
         ) {
         SettingsToggleRow(
             label = "Enable MCP server",

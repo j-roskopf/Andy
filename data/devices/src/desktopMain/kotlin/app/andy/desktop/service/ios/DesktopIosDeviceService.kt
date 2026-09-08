@@ -6,9 +6,12 @@ import app.andy.model.IosDeveloperModeStatus
 import app.andy.model.IosDeviceType
 import app.andy.model.IosRuntime
 import app.andy.model.IosTarget
+import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
+import app.andy.model.iosNormalizedTouchCoordinates
 import app.andy.service.CommandResult
 import app.andy.service.IosDeviceService
+import app.andy.service.IosTargetRegistry
 import java.io.File
 import kotlinx.coroutines.delay
 
@@ -31,7 +34,11 @@ class DesktopIosDeviceService(
             temp.delete()
             if (output.isBlank()) emptyList() else IosParsers.parseDevicectlDevices(output)
         }.getOrDefault(emptyList())
-        return (sims + physical).distinctBy { it.udid }
+        val merged = (sims + physical).distinctBy { it.udid }
+        // Simulator-vs-physical routing in the app/file/crash services reads the registry, so it
+        // has to be refreshed by discovery itself rather than by whoever happens to call this.
+        IosTargetRegistry.update(merged)
+        return merged
     }
 
     override suspend fun boot(udid: String): CommandResult {
@@ -98,6 +105,11 @@ class DesktopIosDeviceService(
         private const val SIMULATOR_APP_WAIT_NANOS = 15_000_000_000L
         private const val SIMULATOR_APP_SETTLE_MILLIS = 400L
         private const val SIMULATOR_APP_HIDE_SETTLE_MILLIS = 150L
+        private const val TAP_HOLD_MILLIS = 170L
+        private const val TOUCH_DOWN = 0
+        private const val TOUCH_UP = 2
+        private const val BUTTON_HOME = 0
+        private const val BUTTON_POWER = 1
 
         internal fun isSimulatorAppRunning(): Boolean =
             runCatching {
@@ -199,6 +211,80 @@ class DesktopIosDeviceService(
 
     override suspend fun downloadPlatform(): CommandResult =
         runner.run(listOf("xcodebuild", "-downloadPlatform", "iOS"), timeoutSeconds = 3600)
+
+    override suspend fun tap(udid: String, x: Int, y: Int): CommandResult {
+        val ready = prepareHeadlessInput(udid)
+        if (!ready.isSuccess) return ready
+        val (nx, ny) = normalizedPoint(x, y)
+        val down = NativeIosSimJni.sendTouch(TOUCH_DOWN, nx, ny)
+        delay(TAP_HOLD_MILLIS)
+        val up = NativeIosSimJni.sendTouch(TOUCH_UP, nx, ny)
+        return if (down && up) CommandResult.success("Tapped $x,$y") else CommandResult.failure("Simulator HID did not accept tap")
+    }
+
+    override suspend fun swipe(
+        udid: String,
+        startX: Int,
+        startY: Int,
+        endX: Int,
+        endY: Int,
+        durationMillis: Int,
+    ): CommandResult {
+        val ready = prepareHeadlessInput(udid)
+        if (!ready.isSuccess) return ready
+        val (startNx, startNy) = normalizedPoint(startX, startY)
+        val (endNx, endNy) = normalizedPoint(endX, endY)
+        NativeIosSimJni.sendSwipe(startNx, startNy, endNx, endNy, (durationMillis / 16).coerceAtLeast(2))
+        return CommandResult.success("Swiped $startX,$startY to $endX,$endY")
+    }
+
+    override suspend fun inputText(udid: String, text: String): CommandResult {
+        if (text.isEmpty()) return CommandResult.success("Nothing to type")
+        val ready = prepareHeadlessInput(udid)
+        if (!ready.isSuccess) return ready
+        NativeIosSimJni.sendText(text)
+        return CommandResult.success("Typed ${text.length} characters")
+    }
+
+    override suspend fun pressButton(udid: String, button: String): CommandResult {
+        val code = when (button.trim().lowercase()) {
+            "home" -> BUTTON_HOME
+            "power", "lock" -> BUTTON_POWER
+            else -> return CommandResult.failure("Unsupported iOS button '$button'; expected home or power")
+        }
+        val ready = prepareHeadlessInput(udid)
+        if (!ready.isSuccess) return ready
+        NativeIosSimJni.sendButton(code)
+        return CommandResult.success("Pressed $button")
+    }
+
+    /**
+     * Warms the SimulatorKit HID channel for callers with no Live mirror session. Live normally
+     * does this during connect; headless callers (MCP, Actions) have nothing attached, so
+     * Simulator.app has to be started and SimDeviceIO opened here first. An already-warm channel
+     * short-circuits — reconnecting would tear down an active Live session's capture.
+     */
+    private suspend fun prepareHeadlessInput(udid: String): CommandResult {
+        val target = IosTargetRegistry.target(udid)
+        if (target != null && target.kind != IosTargetKind.Simulator) {
+            return CommandResult.failure("Input is not supported on physical iOS devices")
+        }
+        if (NativeIosSimJni.ensureInputReady()) return CommandResult.success("Simulator input ready")
+        val prepared = prepareEmbeddedMirror(udid)
+        if (!prepared.isSuccess) return prepared
+        NativeIosSimJni.connect(udid)
+        return if (NativeIosSimJni.ensureInputReady()) {
+            CommandResult.success("Simulator input ready")
+        } else {
+            CommandResult.failure("Simulator input is unavailable for $udid")
+        }
+    }
+
+    /** Device points to the 0..1 space SimulatorKit's Indigo HID events expect. */
+    private fun normalizedPoint(x: Int, y: Int): Pair<Float, Float> {
+        val size = NativeIosSimJni.contentSizePoints()
+        return iosNormalizedTouchCoordinates(x, y, size.getOrElse(0) { 390 }, size.getOrElse(1) { 844 })
+    }
 
     override suspend fun developerModeStatus(udid: String): IosDeveloperModeStatus? {
         val temp = File.createTempFile("andy-devicectl-info", ".json")

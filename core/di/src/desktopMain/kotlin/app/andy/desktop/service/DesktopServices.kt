@@ -206,6 +206,7 @@ fun createDaemonRuntime(
         bugs = bugService,
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
+        iosDevices = iosDevices,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
@@ -480,6 +481,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         bugs = bugService,
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
+        iosDevices = iosDevices,
     )
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
@@ -745,6 +747,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         bugs = bugService,
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
+        iosDevices = iosDevices,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()

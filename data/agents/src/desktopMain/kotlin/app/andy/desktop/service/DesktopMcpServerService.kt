@@ -59,7 +59,9 @@ class DesktopMcpServerService(
     private val recordingExport: RecordingExportService = UnavailableRecordingExportService,
     private val webPush: WebPushService = WebPushService(workspaceStore),
     private val actionConfig: ActionConfigStore? = null,
+    private val iosDevices: IosDeviceService = UnavailableIosDeviceService,
 ) : McpServerService {
+    private val targets = McpTargetResolver(devices, iosDevices, workspaceStore)
     override val status = MutableStateFlow("stopped")
     override val running = MutableStateFlow(false)
 
@@ -359,7 +361,7 @@ class DesktopMcpServerService(
         "capture_heap_dump", "get_memory_breakdown", "get_battery_stats",
         "start_screen_recording", "stop_screen_recording", "export_recording",
         "screenshot_host",
-    ) + agentProjectToolNames()
+    ) + IosMcpToolNames + agentProjectToolNames()
 
     private fun createMcpServer(callerTaskId: String? = null): Server {
         val mcpServer = Server(
@@ -385,37 +387,20 @@ class DesktopMcpServerService(
         return mcpServer
     }
 
-    private suspend fun resolveSerial(explicit: String?): String {
-        if (!explicit.isNullOrBlank()) return explicit
+    private suspend fun resolveTarget(explicit: String?): String = targets.resolve(explicit)
 
-        val state = workspaceStore.load()
-        val savedSerial = state.selectedDeviceSerial
-
-        val onlineDevices = devices.listDevices().filter { it.state == DeviceConnectionState.Online }
-
-        if (!savedSerial.isNullOrBlank() && onlineDevices.any { it.serial == savedSerial }) {
-            return savedSerial
-        }
-
-        if (onlineDevices.size == 1) {
-            return onlineDevices.first().serial
-        }
-
-        val serialsStr = onlineDevices.joinToString(", ") { "${it.serial} (${it.model ?: "unknown"})" }
-        if (onlineDevices.isEmpty()) {
-            throw IllegalArgumentException("No online Android devices found. Please launch an emulator or connect a physical device.")
-        }
-        throw IllegalArgumentException("Multiple devices available or no selected device. Please specify 'serial'. Available: [$serialsStr]")
-    }
+    private suspend fun resolveAndroidTarget(explicit: String?): String = targets.resolveAndroid(explicit)
 
     private fun registerTools(mcpServer: Server) {
-        mcpServer.registerTool("list_devices", "List all connected Android emulators and physical devices") { args ->
-            val list = devices.listDevices()
+        mcpServer.registerTool("list_devices", "List connected Android devices/emulators and iOS simulators/physical devices") { args ->
+            val androidList = devices.listDevices()
+            val iosList = targets.refreshIosTargets()
             val json = buildJsonArray {
-                list.forEach { dev ->
+                androidList.forEach { dev ->
                     add(buildJsonObject {
                         put("serial", dev.serial)
                         put("displayName", dev.displayName)
+                        put("platform", "android")
                         put("kind", dev.kind.name)
                         put("state", dev.state.name)
                         put("apiLevel", dev.apiLevel)
@@ -425,6 +410,19 @@ class DesktopMcpServerService(
                         put("batteryPercent", dev.batteryPercent)
                         put("screenSize", dev.screenSize)
                         put("storageSummary", dev.storageSummary)
+                    })
+                }
+                iosList.forEach { target ->
+                    add(buildJsonObject {
+                        put("serial", target.udid)
+                        put("udid", target.udid)
+                        put("displayName", target.displayName)
+                        put("platform", "ios")
+                        put("kind", target.kind.name)
+                        put("state", target.state.name)
+                        put("model", target.model)
+                        put("runtime", target.runtime)
+                        put("transport", target.transport.name)
                     })
                 }
             }
@@ -441,7 +439,7 @@ class DesktopMcpServerService(
             listOf("command")
         ) { args ->
             val command = args["command"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("command is required")
-            val serial = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val serial = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = devices.shell(serial, listOf(command))
             CallToolResult(
                 content = listOf(
@@ -584,17 +582,30 @@ class DesktopMcpServerService(
 
         mcpServer.registerTool(
             "tap",
-            "Tap the screen at the specified coordinates",
+            "Tap the screen at the specified coordinates (Android adb input, or iOS Simulator HID)",
             mapOf(
                 "x" to intProp("X coordinate"),
                 "y" to intProp("Y coordinate"),
-                "serial" to stringProp("Optional target device serial")
+                "serial" to stringProp("Optional target device serial or iOS UDID")
             ),
             listOf("x", "y")
         ) { args ->
             val x = args["x"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("x is required")
             val y = args["y"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("y is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (targets.isIos(resolved)) {
+                if (targets.isPhysicalIos(resolved)) {
+                    return@registerTool CallToolResult(
+                        content = listOf(TextContent(text = "Physical iOS input is not supported (simulator only)")),
+                        isError = true,
+                    )
+                }
+                val result = iosDevices.tap(resolved, x, y)
+                return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
+                    isError = !result.isSuccess,
+                )
+            }
             val result = devices.shell(resolved, listOf("input", "tap", x.toString(), y.toString()))
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -604,14 +615,14 @@ class DesktopMcpServerService(
 
         mcpServer.registerTool(
             "swipe",
-            "Swipe on the screen from start to end coordinates",
+            "Swipe on the screen from start to end coordinates (Android adb input, or iOS Simulator HID)",
             mapOf(
                 "startX" to intProp("Start X coordinate"),
                 "startY" to intProp("Start Y coordinate"),
                 "endX" to intProp("End X coordinate"),
                 "endY" to intProp("End Y coordinate"),
                 "durationMillis" to intProp("Duration in milliseconds"),
-                "serial" to stringProp("Optional target device serial")
+                "serial" to stringProp("Optional target device serial or iOS UDID")
             ),
             listOf("startX", "startY", "endX", "endY", "durationMillis")
         ) { args ->
@@ -620,7 +631,20 @@ class DesktopMcpServerService(
             val endX = args["endX"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("endX is required")
             val endY = args["endY"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("endY is required")
             val duration = args["durationMillis"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("durationMillis is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (targets.isIos(resolved)) {
+                if (targets.isPhysicalIos(resolved)) {
+                    return@registerTool CallToolResult(
+                        content = listOf(TextContent(text = "Physical iOS input is not supported (simulator only)")),
+                        isError = true,
+                    )
+                }
+                val result = iosDevices.swipe(resolved, startX, startY, endX, endY, duration)
+                return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
+                    isError = !result.isSuccess,
+                )
+            }
             val result = devices.shell(resolved, listOf("input", "swipe", startX.toString(), startY.toString(), endX.toString(), endY.toString(), duration.toString()))
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -630,15 +654,28 @@ class DesktopMcpServerService(
 
         mcpServer.registerTool(
             "input_text",
-            "Input text into the active focused element",
+            "Input text into the active focused element (Android adb input, or iOS Simulator HID)",
             mapOf(
-                "text" to stringProp("Text to type (spaces will be automatically replaced with %s)"),
-                "serial" to stringProp("Optional target device serial")
+                "text" to stringProp("Text to type (spaces will be automatically replaced with %s on Android)"),
+                "serial" to stringProp("Optional target device serial or iOS UDID")
             ),
             listOf("text")
         ) { args ->
             val text = args["text"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("text is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (targets.isIos(resolved)) {
+                if (targets.isPhysicalIos(resolved)) {
+                    return@registerTool CallToolResult(
+                        content = listOf(TextContent(text = "Physical iOS input is not supported (simulator only)")),
+                        isError = true,
+                    )
+                }
+                val result = iosDevices.inputText(resolved, text)
+                return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
+                    isError = !result.isSuccess,
+                )
+            }
             val result = devices.shell(resolved, listOf("input", "text", text.replace(" ", "%s")))
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -648,15 +685,44 @@ class DesktopMcpServerService(
 
         mcpServer.registerTool(
             "press_key",
-            "Press a key event on the target device (back, home, recents, power, or integer code)",
+            "Press a key event (Android keyevent, or iOS Simulator home/power buttons)",
             mapOf(
-                "key" to stringProp("Key name (back, home, recents, power) or an integer keycode (e.g. 26 for power)"),
-                "serial" to stringProp("Optional target device serial")
+                "key" to stringProp("Key name (back, home, recents, power) or an integer Android keycode"),
+                "serial" to stringProp("Optional target device serial or iOS UDID")
             ),
             listOf("key")
         ) { args ->
             val key = args["key"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("key is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (targets.isIos(resolved)) {
+                if (targets.isPhysicalIos(resolved)) {
+                    return@registerTool CallToolResult(
+                        content = listOf(TextContent(text = "Physical iOS input is not supported (simulator only)")),
+                        isError = true,
+                    )
+                }
+                val button = when (key.lowercase()) {
+                    "home" -> "home"
+                    "power" -> "power"
+                    "back", "recents" -> {
+                        return@registerTool CallToolResult(
+                            content = listOf(TextContent(text = "No iOS equivalent for '$key'")),
+                            isError = true,
+                        )
+                    }
+                    else -> {
+                        return@registerTool CallToolResult(
+                            content = listOf(TextContent(text = "iOS Simulator press_key supports home or power only")),
+                            isError = true,
+                        )
+                    }
+                }
+                val result = iosDevices.pressButton(resolved, button)
+                return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
+                    isError = !result.isSuccess,
+                )
+            }
             val code = when (key.lowercase()) {
                 "back" -> "4"
                 "home" -> "3"
@@ -676,7 +742,7 @@ class DesktopMcpServerService(
             "Take a screenshot of the specified device (returns base64 PNG)",
             mapOf("serial" to stringProp("Optional target device serial"))
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val bytes = mirror.screenshot(resolved) ?: throw RuntimeException("Screenshot failed")
             val base64 = Base64.getEncoder().encodeToString(bytes)
             CallToolResult(
@@ -689,7 +755,7 @@ class DesktopMcpServerService(
             "Dump the accessibility node tree from the active window as JSON",
             mapOf("serial" to stringProp("Optional target device serial"))
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val rootNode = accessibility.dump(resolved)
             if (rootNode == null) {
                 CallToolResult(
@@ -719,7 +785,7 @@ class DesktopMcpServerService(
                 "compressed" to boolProp("Use uiautomator dump --compressed: faster, drops non-interesting nodes (default false)"),
             ),
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val options = HierarchyOptions(
                 includeInvisible = args["includeInvisible"]?.jsonPrimitive?.booleanOrNull ?: false,
                 unmergedSemantics = args["unmergedSemantics"]?.jsonPrimitive?.booleanOrNull ?: false,
@@ -758,7 +824,7 @@ class DesktopMcpServerService(
             listOf("query"),
         ) { args ->
             val query = args["query"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("query is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val maxResults = args["maxResults"]?.jsonPrimitive?.intOrNull ?: 10
             viewHierarchy.capture(resolved).fold(
                 onSuccess = { snapshot ->
@@ -807,7 +873,7 @@ class DesktopMcpServerService(
             val resourceId = args["resourceId"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
             val query = args["query"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
             if (resourceId == null && query == null) throw IllegalArgumentException("Provide resourceId and/or query")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             viewHierarchy.capture(resolved).fold(
                 onSuccess = { snapshot ->
                     fun matches(node: AccessibilityNode): Boolean {
@@ -871,7 +937,7 @@ class DesktopMcpServerService(
             "List installed apps on the device",
             mapOf("serial" to stringProp("Optional target device serial"))
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val list = apps.listApps(resolved)
             val json = buildJsonArray {
                 list.forEach { app ->
@@ -898,7 +964,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.launch(resolved, packageName)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -916,7 +982,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.stop(resolved, packageName)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -934,7 +1000,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.clearData(resolved, packageName)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -952,7 +1018,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.uninstall(resolved, packageName)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -972,7 +1038,7 @@ class DesktopMcpServerService(
         ) { args ->
             val apkPath = args["apkPath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("apkPath is required")
             val replace = args["replace"]?.jsonPrimitive?.booleanOrNull ?: false
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = apps.install(resolved, apkPath, replace)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -990,7 +1056,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val list = apps.listPermissions(resolved, packageName)
             val json = buildJsonArray {
                 list.forEach { perm ->
@@ -1013,7 +1079,7 @@ class DesktopMcpServerService(
             listOf("packageName")
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val list = apps.listActivities(resolved, packageName)
             val json = buildJsonArray {
                 list.forEach { act ->
@@ -1040,7 +1106,7 @@ class DesktopMcpServerService(
                 "extras" to arrayObjectProp("Extras to include: list of { key: string, type: string (string|boolean|int|long|float), value: string }")
             )
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val modeStr = args["mode"]?.jsonPrimitive?.contentOrNull?.lowercase()
             val intentMode = when (modeStr) {
                 "activity" -> IntentMode.Activity
@@ -1089,7 +1155,7 @@ class DesktopMcpServerService(
             listOf("path")
         ) { args ->
             val path = args["path"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("path is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val list = files.list(resolved, path)
             val json = buildJsonArray {
                 list.forEach { f ->
@@ -1118,7 +1184,7 @@ class DesktopMcpServerService(
         ) { args ->
             val remotePath = args["remotePath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("remotePath is required")
             val localPath = args["localPath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("localPath is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = files.pull(resolved, remotePath, localPath)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -1138,7 +1204,7 @@ class DesktopMcpServerService(
         ) { args ->
             val localPath = args["localPath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("localPath is required")
             val remotePath = args["remotePath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("remotePath is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = files.push(resolved, localPath, remotePath)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -1156,7 +1222,7 @@ class DesktopMcpServerService(
             listOf("remotePath")
         ) { args ->
             val remotePath = args["remotePath"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("remotePath is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = files.delete(resolved, remotePath)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -1354,7 +1420,7 @@ class DesktopMcpServerService(
         ) { args ->
             val host = args["host"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("host is required")
             val port = args["port"]?.jsonPrimitive?.int ?: throw IllegalArgumentException("port is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = proxy.configureDeviceProxy(resolved, host, port)
             CallToolResult(
                 content = listOf(TextContent(text = "Result: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}")),
@@ -1446,7 +1512,13 @@ class DesktopMcpServerService(
                 "level" to stringProp("Filter minimum log level (verbose, debug, info, warn, error, fatal, silent)")
             )
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
+            if (targets.isPhysicalIos(resolved)) {
+                return@registerTool CallToolResult(
+                    content = listOf(TextContent(text = "Physical iOS log streaming is not supported yet")),
+                    isError = true,
+                )
+            }
             val search = args["search"]?.jsonPrimitive?.contentOrNull ?: ""
             val limit = args["limit"]?.jsonPrimitive?.int ?: 100
             val lvlStr = args["level"]?.jsonPrimitive?.contentOrNull
@@ -1492,7 +1564,7 @@ class DesktopMcpServerService(
             val lon = args["longitude"]?.jsonPrimitive?.content?.toDoubleOrNull()
                 ?: throw IllegalArgumentException("longitude is required")
             val alt = args["altitude"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.sendGeoFix(resolved, GeoFix(lat, lon, alt))
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1516,7 +1588,7 @@ class DesktopMcpServerService(
                 ?: throw IllegalArgumentException("Unknown sensor: $name")
             val values = args["values"]?.jsonPrimitive?.content?.split(':')?.mapNotNull { it.trim().toFloatOrNull() }
                 ?: throw IllegalArgumentException("values is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.setSensor(resolved, sensor, values)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1534,7 +1606,7 @@ class DesktopMcpServerService(
                 "serial" to stringProp("Optional target device serial"),
             ),
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val messages = mutableListOf<String>()
             var failed = false
             args["level"]?.jsonPrimitive?.intOrNull?.let { level ->
@@ -1563,7 +1635,7 @@ class DesktopMcpServerService(
             "Reset dumpsys battery overrides on the device",
             mapOf("serial" to stringProp("Optional target device serial")),
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.resetBattery(resolved)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1582,7 +1654,7 @@ class DesktopMcpServerService(
         ) { args ->
             val statusCode = args["status"]?.jsonPrimitive?.intOrNull
                 ?: throw IllegalArgumentException("status is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.setThermalStatus(resolved, statusCode)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1601,7 +1673,7 @@ class DesktopMcpServerService(
         ) { args ->
             val number = args["number"]?.jsonPrimitive?.content
                 ?: throw IllegalArgumentException("number is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.simulateIncomingCall(resolved, number)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1623,7 +1695,7 @@ class DesktopMcpServerService(
                 ?: throw IllegalArgumentException("number is required")
             val message = args["message"]?.jsonPrimitive?.content
                 ?: throw IllegalArgumentException("message is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.sendSms(resolved, number, message)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1644,7 +1716,7 @@ class DesktopMcpServerService(
                 ?: throw IllegalArgumentException("type is required")
             val type = GsmDataType.entries.firstOrNull { it.emuValue.equals(typeName, true) || it.name.equals(typeName, true) }
                 ?: throw IllegalArgumentException("Unknown network type: $typeName")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = emulatorControls.setNetworkType(resolved, type)
             CallToolResult(
                 content = listOf(TextContent(text = result.stdout.ifBlank { result.stderr })),
@@ -1665,7 +1737,7 @@ class DesktopMcpServerService(
             val tag = args["tag"]?.jsonPrimitive?.content
                 ?: throw IllegalArgumentException("tag is required")
             val allowRestart = args["allowRestart"]?.jsonPrimitive?.booleanOrNull ?: false
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val change = emulatorControls.setDeviceLocale(resolved, tag, allowFrameworkRestart = allowRestart)
             CallToolResult(
                 content = listOf(TextContent(text = "${change.result.stdout.ifBlank { change.result.stderr }} (${change.method.label})")),
@@ -1678,7 +1750,7 @@ class DesktopMcpServerService(
             "List crash/ANR/watchdog records from dumpsys dropbox, /data/anr, and /data/tombstones",
             mapOf("serial" to stringProp("Optional target device serial")),
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val list = crashInspector.listCrashes(resolved)
             val json = buildJsonArray {
                 list.forEach { crash ->
@@ -1704,7 +1776,7 @@ class DesktopMcpServerService(
             listOf("id"),
         ) { args ->
             val id = args["id"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("id is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val text = crashInspector.loadCrash(resolved, id)
             CallToolResult(content = listOf(TextContent(text = text)))
         }
@@ -1721,7 +1793,7 @@ class DesktopMcpServerService(
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
             val localPath = args["localPath"]?.jsonPrimitive?.contentOrNull ?: ""
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val result = heapDump.capture(resolved, packageName, localPath)
             result.fold(
                 onSuccess = { info ->
@@ -1743,7 +1815,7 @@ class DesktopMcpServerService(
             listOf("packageName"),
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.content ?: throw IllegalArgumentException("packageName is required")
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val breakdown = metrics.meminfoBreakdown(resolved, packageName)
                 ?: return@registerTool CallToolResult(
                     content = listOf(TextContent(text = "No meminfo breakdown available for $packageName")),
@@ -1772,7 +1844,7 @@ class DesktopMcpServerService(
             ),
         ) { args ->
             val packageName = args["packageName"]?.jsonPrimitive?.contentOrNull
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveAndroidTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             val summary = metrics.batteryStatsSummary(resolved, packageName)
             val json = buildJsonObject {
                 putJsonArray("wakelocks") {
@@ -1805,7 +1877,7 @@ class DesktopMcpServerService(
                 "(the same path as the Live toolbar record button). Ends any active rolling bug-capture window.",
             mapOf("serial" to stringProp("Optional target device serial")),
         ) { args ->
-            val resolved = resolveSerial(args["serial"]?.jsonPrimitive?.contentOrNull)
+            val resolved = resolveTarget(args["serial"]?.jsonPrimitive?.contentOrNull)
             if (mirror.session.first()?.serial != resolved) {
                 mirror.connect(resolved)
             }
@@ -1914,6 +1986,13 @@ class DesktopMcpServerService(
             }
         }
 
+        registerIosMcpTools(
+            iosDevices = iosDevices,
+            stringProp = { stringProp(it) },
+            register = { name, description, properties, required, handler ->
+                mcpServer.registerTool(name, description, properties, required, handler)
+            },
+        )
     }
 
     private fun Server.registerTool(

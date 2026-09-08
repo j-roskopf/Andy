@@ -39,14 +39,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.Button
 import app.andy.ui.components.Card
+import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
+import com.joetr.andy.mobile.data.networkaccess.ProviderAuthRecoveryDto
+import com.joetr.andy.mobile.data.networkaccess.ProviderLoginResponse
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
@@ -69,6 +76,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import com.joetr.andy.mobile.data.networkaccess.showImplementPlan
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.delay
@@ -85,6 +93,7 @@ fun ChatScreen(
 ) {
     val tokens = andyTokens()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     var chat by remember { mutableStateOf<ChatDto?>(null) }
     var events by remember { mutableStateOf<List<ChatEventDto>>(emptyList()) }
@@ -93,6 +102,7 @@ fun ChatScreen(
     var loading by remember { mutableStateOf(true) }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var authLoginNotice by remember { mutableStateOf<String?>(null) }
     var optimistic by remember { mutableStateOf<String?>(null) }
     var transcriptPrefs by remember { mutableStateOf(TranscriptSettingsDto()) }
     var expandedOverrides by remember { mutableStateOf(setOf<String>()) }
@@ -156,12 +166,6 @@ fun ChatScreen(
             keepThinkingOnTimeline = transcriptPrefs.showThinkingOnTimeline,
         )
     }
-    val visibleCount = displayItems.size + if (optimistic != null) 1 else 0
-    LaunchedEffect(visibleCount) {
-        if (visibleCount > 0) {
-            listState.animateScrollToItem(visibleCount - 1)
-        }
-    }
 
     Column(
         modifier = modifier
@@ -211,27 +215,34 @@ fun ChatScreen(
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     state = listState,
+                    reverseLayout = true,
                     contentPadding = PaddingValues(AndySpace.Space4),
                     verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                 ) {
+                    // reverseLayout puts index 0 at the visual bottom — declare newest first.
+                    optimistic?.let { text ->
+                        item(key = "optimistic") {
+                            TranscriptBubble(ChatEventDto(type = "user", text = text))
+                        }
+                    }
                     items(
                         displayItems.size,
-                        key = { idx ->
-                            when (val item = displayItems[idx]) {
+                        key = { reversedIndex ->
+                            when (val item = displayItems[displayItems.lastIndex - reversedIndex]) {
                                 is WireDisplayItem.Event ->
                                     "e-${item.index}-${item.event.type}-${item.event.atMillis}"
                                 is WireDisplayItem.ToolGroup ->
                                     "g-${item.startIndex}-${item.events.size}"
                             }
                         },
-                        contentType = { idx ->
-                            when (displayItems[idx]) {
+                        contentType = { reversedIndex ->
+                            when (displayItems[displayItems.lastIndex - reversedIndex]) {
                                 is WireDisplayItem.Event -> "event"
                                 is WireDisplayItem.ToolGroup -> "group"
                             }
                         },
-                    ) { idx ->
-                        when (val item = displayItems[idx]) {
+                    ) { reversedIndex ->
+                        when (val item = displayItems[displayItems.lastIndex - reversedIndex]) {
                             is WireDisplayItem.ToolGroup -> {
                                 val key = "group-${item.startIndex}"
                                 ActivityRow(
@@ -302,9 +313,74 @@ fun ChatScreen(
                             }
                         }
                     }
-                    optimistic?.let { text ->
-                        item(key = "optimistic") {
-                            TranscriptBubble(ChatEventDto(type = "user", text = text))
+                }
+            }
+        }
+
+        val authRecovery = chat?.providerAuthRecovery?.takeIf { it.needed && it.command.isNotBlank() }
+        val taskError = chat?.errorMessage?.takeIf { it.isNotBlank() }
+
+        if (taskError != null || authRecovery != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AndySpace.Space4, vertical = AndySpace.Space2),
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+            ) {
+                taskError?.let {
+                    Text(
+                        it,
+                        color = tokens.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                authRecovery?.let { recovery ->
+                    Text(
+                        "Sign-in has to finish on your Mac",
+                        color = tokens.palette.textPrimary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        recovery.remoteInstructions.ifBlank {
+                            recovery.instructions.ifBlank {
+                                "This phone can’t complete provider OAuth. Sign in on the Andy host, then retry here."
+                            }
+                        },
+                        color = tokens.palette.textSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    authLoginNotice?.let { notice ->
+                        Text(
+                            notice,
+                            color = tokens.palette.textSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboard(context, recovery.command)
+                                authLoginNotice = "Copied for your Mac: ${recovery.command}"
+                            },
+                        ) {
+                            Text("Copy for Mac")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboard(context, recovery.command)
+                                scope.launch {
+                                    try {
+                                        val result = client.openProviderLogin(chatId)
+                                        authLoginNotice = providerLoginNotice(result, recovery)
+                                    } catch (e: Exception) {
+                                        authLoginNotice = e.message
+                                            ?: "Couldn’t reach the host — on your Mac run: ${recovery.command}"
+                                    }
+                                }
+                            },
+                        ) {
+                            Text("Open on Mac")
                         }
                     }
                 }
@@ -484,11 +560,7 @@ private fun PlanDocumentCard(
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
             if (markdown.isNotBlank()) {
-                Text(
-                    markdown,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = tokens.palette.textPrimary,
-                )
+                ChatMarkdown(markdown, lineHeight = 20.sp)
             }
             entries.forEachIndexed { index, entry ->
                 Row(
@@ -502,11 +574,7 @@ private fun PlanDocumentCard(
                         color = tokens.palette.textTertiary,
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            entry.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = tokens.palette.textPrimary,
-                        )
+                        ChatMarkdown(entry.content, lineHeight = 19.sp)
                         if (entry.status.isNotBlank() && !entry.status.equals("pending", ignoreCase = true)) {
                             Text(
                                 entry.status,
@@ -687,31 +755,39 @@ private fun TranscriptBubble(event: ChatEventDto) {
         isError -> BorderStroke(1.dp, tokens.error.copy(alpha = 0.4f))
         else -> BorderStroke(1.dp, tokens.palette.border)
     }
+    val message = event.text.ifBlank {
+        when (event.type) {
+            "permission-resolved" -> "Permission ${if (event.allowed == true) "allowed" else "rejected"}"
+            else -> event.type
+        }
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
-        Text(
-            text = event.text.ifBlank {
-                when (event.type) {
-                    "permission-resolved" -> "Permission ${if (event.allowed == true) "allowed" else "rejected"}"
-                    else -> event.type
-                }
-            },
+        Column(
             modifier = Modifier
                 .widthIn(max = 340.dp)
                 .clip(bubbleShape)
                 .border(borderStroke, bubbleShape)
                 .background(bg)
                 .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
-            style = if (isThinking) {
-                MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont)
+        ) {
+            if (event.type == "assistant") {
+                ChatMarkdown(message, lineHeight = 20.sp)
             } else {
-                MaterialTheme.typography.bodyLarge
-            },
-            color = fg,
-        )
+                Text(
+                    text = message,
+                    style = if (isThinking) {
+                        MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont)
+                    } else {
+                        MaterialTheme.typography.bodyLarge
+                    },
+                    color = fg,
+                )
+            }
+        }
     }
 }
 
@@ -829,5 +905,28 @@ private fun PermissionCard(
                 }
             }
         }
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("provider login", text))
+}
+
+private fun providerLoginNotice(
+    result: ProviderLoginResponse,
+    recovery: ProviderAuthRecoveryDto,
+): String {
+    val command = result.command.ifBlank { recovery.command }
+    return when {
+        result.opened ->
+            result.message.ifBlank {
+                "Opened Terminal on your Mac. Switch to that computer, finish sign-in, then retry here."
+            }
+        else ->
+            listOfNotNull(
+                result.message.takeIf { it.isNotBlank() },
+                "On your Mac run: $command",
+            ).joinToString(" — ")
     }
 }

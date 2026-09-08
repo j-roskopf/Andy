@@ -88,6 +88,46 @@ class DesktopPopOutMirrorPoolTest {
     }
 
     @Test
+    fun releaseHoldIsSynchronousSoUnpauseCanReacquireBeforeDisconnect() = runBlocking {
+        val pool = DesktopPopOutMirrorPool(
+            primary = RoutingMirrorEngine(TrackingSessionMirrorEngine(), TrackingSessionMirrorEngine()),
+            newAndroid = { TrackingSessionMirrorEngine() },
+            newIos = { TrackingSessionMirrorEngine() },
+        )
+
+        val original = pool.acquire("device-1")
+        // Pause: drop the hold immediately, disconnect later (as Main does on IO).
+        val doomed = pool.releaseHold("device-1")
+        assertSame(original, doomed)
+        assertNull(pool.engine("device-1"))
+        assertEquals(0, pool.holdCount("device-1"))
+
+        // Unpause before the old engine finishes disconnecting.
+        val restored = pool.acquire("device-1")
+        assertNotSame(original, restored)
+        assertSame(restored, pool.engine("device-1"))
+        assertEquals(1, pool.holdCount("device-1"))
+
+        doomed!!.disconnect(immediate = true)
+        // Stale disconnect must not clear the engine restored for the dock pane.
+        assertSame(restored, pool.engine("device-1"))
+        assertEquals(1, pool.holdCount("device-1"))
+    }
+
+    @Test
+    fun releaseHoldIsNoOpWhenNotHeld() {
+        val pool = DesktopPopOutMirrorPool(
+            primary = RoutingMirrorEngine(TrackingSessionMirrorEngine(), TrackingSessionMirrorEngine()),
+            newAndroid = { TrackingSessionMirrorEngine() },
+            newIos = { TrackingSessionMirrorEngine() },
+        )
+        assertNull(pool.releaseHold("missing"))
+        pool.acquire("device-1")
+        assertTrue(pool.releaseHold("device-1") != null)
+        assertNull(pool.releaseHold("device-1"))
+    }
+
+    @Test
     fun takeOverPrimaryAndroidMovesLiveEngineWithoutClearingItsSession() = runBlocking {
         val liveAndroid = TrackingSessionMirrorEngine()
         val primary = RoutingMirrorEngine(liveAndroid, TrackingSessionMirrorEngine())

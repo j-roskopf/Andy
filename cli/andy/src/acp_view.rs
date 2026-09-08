@@ -59,11 +59,19 @@ struct ChatMeta {
     lane: String,
     cwd: String,
     origin_dir: String,
+    error_message: Option<String>,
+    provider_auth_recovery: Option<ProviderAuthRecovery>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QueuedFollowUp {
     text: String,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderAuthRecovery {
+    command: String,
+    instructions: String,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +84,8 @@ struct LiveSnapshot {
     prefer_queue: bool,
     /// Pending permission / ask-user from chat.status (authoritative while Blocked).
     user_input_request: Option<PendingUserInput>,
+    error_message: String,
+    provider_auth_recovery: Option<ProviderAuthRecovery>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +122,8 @@ struct ViewState {
     connection_issue: Option<ConnectionIssue>,
     connection_error: Option<String>,
     status_flash: Option<String>,
+    error_message: Option<String>,
+    provider_auth_recovery: Option<ProviderAuthRecovery>,
     /// When false (default), hide tools/commands/raw/usage/thinking/etc. and show
     /// only the conversation transcript. Toggle with `v`; default on via
     /// `ANDY_ACP_VIEW_DETAILS=1`.
@@ -189,6 +201,8 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             connection_issue: None,
             connection_error: None,
             status_flash: None,
+            error_message: meta.error_message.clone(),
+            provider_auth_recovery: meta.provider_auth_recovery.clone(),
             show_details: details_default_from_env(),
             loading_transcript: true,
             slash_menu: SlashMenuState::default(),
@@ -544,6 +558,68 @@ async fn handle_key(
                 }
             }
         }
+        MappedKey::ProviderLogin => {
+            let agent = meta.agent.clone().unwrap_or_default();
+            let args = if agent.is_empty() {
+                json!({ "taskId": meta.id })
+            } else {
+                json!({ "taskId": meta.id, "agent": agent })
+            };
+            match client.call_tool("chat.provider_login", args).await {
+                Ok(raw) => {
+                    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                    let command = v
+                        .get("command")
+                        .and_then(|s| s.as_str())
+                        .or_else(|| {
+                            state
+                                .provider_auth_recovery
+                                .as_ref()
+                                .map(|r| r.command.as_str())
+                        })
+                        .unwrap_or("")
+                        .to_string();
+                    let opened = v.get("opened").and_then(|b| b.as_bool()).unwrap_or(false);
+                    let message = v
+                        .get("message")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    state.status_flash = Some(if opened {
+                        if message.is_empty() {
+                            "opened host login terminal — finish sign-in, then retry".into()
+                        } else {
+                            message
+                        }
+                    } else if !command.is_empty() {
+                        format!(
+                            "{} — run on host: {command}",
+                            if message.is_empty() {
+                                "could not open host terminal"
+                            } else {
+                                message.as_str()
+                            }
+                        )
+                    } else if message.is_empty() {
+                        "provider login failed".into()
+                    } else {
+                        message
+                    });
+                }
+                Err(err) => {
+                    let command = state
+                        .provider_auth_recovery
+                        .as_ref()
+                        .map(|r| r.command.as_str())
+                        .unwrap_or("");
+                    state.status_flash = Some(if command.is_empty() {
+                        format!("provider login failed: {err:#}")
+                    } else {
+                        format!("provider login failed: {err:#} — run on host: {command}")
+                    });
+                }
+            }
+        }
         MappedKey::PickImage => {
             let start = if !meta.cwd.is_empty() {
                 PathBuf::from(&meta.cwd)
@@ -681,6 +757,7 @@ enum MappedKey {
     Retry,
     Stop,
     ImplementPlan,
+    ProviderLogin,
     PickImage,
     ToggleExpand,
     ToggleDetails,
@@ -789,7 +866,37 @@ fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
             .and_then(|s| s.as_str())
             .is_some_and(|s| s.eq_ignore_ascii_case("Queue")),
         user_input_request: parse_user_input_request(v.get("userInputRequest")),
+        error_message: v
+            .get("errorMessage")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+        provider_auth_recovery: parse_provider_auth_recovery(v.get("providerAuthRecovery")),
     }
+}
+
+fn parse_provider_auth_recovery(value: Option<&Value>) -> Option<ProviderAuthRecovery> {
+    let obj = value?;
+    if obj.get("needed").and_then(|b| b.as_bool()) == Some(false) {
+        return None;
+    }
+    let command = obj
+        .get("command")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if command.is_empty() {
+        return None;
+    }
+    Some(ProviderAuthRecovery {
+        command,
+        instructions: obj
+            .get("instructions")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
 }
 
 fn parse_queued_follow_ups(value: Option<&Value>) -> Vec<QueuedFollowUp> {
@@ -831,6 +938,12 @@ async fn refresh_live_state(client: &mut McpClient, task_id: &str, state: &mut V
         state.composer_enabled = !matches!(state.status.as_str(), "Error" | "Failed" | "Stopped");
     }
     state.queued_follow_ups = snap.queued_follow_ups;
+    state.error_message = if snap.error_message.is_empty() {
+        None
+    } else {
+        Some(snap.error_message)
+    };
+    state.provider_auth_recovery = snap.provider_auth_recovery;
     apply_user_input_from_status(state, snap.user_input_request);
 }
 
@@ -1073,6 +1186,13 @@ fn map_key_action(state: &ViewState, key: KeyEvent) -> MappedKey {
         KeyCode::Esc => MappedKey::Exit,
         KeyCode::Char('q') if state.input.is_empty() && modifiers_allow_typing(key.modifiers) => {
             MappedKey::Exit
+        }
+        KeyCode::Char('L')
+            if state.input.is_empty()
+                && state.provider_auth_recovery.is_some()
+                && modifiers_allow_typing(key.modifiers) =>
+        {
+            MappedKey::ProviderLogin
         }
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => MappedKey::Stop,
         // Ctrl-I is encoded as Tab (0x09) on standard terminals, so accept both the literal
@@ -1353,6 +1473,19 @@ fn draw(
     };
     let composer = if let Some(err) = &state.connection_error {
         format!(" {err} ")
+    } else if let Some(recovery) = &state.provider_auth_recovery {
+        let err = state.error_message.as_deref().unwrap_or("Not logged in");
+        let hint = if recovery.instructions.is_empty() {
+            String::new()
+        } else {
+            format!("  ·  {}", recovery.instructions)
+        };
+        format!(
+            " {err}  ·  {cmd}{hint}  ·  press L to Sign in ",
+            cmd = recovery.command
+        )
+    } else if let Some(err) = &state.error_message {
+        format!(" {err} ")
     } else if let Some(pending) = &state.pending_input {
         format_pending_composer(pending, state)
     } else if !state.composer_enabled {
@@ -1369,6 +1502,8 @@ fn draw(
 
     let footer = if state.connection_issue == Some(ConnectionIssue::Lost) {
         " Lost connection to andyd — press r to retry, q/Esc to quit ".to_string()
+    } else if state.provider_auth_recovery.is_some() {
+        " Provider auth must finish on the Andy host — press L to open Terminal there, then retry ".to_string()
     } else if let Some(pending) = &state.pending_input {
         if pending.is_permission() {
             format!(
@@ -1976,6 +2111,17 @@ async fn load_meta(client: &mut McpClient, task_id: &str) -> Result<ChatMeta> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        error_message: if snap.error_message.is_empty() {
+            row.and_then(|r| r.get("errorMessage"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        } else {
+            Some(snap.error_message)
+        },
+        provider_auth_recovery: snap.provider_auth_recovery.or_else(|| {
+            parse_provider_auth_recovery(row.and_then(|r| r.get("providerAuthRecovery")))
+        }),
     })
 }
 
@@ -2048,6 +2194,8 @@ mod tests {
             connection_issue: None,
             connection_error: None,
             status_flash: None,
+            error_message: None,
+            provider_auth_recovery: None,
             show_details: false,
             loading_transcript: false,
             slash_menu: SlashMenuState::default(),

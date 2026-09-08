@@ -1,10 +1,5 @@
 package com.joetr.andy.mobile.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.andy.ui.components.Badge
 import app.andy.ui.components.BadgeVariant
 import app.andy.ui.components.Button
@@ -61,7 +57,6 @@ import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
 import app.andy.ui.components.TextButton
 import app.andy.ui.theme.AndyLayout
-import app.andy.ui.theme.AndyMotion
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -75,7 +70,6 @@ import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import com.joetr.andy.mobile.data.networkaccess.ProjectGroup
 import com.joetr.andy.mobile.data.networkaccess.awaitingPlanConfirmation
 import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
-import com.joetr.andy.mobile.data.networkaccess.groupChatsByProject
 import kotlinx.coroutines.launch
 
 @Composable
@@ -84,6 +78,7 @@ fun ProjectsScreen(
     repository: HostRepository,
     networkClient: NetworkAccessClient?,
     okHttpClient: okhttp3.OkHttpClient,
+    viewModel: ProjectsViewModel,
     onClientReady: (NetworkAccessClient) -> Unit,
     onSignedOut: () -> Unit = {},
     onOpenChat: (String) -> Unit,
@@ -129,35 +124,28 @@ fun ProjectsScreen(
     val scope = rememberCoroutineScope()
     var authModePassword by remember { mutableStateOf(true) }
     var authCredentialInput by remember { mutableStateOf("") }
-    var signedIn by remember { mutableStateOf(networkClient?.sessionToken != null) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var groups by remember { mutableStateOf<List<ProjectGroup>>(emptyList()) }
-    var expanded by remember { mutableStateOf(setOf<String>()) }
+    val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
+    val loading by viewModel.loading.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
+    val groups by viewModel.groups.collectAsStateWithLifecycle()
+    val expanded by viewModel.expandedProjectIds.collectAsStateWithLifecycle()
 
-    suspend fun refresh(client: NetworkAccessClient) {
-        loading = true
-        error = null
+    suspend fun handleAuthFailure(e: NetworkAccessException, clearLegacy: Boolean = false) {
+        val authDead = e.unauthorized ||
+            e.message.orEmpty().contains("too many failed auth", ignoreCase = true)
+        if (authDead) {
+            viewModel.markSignedOut()
+            repository.saveNetworkAccessSession(host.id, null)
+            if (clearLegacy) repository.clearLegacyNetworkAccessToken(host.id)
+            onSignedOut()
+        }
+    }
+
+    suspend fun refresh(client: NetworkAccessClient, showLoading: Boolean) {
         try {
-            val projects = client.listProjects()
-            val chats = client.listChats()
-            groups = groupChatsByProject(projects, chats)
-            signedIn = true
+            viewModel.refresh(client, host.id, showLoading = showLoading)
         } catch (e: NetworkAccessException) {
-            error = e.message
-            // 401 or IP auth cooldown from a dead stored session — drop it so the user
-            // can password-login cleanly (and so AttentionPushService is stopped).
-            val authDead = e.unauthorized ||
-                e.message.orEmpty().contains("too many failed auth", ignoreCase = true)
-            if (authDead) {
-                signedIn = false
-                repository.saveNetworkAccessSession(host.id, null)
-                onSignedOut()
-            }
-        } catch (e: Exception) {
-            error = e.message ?: "Failed to load chats"
-        } finally {
-            loading = false
+            handleAuthFailure(e)
         }
     }
 
@@ -166,29 +154,44 @@ fun ProjectsScreen(
         if (session.isNullOrBlank()) throw NetworkAccessException("Login failed")
         repository.saveNetworkAccessSession(host.id, session)
         onClientReady(client)
-        refresh(client)
+        refresh(client, showLoading = true)
     }
 
     LaunchedEffect(host.id) {
         authCredentialInput = ""
+        // Returning from a chat remounts this screen — keep the cached list and only
+        // refresh quietly in the background when we already loaded this host.
+        if (viewModel.hasCachedProjects(host.id)) {
+            val existing = networkClient
+            if (existing?.sessionToken != null) {
+                refresh(existing, showLoading = false)
+                return@LaunchedEffect
+            }
+        }
         val storedSession = repository.networkAccessSession(host.id)
         val legacyToken = repository.legacyNetworkAccessToken(host.id)
         when {
             !storedSession.isNullOrBlank() -> {
-                val client = NetworkAccessClient(
-                    host.resolvedNetworkAccessBaseUrl(),
-                    okHttpClient = okHttpClient,
-                )
-                client.sessionToken = storedSession
+                val existing = networkClient
+                val client = if (existing != null && existing.sessionToken == storedSession) {
+                    existing
+                } else {
+                    NetworkAccessClient(
+                        host.resolvedNetworkAccessBaseUrl(),
+                        okHttpClient = okHttpClient,
+                    ).also { it.sessionToken = storedSession }
+                }
                 try {
                     onClientReady(client)
-                    refresh(client)
+                    refresh(client, showLoading = !viewModel.hasCachedProjects(host.id))
                 } catch (e: Exception) {
-                    signedIn = false
-                    error = e.message
+                    viewModel.markSignedOut()
+                    if (e !is NetworkAccessException) {
+                        viewModel.setError(e.message)
+                    }
                     repository.saveNetworkAccessSession(host.id, null)
                     onSignedOut()
-                    client.close()
+                    if (client !== networkClient) client.close()
                 }
             }
             !legacyToken.isNullOrBlank() -> {
@@ -200,16 +203,14 @@ fun ProjectsScreen(
                     client.loginWithToken(legacyToken)
                     completeLogin(client)
                 } catch (e: Exception) {
-                    signedIn = false
-                    error = e.message
+                    viewModel.markSignedOut()
                     repository.clearLegacyNetworkAccessToken(host.id)
                     onSignedOut()
                     client.close()
                 }
             }
             else -> {
-                signedIn = false
-                groups = emptyList()
+                viewModel.markSignedOut()
                 onSignedOut()
             }
         }
@@ -228,7 +229,7 @@ fun ProjectsScreen(
                     if (signedIn) {
                         IconButton(
                             onClick = {
-                                scope.launch { networkClient?.let { refresh(it) } }
+                                scope.launch { networkClient?.let { refresh(it, showLoading = groups.isEmpty()) } }
                             },
                             modifier = Modifier.size(AndyLayout.ControlHeightMd),
                             contentDescription = "Refresh",
@@ -327,13 +328,13 @@ fun ProjectsScreen(
                         Button(
                             onClick = {
                                 scope.launch {
-                                    loading = true
-                                    error = null
+                                    viewModel.setLoading(true)
+                                    viewModel.clearError()
                                     try {
                                         val client = NetworkAccessClient(
-                    host.resolvedNetworkAccessBaseUrl(),
-                    okHttpClient = okHttpClient,
-                )
+                                            host.resolvedNetworkAccessBaseUrl(),
+                                            okHttpClient = okHttpClient,
+                                        )
                                         if (authModePassword) {
                                             client.loginWithPassword(authCredentialInput)
                                         } else {
@@ -347,11 +348,11 @@ fun ProjectsScreen(
                                         authCredentialInput = ""
                                         completeLogin(client)
                                     } catch (e: Exception) {
-                                        signedIn = false
-                                        error = e.message ?: "Login failed"
+                                        viewModel.markSignedOut()
+                                        viewModel.setError(e.message ?: "Login failed")
                                         onSignedOut()
                                     } finally {
-                                        loading = false
+                                        viewModel.setLoading(false)
                                     }
                                 }
                             },
@@ -372,7 +373,7 @@ fun ProjectsScreen(
                 ) {
                     TextButton(
                         onClick = {
-                            signedIn = false
+                            viewModel.markSignedOut()
                             networkClient?.sessionToken = null
                             repository.saveNetworkAccessSession(host.id, null)
                             onSignedOut()
@@ -408,27 +409,44 @@ fun ProjectsScreen(
                         modifier = Modifier.fillMaxSize().padding(AndySpace.Space6),
                     )
                 } else {
+                    // Flatten headers + chats into one LazyColumn so expanding a project with
+                    // hundreds of chats only composes visible rows (no height animation of 500).
                     LazyColumn(
                         contentPadding = PaddingValues(
                             start = AndySpace.Space4,
                             end = AndySpace.Space4,
                             bottom = 96.dp,
                         ),
-                        verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
                     ) {
-                        items(groups, key = { it.projectId }, contentType = { "project" }) { group ->
-                            ProjectSection(
-                                group = group,
-                                expanded = group.projectId in expanded,
-                                onToggle = {
-                                    expanded = if (group.projectId in expanded) {
-                                        expanded - group.projectId
-                                    } else {
-                                        expanded + group.projectId
-                                    }
-                                },
-                                onOpenChat = onOpenChat,
-                            )
+                        groups.forEachIndexed { index, group ->
+                            val isExpanded = group.projectId in expanded
+                            if (index > 0) {
+                                item(
+                                    key = "gap-${group.projectId}",
+                                    contentType = "gap",
+                                ) {
+                                    Spacer(Modifier.height(AndySpace.Space3))
+                                }
+                            }
+                            item(
+                                key = "project-${group.projectId}",
+                                contentType = "project-header",
+                            ) {
+                                ProjectHeader(
+                                    group = group,
+                                    expanded = isExpanded,
+                                    onToggle = { viewModel.toggleProjectExpanded(group.projectId) },
+                                )
+                            }
+                            if (isExpanded) {
+                                items(
+                                    items = group.chats,
+                                    key = { chat -> "chat-${group.projectId}-${chat.id}" },
+                                    contentType = { "chat" },
+                                ) { chat ->
+                                    ChatRow(chat = chat, onClick = { onOpenChat(chat.id) })
+                                }
+                            }
                         }
                     }
                 }
@@ -451,11 +469,10 @@ fun ProjectsScreen(
 }
 
 @Composable
-private fun ProjectSection(
+private fun ProjectHeader(
     group: ProjectGroup,
     expanded: Boolean,
     onToggle: () -> Unit,
-    onOpenChat: (String) -> Unit,
 ) {
     val tokens = andyTokens()
     Card(
@@ -498,21 +515,6 @@ private fun ProjectSection(
                 label = "${group.chats.size}",
                 variant = BadgeVariant.Neutral,
             )
-        }
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn(AndyMotion.standardTween()) + expandVertically(AndyMotion.standardTween()),
-            exit = fadeOut(AndyMotion.standardTween()) + shrinkVertically(AndyMotion.standardTween()),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = AndySpace.Space2),
-            ) {
-                group.chats.forEach { chat ->
-                    ChatRow(chat = chat, onClick = { onOpenChat(chat.id) })
-                }
-            }
         }
     }
 }

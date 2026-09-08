@@ -1,5 +1,7 @@
 package app.andy.desktop.parser
 
+import app.andy.model.AndroidApp
+import app.andy.model.DeviceFile
 import app.andy.model.IosDeveloperModeStatus
 import app.andy.model.IosDeviceType
 import app.andy.model.IosRuntime
@@ -13,6 +15,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -161,6 +164,82 @@ object IosParsers {
     }
 
     /**
+     * Installed apps from `devicectl device info apps --include-all-apps --json-output`. This is
+     * the physical-device counterpart to simctl's `listapps` plist: Apple's preinstalled and
+     * carrier/internal apps come back flagged `defaultApp`/`internalApp`, which map onto
+     * [AndroidApp.system] so the Apps screen can hide them behind the same "system" filter.
+     */
+    fun parseDevicectlApps(output: String): List<AndroidApp> {
+        val root = runCatching { json.parseToJsonElement(output).jsonObject }.getOrNull() ?: return emptyList()
+        val apps = root["result"]?.jsonObject?.get("apps")?.array() ?: return emptyList()
+        return apps.mapNotNull { element ->
+            val app = element.obj() ?: return@mapNotNull null
+            val bundleId = app.string("bundleIdentifier") ?: return@mapNotNull null
+            val system = app.boolean("defaultApp") == true || app.boolean("internalApp") == true
+            AndroidApp(
+                packageName = bundleId,
+                label = app.string("name") ?: bundleId.substringAfterLast('.'),
+                system = system,
+                enabled = true,
+                versionName = app.string("version"),
+                versionCode = app.string("bundleVersion"),
+            )
+        }.sortedWith(compareBy<AndroidApp> { it.system }.thenBy { it.packageName })
+    }
+
+    /**
+     * Directory listing from `devicectl device info files --json-output`. The schema has moved
+     * across Xcode releases (`result.files` vs `result.items`, `path` vs `relativePath`, a
+     * `type` string vs an `isDirectory` flag), so every field is read defensively — a listing
+     * that half-matches is far more useful than an empty Files screen.
+     */
+    fun parseDevicectlFiles(output: String): List<DeviceFile> {
+        val root = runCatching { json.parseToJsonElement(output).jsonObject }.getOrNull() ?: return emptyList()
+        val result = root["result"]?.obj() ?: root
+        val entries = (result["files"] ?: result["items"])?.array() ?: return emptyList()
+        return entries.mapNotNull { element ->
+            val entry = element.obj() ?: return@mapNotNull null
+            val name = entry.string("name")
+            val path = entry.string("path") ?: entry.string("relativePath") ?: name ?: return@mapNotNull null
+            val isDirectory = entry.string("type")?.contains("directory", ignoreCase = true) == true ||
+                entry.boolean("isDirectory") == true
+            DeviceFile(
+                path = path,
+                name = name ?: path.trimEnd('/').substringAfterLast('/').ifBlank { path },
+                isDirectory = isDirectory,
+                sizeBytes = entry.long("size"),
+                permissions = null,
+                modified = entry.string("modificationDate") ?: entry.string("modified"),
+            )
+        }.sortedWith(compareByDescending<DeviceFile> { it.isDirectory }.thenBy { it.name.lowercase() })
+    }
+
+    /**
+     * Human-readable failure text from a `devicectl --json-output` payload. Developer Mode and
+     * DDI failures surface as `CoreDeviceError` objects whose only useful content is
+     * `NSLocalizedDescription`; without this the UI would only see a bare non-zero exit.
+     */
+    fun parseDevicectlErrorMessage(output: String): String? {
+        val root = runCatching { json.parseToJsonElement(output).jsonObject }.getOrNull() ?: return null
+        return listOfNotNull(
+            root["error"],
+            root["result"]?.obj()?.get("error"),
+            root["info"]?.obj()?.get("error"),
+        ).mapNotNull { it.obj() }
+            .firstNotNullOfOrNull { localizedDescription(it, depth = 0) }
+    }
+
+    private fun localizedDescription(error: JsonObject, depth: Int): String? {
+        if (depth > 3) return null
+        val userInfo = error["userInfo"]?.obj()
+        val described = userInfo?.get("NSLocalizedDescription") ?: error["NSLocalizedDescription"]
+        val text = described?.obj()?.string("string") ?: described?.primitiveOrNull()
+        text?.takeIf { it.isNotBlank() }?.let { return it }
+        val underlying = (userInfo?.get("NSUnderlyingError") ?: error["underlyingError"])?.obj() ?: return null
+        return localizedDescription(underlying, depth + 1)
+    }
+
+    /**
      * One line of `simctl spawn <udid> log stream --style ndjson --level info` (Phase 3.1).
      * `subsystem`/`category` are a better filter axis than Android's flat tag, so both are
      * folded into [LogcatEntry.tag] as `subsystem:category` rather than dropped.
@@ -235,4 +314,12 @@ object IosParsers {
     private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.content
 
     private fun JsonObject.boolean(key: String): Boolean? = this[key]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+
+    private fun JsonObject.long(key: String): Long? = this[key]?.primitiveOrNull()?.toLongOrNull()
+
+    private fun JsonElement.obj(): JsonObject? = runCatching { jsonObject }.getOrNull()
+
+    private fun JsonElement.array() = runCatching { jsonArray }.getOrNull()
+
+    private fun JsonElement.primitiveOrNull(): String? = runCatching { jsonPrimitive.content }.getOrNull()
 }
