@@ -631,7 +631,6 @@ class DesktopMirrorEngine(
         }
         emulatorGrpcClient?.close()
         emulatorGrpcClient = null
-        releaseGpuPipeline()
         NativeMirrorJni.destroyPresentation()
         nativeHost = null
         videoProcess?.destroyForcibly()
@@ -652,9 +651,10 @@ class DesktopMirrorEngine(
         connectedConfig = null
         connectedAtNanos = 0L
         lastEmulatorDisplaySizeRefreshNanos = 0L
-        // Wait for the video loop to fully stop before clearing the frame so a late
-        // in-flight frame can't win the race and leave a frozen image on screen.
+        // Join the video loop before releasing the GPU pipeline / serial gate so a late
+        // consumeH264 cannot interleave with the next engine that acquires this serial.
         job?.let { runCatching { it.join() } }
+        releaseGpuPipeline()
         frames.value = MirrorFrame(1, 1, intArrayOf(0xff000000.toInt()))
         session.value = null
         status.value = "Disconnected"
@@ -1104,7 +1104,25 @@ class DesktopMirrorEngine(
         }
     }
 
-    private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) = withContext(Dispatchers.IO) {
+    private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) =
+        ScrcpySerialGate.withExclusive(
+            serial,
+            onWaiting = {
+                status.value = "Waiting for another Live session to release $serial…"
+            },
+        ) {
+            runNativeVideoLoopExclusive(adb, serial, scrcpyServer, config)
+        }
+
+    private suspend fun runNativeVideoLoopExclusive(
+        adb: String,
+        serial: String,
+        scrcpyServer: File,
+        config: MirrorVideoConfig,
+    ) = withContext(Dispatchers.IO) {
+        // cleanup=false leaves on-device servers after a hard kill; drop orphans before a new
+        // MediaCodec capture so Samsung / Qualcomm devices do not encode two streams at once.
+        runner.run(killOrphanedScrcpyServerCommand(adb, serial), 5)
         val captureSize = captureSize(adb, serial, config.maxSize)
         val forwardPort = allocateLocalPort()
         val scid = Random.nextInt(1, Int.MAX_VALUE).toString(16).padStart(8, '0')
@@ -1205,6 +1223,10 @@ class DesktopMirrorEngine(
             var nativeHardwareVerified = false
             var nativeStatsWindowStartedAt = System.nanoTime()
             val gpuPipeline = activeGpuPipeline()
+            // New Annex-B stream (possibly mid-session reconnect). Drop stale reference frames so
+            // VideoToolbox does not paint P-frames against the previous encoder's IDR — the
+            // macroblock / ghosted Look that survives until process death on some GPUs.
+            gpuPipeline?.resetDecoderStream()
             var nativeStatsWindowFrames = gpuPipeline?.framesPresented() ?: NativeMirrorJni.framesPresented()
             if (usingNativeRenderer) {
                 // Metadata only: the Canvas needs source dimensions for coordinate mapping while

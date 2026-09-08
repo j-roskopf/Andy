@@ -169,6 +169,182 @@ class IosParsersTest {
     }
 
     @Test
+    fun parsesDevicectlAppsSortingUserAppsBeforeSystemApps() {
+        val output = """
+            {
+              "info": { "outcome": "success" },
+              "result": {
+                "apps": [
+                  {
+                    "bundleIdentifier": "com.apple.mobilesafari",
+                    "name": "Safari",
+                    "defaultApp": true,
+                    "internalApp": false,
+                    "version": "26.0",
+                    "bundleVersion": "20618"
+                  },
+                  {
+                    "bundleIdentifier": "com.apple.internal.diagnostics",
+                    "name": "Diagnostics",
+                    "defaultApp": false,
+                    "internalApp": true
+                  },
+                  {
+                    "bundleIdentifier": "com.example.myapp",
+                    "name": "My App",
+                    "defaultApp": false,
+                    "internalApp": false,
+                    "version": "1.2.3",
+                    "bundleVersion": "45"
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val apps = IosParsers.parseDevicectlApps(output)
+
+        assertEquals(3, apps.size)
+        val first = apps.first()
+        assertEquals("com.example.myapp", first.packageName)
+        assertEquals("My App", first.label)
+        assertFalse(first.system)
+        assertEquals("1.2.3", first.versionName)
+        assertEquals("45", first.versionCode)
+        assertEquals(
+            listOf("com.apple.internal.diagnostics", "com.apple.mobilesafari"),
+            apps.drop(1).map { it.packageName },
+        )
+        assertTrue(apps.drop(1).all { it.system })
+    }
+
+    @Test
+    fun parsesDevicectlAppsReturnsEmptyForMalformedOrEmptyPayloads() {
+        assertEquals(emptyList(), IosParsers.parseDevicectlApps("not json"))
+        assertEquals(emptyList(), IosParsers.parseDevicectlApps("""{"result": {}}"""))
+    }
+
+    @Test
+    fun parsesDevicectlFilesFromFilesArrayWithTypeStrings() {
+        val output = """
+            {
+              "result": {
+                "files": [
+                  { "name": "Documents", "path": "Documents", "type": "directory" },
+                  { "name": "prefs.plist", "path": "Library/Preferences/prefs.plist", "type": "regularFile", "size": 512 }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val files = IosParsers.parseDevicectlFiles(output)
+
+        assertEquals(2, files.size)
+        val dir = files.first()
+        assertEquals("Documents", dir.name)
+        assertTrue(dir.isDirectory)
+        assertNull(dir.sizeBytes)
+
+        val file = files.last()
+        assertEquals("Library/Preferences/prefs.plist", file.path)
+        assertFalse(file.isDirectory)
+        assertEquals(512L, file.sizeBytes)
+    }
+
+    @Test
+    fun parsesDevicectlFilesFromItemsArrayWithRelativePathAndIsDirectoryFlag() {
+        val output = """
+            {
+              "result": {
+                "items": [
+                  { "relativePath": "Library/Caches", "isDirectory": true },
+                  { "name": "log.txt", "isDirectory": false, "size": 12 }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val files = IosParsers.parseDevicectlFiles(output)
+
+        assertEquals(2, files.size)
+        val dir = files.first()
+        assertEquals("Library/Caches", dir.path)
+        assertEquals("Caches", dir.name)
+        assertTrue(dir.isDirectory)
+
+        val file = files.last()
+        assertEquals("log.txt", file.path)
+        assertEquals("log.txt", file.name)
+        assertFalse(file.isDirectory)
+    }
+
+    @Test
+    fun parsesDevicectlFilesReturnsEmptyForMalformedPayloads() {
+        assertEquals(emptyList(), IosParsers.parseDevicectlFiles("not json"))
+        assertEquals(emptyList(), IosParsers.parseDevicectlFiles("""{"result": {"files": {}}}"""))
+    }
+
+    @Test
+    fun parsesDevicectlErrorMessageFromTopLevelDeveloperModeFailure() {
+        val output = """
+            {
+              "error": {
+                "code": 10005,
+                "domain": "com.apple.dt.CoreDeviceError",
+                "userInfo": {
+                  "NSLocalizedDescription": {
+                    "string": "Developer Mode is disabled on iPhone."
+                  }
+                }
+              },
+              "info": { "outcome": "failure" }
+            }
+        """.trimIndent()
+
+        assertEquals("Developer Mode is disabled on iPhone.", IosParsers.parseDevicectlErrorMessage(output))
+    }
+
+    @Test
+    fun parsesDevicectlErrorMessageFromInfoErrorAndPlainStringDescription() {
+        val output = """
+            {
+              "info": {
+                "error": {
+                  "userInfo": { "NSLocalizedDescription": "Unable to mount the developer disk image." }
+                }
+              }
+            }
+        """.trimIndent()
+
+        assertEquals("Unable to mount the developer disk image.", IosParsers.parseDevicectlErrorMessage(output))
+    }
+
+    @Test
+    fun parsesDevicectlErrorMessageFallsThroughToUnderlyingError() {
+        val output = """
+            {
+              "result": {
+                "error": {
+                  "userInfo": {
+                    "NSUnderlyingError": {
+                      "userInfo": { "NSLocalizedDescription": { "string": "The device is locked." } }
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        assertEquals("The device is locked.", IosParsers.parseDevicectlErrorMessage(output))
+    }
+
+    @Test
+    fun parsesDevicectlErrorMessageReturnsNullWhenAbsent() {
+        assertNull(IosParsers.parseDevicectlErrorMessage("not json"))
+        assertNull(IosParsers.parseDevicectlErrorMessage("""{"result": {"apps": []}}"""))
+    }
+
+    @Test
     fun parsesDeviceTypes() {
         val output = """
             {

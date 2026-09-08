@@ -1,6 +1,7 @@
 package app.andy.desktop.service.webchat
 
 import app.andy.desktop.service.firstChangedEventIndex
+import app.andy.desktop.service.agents.providerAuthRecoveryJson
 import app.andy.domain.excludingTemporary
 import app.andy.desktop.service.toWire
 import app.andy.model.AgentAutonomy
@@ -22,6 +23,9 @@ import app.andy.model.localModelLaunchError
 import app.andy.model.mergedComposerSlashCommands
 import app.andy.model.parseLocalAgentRuntime
 import app.andy.model.prefixedLocalModelId
+import app.andy.model.providerLoginInstructions
+import app.andy.model.providerLoginOpenedMessage
+import app.andy.model.providerLoginRemoteInstructions
 import app.andy.model.WorkspaceState
 import app.andy.service.ActionConfigStore
 import app.andy.service.AgentRunService
@@ -441,6 +445,77 @@ internal fun Application.installWebChatRoutes(
                     buildJsonObject {
                         put("ok", true)
                         put("id", id)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/chats/{id}/provider-login") {
+                val agents = agentRuns()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "agent services unavailable",
+                    )
+                val id = call.parameters["id"].orEmpty()
+                val task = agents.tasks.value.excludingTemporary().firstOrNull { it.id == id }
+                    ?: return@post call.respondJsonError(HttpStatusCode.NotFound, "chat not found")
+                val command = agents.providerLoginCommand(task.agent)
+                val result = agents.openProviderLogin(task.agent)
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", true)
+                        put("agent", task.agent.name)
+                        put("command", command)
+                        put("opened", result.isSuccess)
+                        put("instructions", providerLoginInstructions(task.agent))
+                        put("remoteInstructions", providerLoginRemoteInstructions(task.agent))
+                        put(
+                            "message",
+                            when {
+                                result.isSuccess ->
+                                    result.stdout.ifBlank { providerLoginOpenedMessage(task.agent) }
+                                else ->
+                                    result.stderr.ifBlank { "Could not open Terminal on the Andy host" }
+                            },
+                        )
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/providers/{agent}/login") {
+                val agents = agentRuns()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "agent services unavailable",
+                    )
+                val agentName = call.parameters["agent"].orEmpty()
+                val agent = AgentKind.entries.firstOrNull {
+                    it.name.equals(agentName, ignoreCase = true) ||
+                        it.cliName.equals(agentName, ignoreCase = true)
+                } ?: return@post call.respondJsonError(
+                    HttpStatusCode.BadRequest,
+                    "unknown agent: $agentName",
+                )
+                val command = agents.providerLoginCommand(agent)
+                val result = agents.openProviderLogin(agent)
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", true)
+                        put("agent", agent.name)
+                        put("command", command)
+                        put("opened", result.isSuccess)
+                        put("instructions", providerLoginInstructions(agent))
+                        put("remoteInstructions", providerLoginRemoteInstructions(agent))
+                        put(
+                            "message",
+                            when {
+                                result.isSuccess ->
+                                    result.stdout.ifBlank { providerLoginOpenedMessage(agent) }
+                                else ->
+                                    result.stderr.ifBlank { "Could not open Terminal on the Andy host" }
+                            },
+                        )
                     }.toString(),
                     ContentType.Application.Json,
                 )
@@ -955,6 +1030,8 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
     put("finishedAtMillis", finishedAtMillis ?: 0L)
     put("resumable", resumable)
     put("errorMessage", errorMessage.orEmpty())
+    // Always emit so WebSocket `Object.assign` merges clear stale recovery metadata after sign-in.
+    put("providerAuthRecovery", providerAuthRecoveryJson() ?: JsonNull)
     userInputRequest?.let { request ->
         putJsonObject("userInputRequest") {
             put("id", request.id)

@@ -1,7 +1,7 @@
 //! Curated CLI paths → MCP tool names for all device-side tools.
 //!
 //! Keep [`DEVICE_TOOL_NAMES`] in sync with
-//! `DesktopMcpServerService.getToolNames()` (device entries only).
+//! `DesktopMcpServerService.getToolNames()` (device + ios entries only).
 #![allow(dead_code)]
 
 /// Canonical list of device MCP tools (excludes agent/project tools).
@@ -50,6 +50,24 @@ pub const DEVICE_TOOL_NAMES: &[&str] = &[
     "delete_snapshot",
     "list_snapshots",
     "logcat_snapshot",
+    "ios_list_device_types",
+    "ios_list_runtimes",
+    "ios_create_simulator",
+    "ios_clone_simulator",
+    "ios_erase_simulator",
+    "ios_rename_simulator",
+    "ios_delete_simulator",
+    "ios_boot",
+    "ios_shutdown",
+    "ios_set_appearance",
+    "ios_set_content_size",
+    "ios_status_bar_override",
+    "ios_status_bar_clear",
+    "ios_set_location",
+    "ios_privacy",
+    "ios_pbcopy",
+    "ios_pbpaste",
+    "ios_push",
 ];
 
 /// Every curated CLI command path that maps to an MCP tool.
@@ -99,6 +117,24 @@ pub const CURATED_COMMANDS: &[(&str, &str)] = &[
     ("network request list", "list_network_requests"),
     ("network request get", "get_network_request"),
     ("network request clear", "clear_network_requests"),
+    ("ios device-types", "ios_list_device_types"),
+    ("ios runtimes", "ios_list_runtimes"),
+    ("ios create", "ios_create_simulator"),
+    ("ios clone", "ios_clone_simulator"),
+    ("ios erase", "ios_erase_simulator"),
+    ("ios rename", "ios_rename_simulator"),
+    ("ios delete", "ios_delete_simulator"),
+    ("ios boot", "ios_boot"),
+    ("ios shutdown", "ios_shutdown"),
+    ("ios appearance", "ios_set_appearance"),
+    ("ios content-size", "ios_set_content_size"),
+    ("ios status-bar override", "ios_status_bar_override"),
+    ("ios status-bar clear", "ios_status_bar_clear"),
+    ("ios location", "ios_set_location"),
+    ("ios privacy", "ios_privacy"),
+    ("ios pbcopy", "ios_pbcopy"),
+    ("ios pbpaste", "ios_pbpaste"),
+    ("ios push", "ios_push"),
 ];
 
 pub fn curated_mcp_names() -> Vec<&'static str> {
@@ -123,7 +159,7 @@ mod tests {
             missing.is_empty() && extra.is_empty(),
             "curated map drift — missing: {missing:?}, extra: {extra:?}"
         );
-        assert_eq!(DEVICE_TOOL_NAMES.len(), 44);
-        assert_eq!(CURATED_COMMANDS.len(), 44);
+        assert_eq!(DEVICE_TOOL_NAMES.len(), 62);
+        assert_eq!(CURATED_COMMANDS.len(), 62);
     }
 }

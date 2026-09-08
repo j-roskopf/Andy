@@ -196,6 +196,48 @@ class WebChatHttpServerTest {
     }
 
     @Test
+    fun providerLoginOpensHostTerminalAndChatJsonIncludesRecovery() = runBlocking {
+        agents.setError(
+            "acp-1",
+            AgentStatus.Error,
+            "Not logged in — press Sign in (or run `codex login` on the host), then retry",
+        )
+        val client = HttpClient(CIO)
+        try {
+            val detail = client.get("http://127.0.0.1:$port/api/chats/acp-1") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+            }
+            assertEquals(HttpStatusCode.OK, detail.status)
+            val detailBody = detail.bodyAsText()
+            assertTrue(detailBody.contains("\"providerAuthRecovery\""), detailBody)
+            assertTrue(detailBody.contains("\"command\":\"codex login\""), detailBody)
+
+            val login = client.post("http://127.0.0.1:$port/api/chats/acp-1/provider-login") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+            assertEquals(HttpStatusCode.OK, login.status, login.bodyAsText())
+            val loginBody = login.bodyAsText()
+            assertTrue(loginBody.contains("\"opened\":true"), loginBody)
+            assertTrue(loginBody.contains("\"command\":\"codex login\""), loginBody)
+            assertTrue(loginBody.contains("Switch to that computer") || loginBody.contains("Mac"), loginBody)
+            assertEquals(AgentKind.Codex, agents.lastProviderLogin)
+
+            val byAgent = client.post("http://127.0.0.1:$port/api/providers/ClaudeCode/login") {
+                header(HttpHeaders.Authorization, "Bearer $token")
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }
+            assertEquals(HttpStatusCode.OK, byAgent.status, byAgent.bodyAsText())
+            assertTrue(byAgent.bodyAsText().contains("\"command\":\"claude\""), byAgent.bodyAsText())
+            assertEquals(AgentKind.ClaudeCode, agents.lastProviderLogin)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun loopbackWithoutTokenSucceeds() = runBlocking {
         val client = HttpClient(CIO)
         try {
@@ -917,6 +959,22 @@ class WebChatHttpServerTest {
             _tasks.value = _tasks.value.map { task ->
                 if (task.id == taskId) task.copy(status = status) else task
             }
+        }
+
+        fun setError(taskId: String, status: AgentStatus, errorMessage: String?) {
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) {
+                    task.copy(status = status, errorMessage = errorMessage)
+                } else {
+                    task
+                }
+            }
+        }
+
+        var lastProviderLogin: AgentKind? = null
+        override suspend fun openProviderLogin(agent: AgentKind): CommandResult {
+            lastProviderLogin = agent
+            return CommandResult.success(app.andy.model.providerLoginOpenedMessage(agent))
         }
 
         fun setUserInput(taskId: String, request: AgentUserInputRequest?) {

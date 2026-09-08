@@ -37,7 +37,28 @@ data class ChatDto(
     val finishedAtMillis: Long = 0L,
     val resumable: Boolean = false,
     val errorMessage: String = "",
+    val providerAuthRecovery: ProviderAuthRecoveryDto? = null,
     val userInputRequest: UserInputRequestDto? = null,
+)
+
+@Serializable
+data class ProviderAuthRecoveryDto(
+    val needed: Boolean = true,
+    val agent: String = "",
+    val command: String = "",
+    val instructions: String = "",
+    val remoteInstructions: String = "",
+)
+
+@Serializable
+data class ProviderLoginResponse(
+    val ok: Boolean = false,
+    val agent: String = "",
+    val command: String = "",
+    val opened: Boolean = false,
+    val instructions: String = "",
+    val remoteInstructions: String = "",
+    val message: String = "",
 )
 
 /** Matches desktop [app.andy.ui.agents.isAwaitingPlanConfirmation] for Network Access chats. */

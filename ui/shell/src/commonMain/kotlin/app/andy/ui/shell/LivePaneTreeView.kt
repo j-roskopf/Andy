@@ -393,12 +393,12 @@ private fun LiveLeafView(
                 else -> {
                     val mirror = liveMirrorFor(targetId)
                     if (mirror == null) {
-                        // Dock Live must use a pooled engine — falling back to services.mirror
-                        // would share one stream across every pane.
+                        // Pool engine not ready yet. When the primary Live session still owns this
+                        // serial, liveMirrorFor returns that engine instead (shared control socket).
                         EmptyState("Connecting mirror…")
                     } else {
                         val liveDevice = devices.firstOrNull { it.serial == targetId }
-                        key(leaf.id, targetId) {
+                        key(leaf.id, targetId, mirror) {
                             DeviceLivePanel(
                                 services = services,
                                 serial = targetId,

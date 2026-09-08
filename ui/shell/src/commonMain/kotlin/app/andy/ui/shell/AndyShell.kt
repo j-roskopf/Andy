@@ -430,10 +430,11 @@ internal fun AndyShell(
                 // When a dock live pane is paused because the main Live destination or a pop-out
                 // takes over the same device, drop its pooled-engine hold so the takeover doesn't
                 // run two scrcpy sessions on one serial. Restore the hold once it unpauses.
+                // Must run during composition (before dock panes read liveMirrorFor) — LaunchedEffect
+                // restored the engine after the pane had already committed "Connecting mirror…" with
+                // a null engine and never recomposed.
                 val pausedLiveTargetIds = state.currentLiveLeafTargetIds().filter(liveDockPaused).toSet()
-                LaunchedEffect(pausedLiveTargetIds, state.destination, state.activeTargetId, poppedOutTargetIds) {
-                    state.setPausedLiveTargetIds(pausedLiveTargetIds)
-                }
+                state.setPausedLiveTargetIds(pausedLiveTargetIds)
                 var rightDockPaneWidth by remember(state.workspaceState.rightDockPaneWidth) {
                     mutableStateOf(state.workspaceState.rightDockPaneWidth)
                 }

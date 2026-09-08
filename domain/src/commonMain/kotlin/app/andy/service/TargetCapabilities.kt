@@ -101,16 +101,18 @@ data class TargetCapabilities(
         )
 
         /**
-         * Physical devices: Live mirroring + Devices/Settings only until Developer Mode unlocks
-         * more. Input is never available without an on-device runner (out of scope).
+         * Physical devices with Developer Mode enabled: Live mirroring plus the `devicectl`
+         * surface — Apps, Files, and crash reports. Logs, Intents, and Controls stay off because
+         * devicectl has no equivalent, and input is never available without an on-device runner
+         * (out of scope), so mirroring remains view-only.
          */
         val Physical = TargetCapabilities(
             hardwareButtons = false,
             navButtons = false,
             input = false,
             logs = false,
-            fileSystem = false,
-            appManagement = false,
+            fileSystem = true,
+            appManagement = true,
             intents = false,
             androidIntentModes = false,
             network = false,

@@ -24,12 +24,34 @@ object NativeIosSimJni {
         runCatching { nativeDiagnostic() }.getOrDefault("")
     }
 
+    /**
+     * UDID the currently warmed SimDeviceIO/HID session is attached to, if any. The session is
+     * process-global (one simulator at a time), so callers that target a different UDID must
+     * reconnect rather than reusing a warm channel from another simulator.
+     */
+    @Volatile
+    var connectedUdid: String? = null
+        private set
+
+    /** Native device-pixel dimensions (e.g. 1170x2532) reported by the last [connect]; null when disconnected. */
+    @Volatile
+    var connectedPixelSize: IntArray? = null
+        private set
+
     fun connect(udid: String): IntArray? {
         if (!isAvailable()) return null
-        return runCatching { nativeConnect(udid) }.getOrNull()?.takeIf { it.size >= 2 && it[0] > 0 && it[1] > 0 }
+        val size = runCatching { nativeConnect(udid) }
+            .getOrNull()?.takeIf { it.size >= 2 && it[0] > 0 && it[1] > 0 }
+        if (size != null) {
+            connectedUdid = udid
+            connectedPixelSize = size
+        }
+        return size
     }
 
     fun disconnect() {
+        connectedUdid = null
+        connectedPixelSize = null
         if (ensureLoaded().isSuccess) runCatching { nativeDisconnect() }
     }
 

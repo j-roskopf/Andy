@@ -33,6 +33,7 @@ import app.andy.desktop.service.resolveRuntimeMode
 import app.andy.desktop.service.mirror.GpuMirrorHostRegistry
 import app.andy.desktop.service.mirror.GpuMirrorJni
 import app.andy.desktop.service.mirror.NativeMirrorHostRegistry
+import app.andy.desktop.service.mirror.resolveDockLiveMirror
 import app.andy.model.IosTargetKind
 import app.andy.service.IosTargetRegistry
 import app.andy.service.MirrorEngine
@@ -273,6 +274,7 @@ fun main() {
         LaunchedEffect(unreadCount, workspaceState.agentIconBadgeEnabled) {
             updateDockBadge(if (workspaceState.agentIconBadgeEnabled) unreadCount else 0)
         }
+        val primaryMirrorSerial = services.mirror.session.collectAsState().value?.serial
         // Compose Multiplatform AWT Tray is broken on Wayland (white icon, dead menu).
         // ComposeNativeTray uses StatusNotifier / native backends instead.
         Tray(
@@ -385,14 +387,31 @@ fun main() {
                     // placeholder. iOS / shared-primary handoffs keep Live's session warm; Android
                     // pop-outs of the Live device own the engine via the pop-out pool instead.
                     poppedOutTargetIds = popOutWindows.keys + externallyMirrored,
+                    // Hold/release counts stay synchronous so pause→Live→unpause cannot race a
+                    // deferred release past a new acquire (that left the dock on "Connecting mirror…").
+                    // Only disconnect runs on IO — it must not own the refcount.
                     liveMirrorHold = { targetId -> popOutMirrorPool.acquire(targetId) },
-                    liveMirrorRelease = { targetId -> scope.launch { popOutMirrorPool.release(targetId) } },
-                    liveMirrorFor = { targetId -> popOutMirrorPool.engine(targetId) },
+                    liveMirrorRelease = { targetId ->
+                        val doomed = popOutMirrorPool.releaseHold(targetId)
+                        if (doomed != null) {
+                            scope.launch(Dispatchers.IO) { doomed.disconnect(immediate = true) }
+                        }
+                    },
+                    // Prefer the warm primary session when it still owns this serial so the dock
+                    // reuses its scrcpy control channel (picture+input). A fresh pooled engine would
+                    // only fan out GPU frames while blocked on ScrcpySerialGate — clicks do nothing.
+                    liveMirrorFor = { targetId ->
+                        resolveDockLiveMirror(
+                            targetId = targetId,
+                            primarySerial = primaryMirrorSerial,
+                            primary = services.mirror,
+                            pooled = popOutMirrorPool.engine(targetId),
+                        )
+                    },
                     contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
                 )
             }
         }
-        val primaryMirrorSerial = services.mirror.session.collectAsState().value?.serial
         popOutWindows.values.forEach { popOut ->
             key(popOut.targetId) {
                 val sharePrimary =

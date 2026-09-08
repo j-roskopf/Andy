@@ -1216,3 +1216,222 @@ pub async fn run_network(client: &mut McpClient, cmd: NetworkCmd, json_out: bool
         }
     }
 }
+
+#[derive(Subcommand, Debug)]
+pub enum IosCmd {
+    /// List simulator device types (`ios_list_device_types`)
+    #[command(name = "device-types")]
+    DeviceTypes {
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    /// List simulator runtimes (`ios_list_runtimes`)
+    Runtimes {
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Create {
+        name: String,
+        #[arg(long)]
+        device_type_id: String,
+        #[arg(long)]
+        runtime_id: Option<String>,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Clone {
+        udid: String,
+        new_name: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Erase {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Rename {
+        udid: String,
+        new_name: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Delete {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Boot {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Shutdown {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Appearance {
+        udid: String,
+        appearance: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    #[command(name = "content-size")]
+    ContentSize {
+        udid: String,
+        size: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    #[command(subcommand)]
+    StatusBar(IosStatusBarCmd),
+    Location {
+        udid: String,
+        #[arg(allow_hyphen_values = true)]
+        latitude: String,
+        #[arg(allow_hyphen_values = true)]
+        longitude: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Privacy {
+        udid: String,
+        action: String,
+        service: String,
+        bundle_id: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Pbcopy {
+        udid: String,
+        text: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Pbpaste {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Push {
+        udid: String,
+        bundle_id: String,
+        payload_json: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IosStatusBarCmd {
+    Override {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+    Clear {
+        udid: String,
+        #[arg(long)]
+        arg: Vec<String>,
+        #[arg(long)]
+        json_args: Option<String>,
+    },
+}
+
+pub async fn run_ios(client: &mut McpClient, cmd: IosCmd, json_out: bool) -> Result<()> {
+    match cmd {
+        IosCmd::DeviceTypes { arg, json_args } => {
+            call_and_print(client, "ios_list_device_types", Map::new(), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Runtimes { arg, json_args } => {
+            call_and_print(client, "ios_list_runtimes", Map::new(), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Create { name, device_type_id, runtime_id, arg, json_args } => {
+            let mut base = map_base(&[("name", json!(name)), ("deviceTypeId", json!(device_type_id))]);
+            if let Some(runtime_id) = runtime_id {
+                base.insert("runtimeId".into(), json!(runtime_id));
+            }
+            call_and_print(client, "ios_create_simulator", base, opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Clone { udid, new_name, arg, json_args } => {
+            call_and_print(client, "ios_clone_simulator", map_base(&[("udid", json!(udid)), ("newName", json!(new_name))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Erase { udid, arg, json_args } => {
+            call_and_print(client, "ios_erase_simulator", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Rename { udid, new_name, arg, json_args } => {
+            call_and_print(client, "ios_rename_simulator", map_base(&[("udid", json!(udid)), ("newName", json!(new_name))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Delete { udid, arg, json_args } => {
+            call_and_print(client, "ios_delete_simulator", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Boot { udid, arg, json_args } => {
+            call_and_print(client, "ios_boot", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Shutdown { udid, arg, json_args } => {
+            call_and_print(client, "ios_shutdown", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Appearance { udid, appearance, arg, json_args } => {
+            call_and_print(client, "ios_set_appearance", map_base(&[("udid", json!(udid)), ("appearance", json!(appearance))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::ContentSize { udid, size, arg, json_args } => {
+            call_and_print(client, "ios_set_content_size", map_base(&[("udid", json!(udid)), ("size", json!(size))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::StatusBar(IosStatusBarCmd::Override { udid, arg, json_args }) => {
+            call_and_print(client, "ios_status_bar_override", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::StatusBar(IosStatusBarCmd::Clear { udid, arg, json_args }) => {
+            call_and_print(client, "ios_status_bar_clear", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Location { udid, latitude, longitude, arg, json_args } => {
+            call_and_print(client, "ios_set_location", map_base(&[("udid", json!(udid)), ("latitude", json!(latitude)), ("longitude", json!(longitude))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Privacy { udid, action, service, bundle_id, arg, json_args } => {
+            call_and_print(client, "ios_privacy", map_base(&[("udid", json!(udid)), ("action", json!(action)), ("service", json!(service)), ("bundleId", json!(bundle_id))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Pbcopy { udid, text, arg, json_args } => {
+            call_and_print(client, "ios_pbcopy", map_base(&[("udid", json!(udid)), ("text", json!(text))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Pbpaste { udid, arg, json_args } => {
+            call_and_print(client, "ios_pbpaste", map_base(&[("udid", json!(udid))]), opts(None, arg, json_args, json_out, false)).await
+        }
+        IosCmd::Push { udid, bundle_id, payload_json, arg, json_args } => {
+            call_and_print(client, "ios_push", map_base(&[("udid", json!(udid)), ("bundleId", json!(bundle_id)), ("payloadJson", json!(payload_json))]), opts(None, arg, json_args, json_out, false)).await
+        }
+    }
+}

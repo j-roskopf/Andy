@@ -61,7 +61,7 @@ Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes,
 - Isolate a run in a git worktree when you need a clean boundary.
 - Toggle plan mode. Set a persistent `/goal` for Codex and Claude Code.
 - Import a vendor thread or session id to resume an existing conversation.
-- Attach Andy MCP so the agent can drive devices and emulators.
+- Attach Andy MCP so the agent can drive Android and iOS targets ([device tools](#10-mcp-for-device-control)).
 - Start temporary chats that do not persist. Promote them when ready.
 - Open side chats for a read-only second opinion.
 - Pin priority chats at the top of project and agent inboxes.
@@ -82,7 +82,7 @@ Android is the primary platform. On macOS, Andy also covers day-to-day iOS Simul
 
 **Live mirror.** Stream an Android device or emulator with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text. Record into the Recordings library. Annotate screenshots with redaction, shapes, text, and an optional device frame. Drag an APK onto the mirror to install it. Tune size, bitrate, FPS, and renderer. Grid mode mirrors up to four targets. Dock Live, Logcat, Terminal, or Browser beside or below the main content. Pop the mirror into a focused window when you want it alone.
 
-**iOS on macOS.** Manage Simulators (create, boot, clone, erase, rename, delete). Mirror a booted Simulator with touch. Browse apps and sandbox files, Prefs, and SQLite. Tail `simctl log stream`. Drive URL-scheme intents. Use Simulator controls for appearance, Dynamic Type, status bar, location, privacy, clipboard, and push notifications. List crash reports and try `atos` symbolication when a matching `.dSYM` is available. Physical iOS devices are view-only for USB mirror until Developer Mode is on for full control.
+**iOS on macOS.** Manage Simulators (create, boot, clone, erase, rename, delete). Mirror a booted Simulator with touch. Browse apps and sandbox files, Prefs, and SQLite. Tail `simctl log stream`. Drive URL-scheme intents. Use Simulator controls for appearance, Dynamic Type, status bar, location, privacy, clipboard, and push notifications. List crash reports and try `atos` symbolication when a matching `.dSYM` is available. Physical iOS devices support USB Live mirror plus apps/files/crash management when Developer Mode is on (input stays simulator-only). MCP and `andy` expose the same hybrid surface: shared device tools accept Android serials or iOS UDIDs, with `andy ios …` for simulator lifecycle and Controls.
 
 ### 4. Debug and inspection tools
 
@@ -151,7 +151,7 @@ andy tool list
 
 Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`, `Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`.
 
-Curated groups cover `device`, `emulator`, `avd`, `system-image`, `snapshot`, `input`, `app`, `intent`, `file`, and `network`. Other MCP tools stay under `andy tool call`. See [docs/ANDYD.md](docs/ANDYD.md) for the full command reference.
+Curated groups cover `device`, `emulator`, `avd`, `system-image`, `snapshot`, `input`, `app`, `intent`, `file`, `network`, and `ios`. Other MCP tools stay under `andy tool call`. Device MCP tools are listed in [MCP for device control](#10-mcp-for-device-control); the full CLI reference is in [docs/ANDYD.md](docs/ANDYD.md).
 
 ### 7. Android companion app
 
@@ -185,9 +185,41 @@ Tracebox source and packaging live in [`tools/andy-tracebox`](tools/andy-tracebo
 
 Customize appearance, sidebar pages, and agent behavior. Set orchestration defaults per role. Tune follow-ups, session lifetime, transcript layout, chat retention, notifications, and voice dictation. Configure proxy start-on-launch and corporate TLS trust.
 
-The MCP panel enables Andy's local MCP server, lists tools, and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf.
+The MCP panel enables Andy's local MCP server and offers client config snippets for Claude Code, Cursor, Codex, Claude Desktop, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, VS Code, and Windsurf. Device, emulator, and iOS Simulator tools are listed in [MCP for device control](#10-mcp-for-device-control).
 
 Check for desktop updates from inside Andy. The same Settings area can install or update the CLI runtime bundle (`andy`, `andyd`, managed tmux, status hook, and orchestration skills).
+
+### 10. MCP for device control
+
+Andy runs a local MCP server so coding agents (and the CLI) can drive the same device tools you use in the desktop UI. Android works on every Andy host. On macOS, shared tools also accept iOS Simulator and physical-device UDIDs, with curated `ios_*` tools for Simulator lifecycle and Controls. Enable MCP in Settings → MCP, or attach Andy MCP on a chat so that run gets the tools. The daemon also serves MCP on `~/.andy/andyd.sock` and loopback HTTP (default port `8565`).
+
+Shared tools take an optional `serial` (Android serial **or** iOS UDID). If omitted, Andy uses the selected online target, or the only online target when there is exactly one.
+
+| Group | Tools | Coverage |
+| --- | --- | --- |
+| **Discovery** | `list_devices` | Android + iOS |
+| **Shell** | `shell` | Android |
+| **Emulators / AVDs** | `list_avds`, `create_avd`, `clone_avd`, `delete_avd`, `start_emulator`, `stop_emulator`, `list_system_images`, `install_system_image` | Android |
+| **Snapshots** | `list_snapshots`, `save_snapshot`, `load_snapshot`, `delete_snapshot` | Android |
+| **iOS Simulator** | `ios_list_device_types`, `ios_list_runtimes`, `ios_create_simulator`, `ios_clone_simulator`, `ios_erase_simulator`, `ios_rename_simulator`, `ios_delete_simulator`, `ios_boot`, `ios_shutdown` | iOS Simulator (macOS) |
+| **iOS Controls** | `ios_set_appearance`, `ios_set_content_size`, `ios_status_bar_override`, `ios_status_bar_clear`, `ios_set_location`, `ios_privacy`, `ios_pbcopy`, `ios_pbpaste`, `ios_push` | iOS Simulator (macOS) |
+| **Input** | `tap`, `swipe`, `input_text`, `press_key` | Android + iOS Simulator (`press_key`: home/power on Simulator; physical iOS input unsupported) |
+| **Sight** | `screenshot` | Android + iOS |
+| **Sight** | `ui_dump`, `capture_view_hierarchy`, `find_node_by_text`, `get_node_properties` | Android |
+| **Apps** | `list_apps`, `launch_app`, `stop_app`, `clear_app_data`, `uninstall_app`, `install_app`, `list_permissions`, `list_activities` | Android + iOS (`list_activities` is Android-oriented; physical iOS needs Developer Mode) |
+| **Intents** | `send_intent` | Android intents + iOS Simulator URL schemes |
+| **Files** | `file_list_dir`, `file_pull`, `file_push`, `file_delete` | Android + iOS (physical iOS needs Developer Mode) |
+| **Logs** | `logcat_snapshot` | Android + iOS Simulator (not physical iOS) |
+| **Network** | `start_network_proxy`, `stop_network_proxy`, `configure_device_proxy`, `list_network_requests`, `get_network_request`, `clear_network_requests`, `list_network_mock_rules`, `upsert_network_mock_rule`, `set_network_mock_rules`, `delete_network_mock_rule` | Android |
+| **Emulator controls** | `set_device_location`, `set_device_sensor`, `set_battery_state`, `reset_battery_state`, `set_thermal_status`, `simulate_incoming_call`, `send_sms`, `set_network_type`, `set_device_locale` | Android (use `ios_*` Controls on Simulator) |
+| **Crashes** | `list_crashes`, `get_crash` | Android + iOS |
+| **Performance** | `capture_heap_dump`, `get_memory_breakdown`, `get_battery_stats` | Android |
+| **Recordings** | `start_screen_recording`, `stop_screen_recording`, `export_recording` | Android + iOS (via Live mirror) |
+| **Host** | `screenshot_host` | Host desktop (opt-in in Settings → MCP) |
+
+**Physical iOS.** Screenshot, apps, files, crashes, and Live recordings when Developer Mode is on. No MCP input, Controls, or log streaming yet.
+
+The CLI wraps these as noun-verb commands (`andy device list`, `andy input tap`, `andy ios boot`, …). Use `andy tool list` / `andy tool call` for the full surface. More hybrid detail is in [docs/ANDYD.md](docs/ANDYD.md). Agent and project MCP tools (`chat.*`, `project.*`, `workflow.*`, `automation.*`) are documented there too.
 
 ## Download
 

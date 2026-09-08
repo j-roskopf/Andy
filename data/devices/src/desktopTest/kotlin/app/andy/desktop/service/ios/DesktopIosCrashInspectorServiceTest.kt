@@ -80,6 +80,64 @@ class DesktopIosCrashInspectorServiceTest {
     }
 
     @Test
+    fun listCrashesUsesSystemCrashLogsDomainForPhysicalDevices() = runBlocking {
+        val physicalUdid = "00008140-00026112260B001C"
+        IosTargetRegistry.update(
+            listOf(IosTarget(physicalUdid, "iPhone 16 Pro", IosTargetKind.Physical, IosTargetState.Unknown)),
+        )
+        val commands = mutableListOf<List<String>>()
+        val runner = CommandRunner { command, _ ->
+            commands += command
+            val outputIndex = command.indexOf("--json-output")
+            if (outputIndex >= 0) {
+                java.io.File(command[outputIndex + 1]).writeText(
+                    """
+                    {"result":{"files":[
+                      {"name":"MyApp-2026-08-19-210000.ips","path":"Retired/MyApp-2026-08-19-210000.ips","type":"regularFile"},
+                      {"name":"log-aggregated.txt","path":"log-aggregated.txt","type":"regularFile"},
+                      {"name":"Retired","path":"Retired","type":"directory"}
+                    ]}}
+                    """.trimIndent(),
+                )
+            }
+            CommandResult.success()
+        }
+        val dir = Files.createTempDirectory("andy-ips-physical").toFile()
+
+        val crashes = DesktopIosCrashInspectorService(runner, dir).listCrashes(physicalUdid)
+
+        val crash = crashes.single()
+        assertEquals("devicectl:Retired/MyApp-2026-08-19-210000.ips", crash.id)
+        assertEquals("MyApp", crash.packageName)
+        assertTrue(commands.single().containsAll(listOf("--domain-type", "systemCrashLogs")))
+    }
+
+    @Test
+    fun loadCrashCopiesFromDeviceThenReadsTheReport() = runBlocking {
+        val physicalUdid = "00008140-00026112260B001C"
+        IosTargetRegistry.update(
+            listOf(IosTarget(physicalUdid, "iPhone 16 Pro", IosTargetKind.Physical, IosTargetState.Unknown)),
+        )
+        val commands = mutableListOf<List<String>>()
+        val runner = CommandRunner { command, _ ->
+            commands += command
+            val destinationIndex = command.indexOf("--destination")
+            if (destinationIndex >= 0) {
+                java.io.File(command[destinationIndex + 1], "MyApp.ips").writeText(ipsReportText(Udid))
+            }
+            CommandResult.success()
+        }
+        val dir = Files.createTempDirectory("andy-ips-physical-load").toFile()
+
+        val text = DesktopIosCrashInspectorService(runner, dir)
+            .loadCrash(physicalUdid, "devicectl:Retired/MyApp.ips")
+
+        assertTrue(text.contains("MyApp"), text)
+        val copy = commands.single()
+        assertTrue(copy.containsAll(listOf("device", "copy", "from", "--source", "Retired/MyApp.ips")))
+    }
+
+    @Test
     fun exportCrashWritesLoadedTextToLocalPath() = runBlocking {
         val dir = Files.createTempDirectory("andy-ips-export").toFile()
         val crashFile = java.io.File(dir, "MyApp.ips").apply { writeText(ipsReportText(Udid)) }

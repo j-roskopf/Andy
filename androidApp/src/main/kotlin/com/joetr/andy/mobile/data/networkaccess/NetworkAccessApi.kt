@@ -204,6 +204,16 @@ class NetworkAccessClient(
         return response.body()
     }
 
+    /** Opens a provider login terminal on the Andy host; always returns the copyable command. */
+    suspend fun openProviderLogin(chatId: String): ProviderLoginResponse {
+        val response = rawRequest(HttpMethod.Post, "/api/chats/${chatId.encodeURL()}/provider-login") {
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(emptyMap()))
+        }
+        ensureOk(response)
+        return response.body()
+    }
+
     /**
      * Exit plan mode and resume with the desktop Implement prompt.
      *

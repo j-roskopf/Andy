@@ -368,6 +368,7 @@ object UnavailableAgentRunService : AgentRunService {
     override fun events(taskId: String) = MutableStateFlow(emptyList<AgentEvent>())
     override fun interactiveResumeCommand(taskId: String): String? = null
     override suspend fun openInTerminal(taskId: String) = unavailable()
+    override suspend fun openProviderLogin(agent: AgentKind) = unavailable()
     override suspend fun openSkill(path: String) = unavailable()
     override suspend fun worktreeDiffSummary(taskId: String): String? = null
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = null

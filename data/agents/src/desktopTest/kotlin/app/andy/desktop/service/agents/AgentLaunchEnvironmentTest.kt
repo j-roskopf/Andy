@@ -200,7 +200,7 @@ class AgentLaunchEnvironmentTest {
             ),
         )
         assertEquals(
-            "Not logged in — run `claude` in a terminal and sign in (`/login`), then retry",
+            "Not logged in — sign in on the Andy host (`claude`, then /login), then retry",
             agentFailureMessage(
                 lastError = null,
                 authHint = providerAuthFailureHint(AgentKind.ClaudeCode, "Please run /login"),

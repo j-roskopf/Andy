@@ -98,6 +98,7 @@ import app.andy.model.ProjectWorkflowStage
 import app.andy.model.WorkspaceState
 import app.andy.model.AgentTask
 import app.andy.model.AgentStatus
+import app.andy.model.providerAuthRecoveryOrNull
 import app.andy.model.runtimeKind
 import app.andy.model.composerCommandToken
 import app.andy.model.modelConfigurationLabel
@@ -546,8 +547,29 @@ fun AgentTaskDetail(
         }
     }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val authRecovery = remember(task.errorMessage, task.agent) { task.providerAuthRecoveryOrNull() }
         task.errorMessage?.let { error ->
-            Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
+                authRecovery?.let { recovery ->
+                    Text(
+                        recovery.instructions,
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+                        AgentHeaderAction("open login", Cyan) {
+                            copyText(recovery.command)
+                            scope.launch { services.agentRuns.openProviderLogin(task.agent) }
+                        }
+                        AgentHeaderAction("copy command", TextSecondary) {
+                            copyText(recovery.command)
+                        }
+                    }
+                }
+            }
         }
         undoError?.let { error ->
             Text(error, color = app.andy.ui.theme.Red, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
@@ -574,6 +596,12 @@ fun AgentTaskDetail(
                     null
                 },
                 onRetry = { scope.launch { services.agentRuns.retry(task.id) } },
+                onSignIn = authRecovery?.let { recovery ->
+                    {
+                        copyText(recovery.command)
+                        scope.launch { services.agentRuns.openProviderLogin(task.agent) }
+                    }
+                },
                 onDelete = { onDelete(task) },
                 onKeep = if (task.temporary) {
                     { scope.launch { services.agentRuns.keepTemporaryChat(task.id) } }
@@ -1413,6 +1441,7 @@ private fun AgentTaskHeader(
     onDetailsExpandedChange: ((Boolean) -> Unit)? = null,
     onCompleteBuild: (() -> Unit)? = null,
     onRetry: () -> Unit,
+    onSignIn: (() -> Unit)? = null,
     onDelete: () -> Unit,
     /** Promotes a temporary chat to a persisted one; null for chats that are already permanent. */
     onKeep: (() -> Unit)? = null,
@@ -1500,6 +1529,7 @@ private fun AgentTaskHeader(
                     }
                 }
                 if (task.status == AgentStatus.Error) {
+                    onSignIn?.let { signIn -> AgentHeaderAction("open login", Cyan, signIn) }
                     AgentHeaderAction("retry", Cyan, onRetry)
                 }
                 if (showDeleteDetailsActions) {

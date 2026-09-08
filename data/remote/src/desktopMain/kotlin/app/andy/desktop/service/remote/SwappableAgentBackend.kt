@@ -209,6 +209,7 @@ class SwappableAgentBackend(
         runs().providerAppContinuationLabel(taskId)
     override suspend fun openInProviderApp(taskId: String): CommandResult = runs().openInProviderApp(taskId)
     override suspend fun openInTerminal(taskId: String): CommandResult = runs().openInTerminal(taskId)
+    override suspend fun openProviderLogin(agent: AgentKind): CommandResult = runs().openProviderLogin(agent)
     override suspend fun openSkill(path: String): CommandResult = runs().openSkill(path)
     override suspend fun worktreeDiffSummary(taskId: String): String? = runs().worktreeDiffSummary(taskId)
     override suspend fun changeSummary(taskId: String): AgentChangeSummary? = runs().changeSummary(taskId)
