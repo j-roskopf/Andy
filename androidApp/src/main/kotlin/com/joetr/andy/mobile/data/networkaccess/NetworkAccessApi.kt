@@ -166,6 +166,35 @@ class NetworkAccessClient(
         return json.decodeFromJsonElement(ChatDetailDto.serializer(), element)
     }
 
+    suspend fun getTranscriptSettings(): TranscriptSettingsDto {
+        val element = getJson("/api/settings/transcript")
+        return json.decodeFromJsonElement(TranscriptSettingsDto.serializer(), element)
+    }
+
+    suspend fun patchTranscriptSettings(
+        showThinkingOnTimeline: Boolean? = null,
+        autoExpandToolSections: Boolean? = null,
+        collapseActivityBetweenMessages: Boolean? = null,
+    ): TranscriptSettingsDto {
+        val body = buildMap {
+            showThinkingOnTimeline?.let { put("showThinkingOnTimeline", JsonPrimitive(it)) }
+            autoExpandToolSections?.let { put("autoExpandToolSections", JsonPrimitive(it)) }
+            collapseActivityBetweenMessages?.let { put("collapseActivityBetweenMessages", JsonPrimitive(it)) }
+        }
+        val response = rawRequest(HttpMethod.Patch, "/api/settings/transcript") {
+            contentType(ContentType.Application.Json)
+            setBody(JsonObject(body))
+        }
+        ensureOk(response)
+        val text = response.bodyAsText()
+        if (looksLikeHtml(text)) {
+            throw NetworkAccessException(
+                "Host returned a web page for /api/settings/transcript instead of JSON. Update Andy Desktop (or andyd) and reconnect.",
+            )
+        }
+        return json.decodeFromString(TranscriptSettingsDto.serializer(), text)
+    }
+
     suspend fun reply(chatId: String, message: String): OkResponse {
         val response = rawRequest(HttpMethod.Post, "/api/chats/${chatId.encodeURL()}/reply") {
             contentType(ContentType.Application.Json)
@@ -367,7 +396,13 @@ class NetworkAccessClient(
     private suspend fun getJson(path: String): JsonElement {
         val response = rawRequest(HttpMethod.Get, path)
         ensureOk(response)
-        return json.parseToJsonElement(response.bodyAsText())
+        val text = response.bodyAsText()
+        if (looksLikeHtml(text)) {
+            throw NetworkAccessException(
+                "Host returned a web page for $path instead of JSON. Update Andy Desktop (or andyd) and reconnect.",
+            )
+        }
+        return json.parseToJsonElement(text)
     }
 
     private suspend fun rawRequest(
@@ -418,6 +453,13 @@ class NetworkAccessException(
     val unauthorized: Boolean = false,
     cause: Throwable? = null,
 ) : Exception(message, cause)
+
+private fun looksLikeHtml(text: String): Boolean {
+    val trimmed = text.trimStart()
+    return trimmed.startsWith("<!") ||
+        trimmed.startsWith("<html", ignoreCase = true) ||
+        trimmed.startsWith("<HTML")
+}
 
 private fun String.encodeURL(): String =
     java.net.URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")

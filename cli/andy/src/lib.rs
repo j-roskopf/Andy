@@ -23,6 +23,8 @@ pub mod skills;
 pub mod slash;
 pub mod tmux;
 pub mod tool_cmd;
+pub mod transcript_display;
+pub mod transcript_prefs;
 pub mod tui;
 pub mod user_input;
 pub mod viewer_chrome;

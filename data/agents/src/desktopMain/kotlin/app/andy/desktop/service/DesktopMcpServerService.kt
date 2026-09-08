@@ -246,6 +246,7 @@ class DesktopMcpServerService(
                     agentRuns = { agentRuns },
                     projectWorkflows = { projectWorkflows },
                     actionConfig = { actionConfig },
+                    workspaceStore = { workspaceStore },
                     push = webPush,
                     attention = attentionHub,
                     networkAccess = webConfig,

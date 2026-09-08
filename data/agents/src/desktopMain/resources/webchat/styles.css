@@ -359,11 +359,13 @@ details.group > summary.group-header::-webkit-details-marker {
 }
 .bubble.thinking-text {
   align-self: flex-start;
-  background: #1a1f26;
-  border: 1px dashed var(--border);
+  background: transparent;
+  border: none;
   color: var(--muted);
   font-size: 0.85rem;
   font-style: italic;
+  padding-left: 0;
+  padding-right: 0;
 }
 .bubble.error {
   align-self: center;
@@ -583,4 +585,112 @@ html.ios body {
   position: fixed;
   height: 100%;
   height: 100dvh;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 16px 32px;
+  -webkit-overflow-scrolling: touch;
+}
+.settings-group {
+  margin-top: 8px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.settings-group h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+.settings-desc {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+.settings-toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.settings-toggle:first-of-type { border-top: none; padding-top: 4px; }
+.settings-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.settings-toggle strong {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.settings-toggle .muted {
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.settings-toggle input[type="checkbox"] {
+  width: 44px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.activity-row {
+  align-self: stretch;
+  max-width: 100%;
+  background: transparent;
+  border: none;
+  overflow: hidden;
+}
+.activity-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  min-height: 32px;
+}
+.activity-summary .caret {
+  flex-shrink: 0;
+  width: 1em;
+  color: var(--muted);
+}
+.activity-summary .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-body {
+  padding: 0 0 8px 1.5em;
+  color: var(--muted);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.activity-body.hidden { display: none; }
+.bubble.tool {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-left: 0;
+  padding-right: 0;
 }

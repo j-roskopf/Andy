@@ -8,6 +8,7 @@
     list: $("view-list"),
     chat: $("view-chat"),
     new: $("view-new"),
+    settings: $("view-settings"),
   };
 
   let token = localStorage.getItem(SESSION_KEY) || "";
@@ -85,6 +86,15 @@
   let optimisticStatus = null;
   let socketPreferQueryAuth = false;
   let socketConnecting = false;
+  /** Mirrors desktop WorkspaceState transcript prefs (shared via /api/settings/transcript). */
+  let transcriptPrefs = {
+    showThinkingOnTimeline: false,
+    autoExpandToolSections: false,
+    collapseActivityBetweenMessages: false,
+  };
+  /** Manual expand/collapse overrides keyed by activity row id. */
+  const expandedActivityOverrides = new Set();
+  let prefsLoaded = false;
 
   const isAndroid = /Android/i.test(navigator.userAgent);
 
@@ -281,6 +291,8 @@
     }
     if (hash.startsWith("/new")) {
       openNew();
+    } else if (hash.startsWith("/settings")) {
+      openSettings();
     } else if (chatMatch) {
       openChat(decodeURIComponent(chatMatch[1]));
     } else {
@@ -498,6 +510,7 @@
     events = [];
     pendingInput = null;
     optimisticUserText = null;
+    expandedActivityOverrides.clear();
     slashCommands = [];
     hideSlashMenu();
     $("chat-error").classList.add("hidden");
@@ -507,6 +520,7 @@
     setChatLoading(true);
     setChatWorking(false);
     try {
+      await ensureTranscriptPrefs();
       const body = await api(`/api/chats/${encodeURIComponent(id)}`);
       chatMeta = body.chat;
       $("chat-title").textContent = chatMeta.title || id;
@@ -682,7 +696,116 @@
   }
 
   function isVisibleTranscriptEvent(type) {
-    return type === "user" || type === "assistant" || type === "thinking" || type === "error" || type === "permission-resolved" || type === "plan";
+    return type === "user" || type === "assistant" || type === "thinking" ||
+      type === "tool" || type === "tool-result" ||
+      type === "error" || type === "permission-resolved" || type === "plan";
+  }
+
+  function isActivityEvent(ev) {
+    const type = ev.type || "";
+    return type === "thinking" || type === "tool" || type === "tool-result";
+  }
+
+  function activityExpanded(key, autoExpand) {
+    return autoExpand ? !expandedActivityOverrides.has(key) : expandedActivityOverrides.has(key);
+  }
+
+  function toggleActivityExpanded(key) {
+    if (expandedActivityOverrides.has(key)) expandedActivityOverrides.delete(key);
+    else expandedActivityOverrides.add(key);
+    renderTranscript();
+  }
+
+  /** Mirrors Kotlin transcriptDisplayItems. */
+  function transcriptDisplayItems(rawEvents) {
+    const display = rawEvents.filter((ev) => isVisibleTranscriptEvent(ev.type || "raw"));
+    const collapse = !!transcriptPrefs.collapseActivityBetweenMessages;
+    const keepThinking = !!transcriptPrefs.showThinkingOnTimeline;
+    const items = [];
+    let index = 0;
+    while (index < display.length) {
+      const event = display[index];
+      if (!isActivityEvent(event)) {
+        items.push({ kind: "event", index, event });
+        index += 1;
+        continue;
+      }
+      if (keepThinking && event.type === "thinking") {
+        items.push({ kind: "event", index, event });
+        index += 1;
+        continue;
+      }
+      const startIndex = index;
+      const group = [];
+      while (index < display.length && isActivityEvent(display[index])) {
+        const next = display[index];
+        if (keepThinking && next.type === "thinking") break;
+        group.push(next);
+        index += 1;
+      }
+      if (!group.length) continue;
+      if (group.length === 1) {
+        items.push({ kind: "event", index: startIndex, event: group[0] });
+      } else if (collapse) {
+        items.push({ kind: "tools", startIndex, events: group });
+      } else if (group.every((e) => e.type === "tool" || e.type === "tool-result")) {
+        items.push({ kind: "tools", startIndex, events: group });
+      } else {
+        group.forEach((activity, offset) => {
+          items.push({ kind: "event", index: startIndex + offset, event: activity });
+        });
+      }
+    }
+    return items;
+  }
+
+  function toolHeadline(ev) {
+    const name = (ev.toolName || "").trim();
+    const summary = (ev.summary || "").trim();
+    if (name && summary && name.toLowerCase() !== summary.toLowerCase()) return `${name}: ${summary}`;
+    return summary || name || (ev.type === "tool-result" ? "Tool result" : "Tool call");
+  }
+
+  function compactActivityHeadline(group) {
+    const thinkingCount = group.filter((e) => e.type === "thinking").length;
+    const tools = group.filter((e) => e.type === "tool" || e.type === "tool-result");
+    const toolLabel = tools.length === 0
+      ? ""
+      : tools.length === 1
+        ? toolHeadline(tools[0])
+        : `${tools.length} tool steps`;
+    if (thinkingCount > 0 && toolLabel) {
+      const thought = thinkingCount === 1 ? "thought" : `${thinkingCount} thoughts`;
+      return `${thought}, ${toolLabel}`;
+    }
+    if (thinkingCount > 0) return thinkingCount === 1 ? "Thought" : `${thinkingCount} thoughts`;
+    return toolLabel || "Activity";
+  }
+
+  function activityBodyText(ev) {
+    if (ev.type === "thinking") return ev.text || "";
+    if (ev.detail) return ev.detail;
+    if (ev.summary) return ev.summary;
+    if (ev.text) return ev.text;
+    return toolHeadline(ev);
+  }
+
+  function appendActivityRow(root, key, headline, body, autoExpand) {
+    const expanded = activityExpanded(key, autoExpand);
+    const row = document.createElement("div");
+    row.className = "activity-row";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "activity-summary";
+    btn.innerHTML = `<span class="caret">${expanded ? "▾" : "▸"}</span><span class="label"></span>`;
+    btn.querySelector(".label").textContent = headline;
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "activity-body" + (expanded ? "" : " hidden");
+    bodyEl.textContent = body;
+    btn.addEventListener("click", () => toggleActivityExpanded(key));
+    row.appendChild(btn);
+    row.appendChild(bodyEl);
+    root.appendChild(row);
   }
 
   function renderTranscript() {
@@ -691,9 +814,42 @@
     const stick = root.scrollHeight - root.scrollTop - root.clientHeight < 80;
     root.innerHTML = "";
     let renderedUserMatch = false;
-    for (const ev of events) {
+    const items = transcriptDisplayItems(events);
+    for (const item of items) {
+      if (item.kind === "tools") {
+        const key = `group-${item.startIndex}`;
+        const body = item.events.map(activityBodyText).filter(Boolean).join("\n\n---\n\n");
+        appendActivityRow(
+          root,
+          key,
+          compactActivityHeadline(item.events),
+          body,
+          !!transcriptPrefs.autoExpandToolSections,
+        );
+        continue;
+      }
+      const ev = item.event;
       const type = ev.type || "raw";
-      if (!isVisibleTranscriptEvent(type)) continue;
+      if (type === "thinking") {
+        appendActivityRow(
+          root,
+          `thinking-${item.index}`,
+          "Thought",
+          ev.text || "",
+          !!transcriptPrefs.showThinkingOnTimeline,
+        );
+        continue;
+      }
+      if (type === "tool" || type === "tool-result") {
+        appendActivityRow(
+          root,
+          `tool-${item.index}`,
+          toolHeadline(ev),
+          activityBodyText(ev),
+          !!transcriptPrefs.autoExpandToolSections,
+        );
+        continue;
+      }
       const el = document.createElement("div");
       if (type === "user") {
         el.className = "bubble user";
@@ -701,9 +857,6 @@
         if (optimisticUserText && ev.text === optimisticUserText) renderedUserMatch = true;
       } else if (type === "assistant") {
         el.className = "bubble assistant";
-        el.textContent = ev.text || "";
-      } else if (type === "thinking") {
-        el.className = "bubble thinking-text";
         el.textContent = ev.text || "";
       } else if (type === "error") {
         el.className = "bubble error";
@@ -728,6 +881,8 @@
         }
         if (!md && !entries.length) body += `<div class="plan-body">Plan ready</div>`;
         el.innerHTML = body;
+      } else {
+        continue;
       }
       root.appendChild(el);
     }
@@ -744,6 +899,56 @@
       root.appendChild(el);
     }
     if (stick) root.scrollTop = root.scrollHeight;
+  }
+
+  async function ensureTranscriptPrefs() {
+    if (prefsLoaded) return;
+    try {
+      const body = await api("/api/settings/transcript");
+      transcriptPrefs = {
+        showThinkingOnTimeline: !!body.showThinkingOnTimeline,
+        autoExpandToolSections: !!body.autoExpandToolSections,
+        collapseActivityBetweenMessages: !!body.collapseActivityBetweenMessages,
+      };
+      prefsLoaded = true;
+    } catch (_) {}
+  }
+
+  function syncSettingsForm() {
+    $("pref-thinking-timeline").checked = !!transcriptPrefs.showThinkingOnTimeline;
+    $("pref-auto-expand-tools").checked = !!transcriptPrefs.autoExpandToolSections;
+    $("pref-collapse-activity").checked = !!transcriptPrefs.collapseActivityBetweenMessages;
+  }
+
+  async function openSettings() {
+    closeSocket();
+    currentChatId = null;
+    show("settings");
+    $("settings-error").classList.add("hidden");
+    await ensureTranscriptPrefs();
+    syncSettingsForm();
+  }
+
+  async function patchTranscriptPref(partial) {
+    $("settings-error").classList.add("hidden");
+    try {
+      const body = await api("/api/settings/transcript", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(partial),
+      });
+      transcriptPrefs = {
+        showThinkingOnTimeline: !!body.showThinkingOnTimeline,
+        autoExpandToolSections: !!body.autoExpandToolSections,
+        collapseActivityBetweenMessages: !!body.collapseActivityBetweenMessages,
+      };
+      prefsLoaded = true;
+      syncSettingsForm();
+    } catch (err) {
+      $("settings-error").textContent = err.message || "Failed to save settings";
+      $("settings-error").classList.remove("hidden");
+      syncSettingsForm();
+    }
   }
 
   function renderPermission() {
@@ -1300,6 +1505,17 @@
     if (confirm("Log out of Andy on this device? You'll need to sign in again.")) {
       forgetToken().catch(() => {});
     }
+  });
+  $("btn-settings").addEventListener("click", () => { location.hash = "#/settings"; });
+  $("btn-settings-back").addEventListener("click", () => { location.hash = "#/"; });
+  $("pref-thinking-timeline").addEventListener("change", (e) => {
+    patchTranscriptPref({ showThinkingOnTimeline: e.target.checked });
+  });
+  $("pref-auto-expand-tools").addEventListener("change", (e) => {
+    patchTranscriptPref({ autoExpandToolSections: e.target.checked });
+  });
+  $("pref-collapse-activity").addEventListener("change", (e) => {
+    patchTranscriptPref({ collapseActivityBetweenMessages: e.target.checked });
   });
   $("btn-new").addEventListener("click", () => { location.hash = "#/new"; });
   $("btn-back").addEventListener("click", () => { location.hash = "#/"; });

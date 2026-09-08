@@ -32,6 +32,11 @@ use crate::slash::{
     complete_command, menu_height, merge_commands_with_skills, native_commands_for_agent,
     render_menu, SlashCommand, SlashMenuAction, SlashMenuState,
 };
+use crate::transcript_display::{
+    is_transcript_activity_event, transcript_activity_expanded, transcript_display_items,
+    TranscriptDisplayItem,
+};
+use crate::transcript_prefs::TranscriptPrefs;
 use crate::user_input::{
     self, option_label_at, parse_user_input_request, PendingUserInput, PermissionChoice,
 };
@@ -90,7 +95,12 @@ struct ViewState {
     input: String,
     image_paths: Vec<String>,
     scroll: u16,
+    /// Per-item overrides for activity expand/collapse, keyed by coalesced display
+    /// index (or a `ToolCalls` block's start index). Interpreted relative to the
+    /// matching `prefs` auto-expand flag via [`transcript_activity_expanded`].
     expanded_tools: std::collections::HashSet<usize>,
+    /// Desktop transcript display prefs loaded from `~/.andy/workspace.properties`.
+    prefs: TranscriptPrefs,
     pending_input: Option<PendingUserInput>,
     /// Selected answers for multi-question Artifact prompts (grill-me).
     pending_answers: std::collections::HashMap<String, String>,
@@ -169,6 +179,7 @@ pub async fn run_acp_viewer(client: &mut McpClient, task_id: &str) -> Result<()>
             image_paths: Vec::new(),
             scroll: 0,
             expanded_tools: std::collections::HashSet::new(),
+            prefs: crate::transcript_prefs::load_from_workspace(),
             pending_input: None,
             pending_answers: std::collections::HashMap::new(),
             pending_focus: 0,
@@ -452,10 +463,7 @@ async fn handle_key(
     state: &mut ViewState,
     key: KeyEvent,
 ) -> Result<LoopAction> {
-    if state.composer_enabled
-        && state.pending_input.is_none()
-        && state.connection_issue.is_none()
-    {
+    if state.composer_enabled && state.pending_input.is_none() && state.connection_issue.is_none() {
         let commands = available_slash_commands(meta, state);
         match state
             .slash_menu
@@ -501,7 +509,8 @@ async fn handle_key(
             if !awaiting_plan_confirmation(state) {
                 state.status_flash = Some("not awaiting plan approval".into());
             } else if state.workflow_stage.eq_ignore_ascii_case("Spec") {
-                state.status_flash = Some("spec runs stay in plan mode — review in Projects".into());
+                state.status_flash =
+                    Some("spec runs stay in plan mode — review in Projects".into());
             } else {
                 match client
                     .call_tool(
@@ -634,7 +643,8 @@ async fn handle_key(
                                             state.pending_input = None;
                                             state.pending_answers.clear();
                                             state.pending_focus = 0;
-                                        } else if state.pending_focus + 1 < pending.questions.len() {
+                                        } else if state.pending_focus + 1 < pending.questions.len()
+                                        {
                                             state.pending_focus += 1;
                                         }
                                         return Ok(LoopAction::Continue);
@@ -691,17 +701,25 @@ fn modifiers_allow_typing(mods: KeyModifiers) -> bool {
         && !mods.contains(KeyModifiers::SUPER)
 }
 
-/// Toggle expand/collapse for the last tool bubble using coalesced display indexes
-/// (the same list `render_transcript` iterates).
+/// Toggle expand/collapse for the last activity row or activity block using coalesced
+/// display indexes (the same list `render_transcript` iterates). A collapsed
+/// `ToolCalls` block toggles as a whole (its start index); a standalone activity
+/// event (not grouped, or pulled out via `show_thinking_on_timeline`) toggles itself.
 fn toggle_last_tool_expand(state: &mut ViewState) {
     let display = AgentEvent::coalesce_for_display(&state.events);
-    if let Some(idx) = display
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, e)| matches!(e, AgentEvent::Tool { .. } | AgentEvent::ToolResult { .. }))
-        .map(|(i, _)| i)
-    {
+    let items = transcript_display_items(
+        &display,
+        state.prefs.collapse_activity,
+        state.prefs.show_thinking_on_timeline,
+    );
+    let target = items.iter().rev().find_map(|item| match item {
+        TranscriptDisplayItem::ToolCalls(start_index, _) => Some(*start_index),
+        TranscriptDisplayItem::Event(idx, event) if is_transcript_activity_event(event) => {
+            Some(*idx)
+        }
+        _ => None,
+    });
+    if let Some(idx) = target {
         if !state.expanded_tools.remove(&idx) {
             state.expanded_tools.insert(idx);
         }
@@ -759,10 +777,7 @@ fn parse_live_snapshot(v: &Value) -> LiveSnapshot {
             .and_then(|s| s.as_str())
             .unwrap_or("")
             .to_string(),
-        plan_mode: v
-            .get("planMode")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false),
+        plan_mode: v.get("planMode").and_then(|b| b.as_bool()).unwrap_or(false),
         workflow_stage: v
             .get("workflowStage")
             .and_then(|s| s.as_str())
@@ -859,7 +874,10 @@ fn awaiting_plan_confirmation(state: &ViewState) -> bool {
 /// pending rows while `planMode` stays off. The latest plan is "pending" unless a user turn
 /// followed it and every entry (or the markdown) reads as resolved.
 fn latest_plan_has_pending_entries(events: &[AgentEvent]) -> bool {
-    let Some(plan_index) = events.iter().rposition(|e| matches!(e, AgentEvent::Plan { .. })) else {
+    let Some(plan_index) = events
+        .iter()
+        .rposition(|e| matches!(e, AgentEvent::Plan { .. }))
+    else {
         return false;
     };
     if events
@@ -869,7 +887,10 @@ fn latest_plan_has_pending_entries(events: &[AgentEvent]) -> bool {
     {
         return false;
     }
-    let AgentEvent::Plan { entries, markdown, .. } = &events[plan_index] else {
+    let AgentEvent::Plan {
+        entries, markdown, ..
+    } = &events[plan_index]
+    else {
         return false;
     };
     if entries.is_empty() {
@@ -895,7 +916,11 @@ fn display_status_label(state: &ViewState) -> String {
 /// Transcript presence line mirroring the desktop Working orb.
 /// `plan_ready` is the precomputed "Done awaiting plan approval" flag (see
 /// [`awaiting_plan_confirmation`]).
-fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_ready: bool) -> Option<String> {
+fn presence_label(
+    status: &str,
+    pending: Option<&PendingUserInput>,
+    plan_ready: bool,
+) -> Option<String> {
     match status {
         "Working" => Some("Working".into()),
         "Blocked" => {
@@ -906,9 +931,7 @@ fn presence_label(status: &str, pending: Option<&PendingUserInput>, plan_ready: 
             }
         }
         "Stopping" => Some("Stopping".into()),
-        "Done" if plan_ready => {
-            Some("Plan ready — Ctrl-i implement · type to refine".into())
-        }
+        "Done" if plan_ready => Some("Plan ready — Ctrl-i implement · type to refine".into()),
         _ => None,
     }
 }
@@ -962,9 +985,7 @@ fn queue_panel_height(queued: &[QueuedFollowUp]) -> u16 {
     let max_items = MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize;
     let visible = queued.len().min(max_items);
     let more_row = if queued.len() > visible { 1u16 } else { 0 };
-    (visible as u16)
-        .saturating_add(more_row)
-        .saturating_add(2) // borders
+    (visible as u16).saturating_add(more_row).saturating_add(2) // borders
 }
 
 /// Lines moved per mouse-wheel notch (and per Termux/iSH touch-synthesized wheel event).
@@ -1171,16 +1192,12 @@ fn refresh_cached_skills(meta: &ChatMeta, state: &mut ViewState) {
     let workspace = workspace_for_meta(meta)
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    let key = (
-        meta.agent.clone().unwrap_or_default(),
-        workspace,
-    );
+    let key = (meta.agent.clone().unwrap_or_default(), workspace);
     if state.cached_skills_key.as_ref() == Some(&key) {
         return;
     }
     let workspace_path = workspace_for_meta(meta);
-    state.cached_skills =
-        discover_agent_skills(meta.agent.as_deref(), workspace_path.as_deref());
+    state.cached_skills = discover_agent_skills(meta.agent.as_deref(), workspace_path.as_deref());
     state.cached_skills_key = Some(key);
 }
 
@@ -1290,10 +1307,9 @@ fn draw(
     }
 
     if queue_h > 0 {
-        let queue_block = Block::default().borders(Borders::ALL).title(format!(
-            " Queue · {} ",
-            state.queued_follow_ups.len()
-        ));
+        let queue_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Queue · {} ", state.queued_follow_ups.len()));
         let queue_inner = queue_block.inner(chunks[2]);
         frame.render_widget(queue_block, chunks[2]);
         // Truncate to the inner width and skip wrap so height stays 1 row/item.
@@ -1345,11 +1361,8 @@ fn draw(
         format!(" {chips}{} ", state.input)
     };
     frame.render_widget(
-        Paragraph::new(composer).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(composer_title),
-        ),
+        Paragraph::new(composer)
+            .block(Block::default().borders(Borders::ALL).title(composer_title)),
         chunks[4],
     );
     render_menu(frame, chunks[3], &state.slash_menu);
@@ -1420,13 +1433,16 @@ fn event_visible_in_conversation(event: &AgentEvent) -> bool {
     }
 }
 
+/// Prefs now drive activity expand/collapse, so the default view shows full transcript
+/// chrome (details on). `ANDY_ACP_VIEW_DETAILS` can still force conversation-only
+/// (hide activity chrome entirely) by setting an explicit falsy value.
 fn details_default_from_env() -> bool {
     match std::env::var("ANDY_ACP_VIEW_DETAILS") {
         Ok(v) => {
             let v = v.trim().to_ascii_lowercase();
-            matches!(v.as_str(), "1" | "true" | "yes" | "on" | "full" | "all")
+            !matches!(v.as_str(), "0" | "false" | "no" | "off" | "conversation")
         }
-        Err(_) => false,
+        Err(_) => true,
     }
 }
 
@@ -1448,184 +1464,320 @@ fn render_transcript(
     }
 
     let display = AgentEvent::coalesce_for_display(&state.events);
+    let items = transcript_display_items(
+        &display,
+        state.prefs.collapse_activity,
+        state.prefs.show_thinking_on_timeline,
+    );
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for (idx, event) in display.iter().enumerate() {
-        if !state.show_details && !event_visible_in_conversation(event) {
-            continue;
-        }
-        match event {
-            AgentEvent::User { text, images, .. } => {
-                lines.push(Line::from(Span::styled(
-                    "you".to_string(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                lines.extend(markdown_lines(skin, text, width));
-                for img in images {
-                    let name = PathBuf::from(img)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| img.clone());
-                    lines.push(Line::from(format!("  [image: {name}] ({img})")));
+    for item in &items {
+        match item {
+            TranscriptDisplayItem::Event(idx, event) => {
+                if !state.show_details && !event_visible_in_conversation(event) {
+                    continue;
                 }
-                lines.push(Line::from(""));
+                push_event_lines(
+                    *idx, event, state, skin, syntax_set, theme, width, &mut lines,
+                );
             }
-            AgentEvent::Assistant { text, .. } => {
-                lines.push(Line::from(Span::styled(
-                    "assistant".to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )));
-                lines.extend(markdown_lines(skin, text, width));
-                lines.push(Line::from(""));
-            }
-            AgentEvent::Thinking { text, .. } => {
-                lines.push(Line::from(Span::styled(
-                    "thinking".to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )));
-                lines.extend(markdown_lines(skin, text, width));
-                lines.push(Line::from(""));
-            }
-            AgentEvent::Tool {
-                tool_name,
-                summary,
-                detail,
-                state: tool_state,
-                ..
-            } => {
-                let expanded = state.expanded_tools.contains(&idx);
-                lines.push(Line::from(format!(
-                    "▸ {tool_name} [{tool_state}] {summary}"
-                )));
-                if expanded {
-                    lines.extend(highlight_detail(syntax_set, theme, detail));
+            TranscriptDisplayItem::ToolCalls(start_index, members) => {
+                // Every member is activity (Thinking/Tool/ToolResult), which is
+                // always hidden in conversation-only mode.
+                if !state.show_details {
+                    continue;
                 }
-            }
-            AgentEvent::ToolResult {
-                tool_name,
-                summary,
-                detail,
-                is_error,
-                ..
-            } => {
-                let expanded = state.expanded_tools.contains(&idx);
-                let tag = if *is_error { "err" } else { "ok" };
-                lines.push(Line::from(format!("◂ {tool_name} [{tag}] {summary}")));
-                if expanded {
-                    lines.extend(highlight_detail(syntax_set, theme, detail));
-                }
-            }
-            AgentEvent::Plan {
-                entries, markdown, ..
-            } => {
+                let expanded = transcript_activity_expanded(
+                    *start_index,
+                    &state.expanded_tools,
+                    state.prefs.auto_expand_tools,
+                );
+                let marker = if expanded { "▾" } else { "▸" };
+                let summary = activity_group_summary(members.iter().map(|(_, e)| e));
                 lines.push(Line::from(Span::styled(
-                    "plan".to_string(),
-                    Style::default().fg(Color::Yellow),
-                )));
-                if let Some(md) = markdown {
-                    lines.extend(markdown_lines(skin, md, width));
-                } else {
-                    for (content, status) in entries {
-                        lines.push(Line::from(format!("  - [{status}] {content}")));
-                    }
-                }
-                lines.push(Line::from(""));
-            }
-            AgentEvent::Mode { mode_id, .. } => {
-                lines.push(Line::from(format!("mode → {mode_id}")));
-            }
-            AgentEvent::Commands { commands, .. } => {
-                lines.push(Line::from(Span::styled(
-                    "available commands".to_string(),
+                    format!("{marker} {summary}"),
                     Style::default().fg(Color::Blue),
                 )));
-                for (name, description) in commands {
-                    if description.is_empty() {
-                        lines.push(Line::from(format!("  /{name}")));
-                    } else {
-                        lines.push(Line::from(format!("  /{name} — {description}")));
+                if expanded {
+                    for (_, event) in members {
+                        lines.push(activity_member_line(event));
                     }
                 }
-                lines.push(Line::from(""));
             }
-            AgentEvent::Modes {
-                current_mode_id,
-                modes,
-                ..
-            } => {
-                lines.push(Line::from(Span::styled(
-                    format!("available modes (current={current_mode_id})"),
-                    Style::default().fg(Color::Blue),
-                )));
-                for (id, name) in modes {
-                    lines.push(Line::from(format!("  {id} — {name}")));
-                }
-                lines.push(Line::from(""));
-            }
-            AgentEvent::Permission {
-                tool_name,
-                question,
-                ..
-            } => {
-                lines.push(Line::from(Span::styled(
-                    format!("permission · {tool_name}: {question}"),
-                    Style::default().fg(Color::Magenta),
-                )));
-            }
-            AgentEvent::PermissionResolved {
-                allowed,
-                option_id,
-                note,
-                ..
-            } => {
-                let note = note.clone().unwrap_or_default();
-                lines.push(Line::from(format!(
-                    "permission resolved · allowed={allowed} · {option_id} {note}"
-                )));
-            }
-            AgentEvent::Result {
-                success,
-                final_text,
-                ..
-            } => {
-                lines.push(Line::from(format!(
-                    "result · success={success} {}",
-                    final_text.chars().take(200).collect::<String>()
-                )));
-            }
-            AgentEvent::Error { text, .. } => {
-                lines.push(Line::from(Span::styled(
-                    format!("error: {text}"),
-                    Style::default().fg(Color::Red),
-                )));
-            }
-            AgentEvent::Raw { line, .. } => {
-                lines.push(Line::from(format!("raw: {line}")));
-            }
-            AgentEvent::Session { model, .. } => {
-                lines.push(Line::from(format!("session · model={model}")));
-            }
-            AgentEvent::Usage {
-                used_tokens,
-                window_tokens,
-                ..
-            } => {
-                lines.push(Line::from(format!(
-                    "usage · {used_tokens}/{window_tokens} tokens"
-                )));
-            }
-            AgentEvent::Unknown { .. } => {}
         }
     }
     Text::from(lines)
 }
 
+/// Compact one-line summary for a collapsed activity block, e.g. "2 thoughts, 3 tool
+/// steps". Mirrors the intent of Kotlin `compactActivityHeadline` at a coarser grain.
+fn activity_group_summary<'a>(events: impl Iterator<Item = &'a AgentEvent>) -> String {
+    let mut thinking = 0usize;
+    let mut tools = 0usize;
+    for event in events {
+        if matches!(event, AgentEvent::Thinking { .. }) {
+            thinking += 1;
+        } else {
+            tools += 1;
+        }
+    }
+    let mut parts = Vec::new();
+    if thinking > 0 {
+        parts.push(if thinking == 1 {
+            "1 thought".to_string()
+        } else {
+            format!("{thinking} thoughts")
+        });
+    }
+    if tools > 0 {
+        parts.push(if tools == 1 {
+            "1 tool step".to_string()
+        } else {
+            format!("{tools} tool steps")
+        });
+    }
+    parts.join(", ")
+}
+
+/// One compact line for an activity event shown inside an expanded `ToolCalls`
+/// block (no detail body — use the standalone row's own expand for that).
+fn activity_member_line(event: &AgentEvent) -> Line<'static> {
+    match event {
+        AgentEvent::Thinking { text, .. } => Line::from(Span::styled(
+            format!("  · thought: {}", first_line(text)),
+            Style::default().fg(Color::DarkGray),
+        )),
+        AgentEvent::Tool {
+            tool_name,
+            summary,
+            state: tool_state,
+            ..
+        } => Line::from(format!("  ▸ {tool_name} [{tool_state}] {summary}")),
+        AgentEvent::ToolResult {
+            tool_name,
+            summary,
+            is_error,
+            ..
+        } => {
+            let tag = if *is_error { "err" } else { "ok" };
+            Line::from(format!("  ◂ {tool_name} [{tag}] {summary}"))
+        }
+        _ => Line::from(""),
+    }
+}
+
+/// First non-blank line of `text`, truncated to keep group members to one row.
+fn first_line(text: &str) -> String {
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    truncate_chars(line.trim(), 100)
+}
+
+/// Render a single transcript event's lines (not part of a collapsed activity
+/// block). `idx` is the coalesced display index, used to look up per-item
+/// expand/collapse overrides for activity events.
+#[allow(clippy::too_many_arguments)]
+fn push_event_lines(
+    idx: usize,
+    event: &AgentEvent,
+    state: &ViewState,
+    skin: &MadSkin,
+    syntax_set: &SyntaxSet,
+    theme: &syntect::highlighting::Theme,
+    width: u16,
+    lines: &mut Vec<Line<'static>>,
+) {
+    match event {
+        AgentEvent::User { text, images, .. } => {
+            lines.push(Line::from(Span::styled(
+                "you".to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.extend(markdown_lines(skin, text, width));
+            for img in images {
+                let name = PathBuf::from(img)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| img.clone());
+                lines.push(Line::from(format!("  [image: {name}] ({img})")));
+            }
+            lines.push(Line::from(""));
+        }
+        AgentEvent::Assistant { text, .. } => {
+            lines.push(Line::from(Span::styled(
+                "assistant".to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.extend(markdown_lines(skin, text, width));
+            lines.push(Line::from(""));
+        }
+        AgentEvent::Thinking { text, .. } => {
+            let expanded = transcript_activity_expanded(
+                idx,
+                &state.expanded_tools,
+                state.prefs.show_thinking_on_timeline,
+            );
+            lines.push(Line::from(Span::styled(
+                "thinking".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if expanded {
+                lines.extend(markdown_lines(skin, text, width));
+                lines.push(Line::from(""));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("  {} (space to expand)", first_line(text)),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        AgentEvent::Tool {
+            tool_name,
+            summary,
+            detail,
+            state: tool_state,
+            ..
+        } => {
+            let expanded = transcript_activity_expanded(
+                idx,
+                &state.expanded_tools,
+                state.prefs.auto_expand_tools,
+            );
+            lines.push(Line::from(format!(
+                "▸ {tool_name} [{tool_state}] {summary}"
+            )));
+            if expanded {
+                lines.extend(highlight_detail(syntax_set, theme, detail));
+            }
+        }
+        AgentEvent::ToolResult {
+            tool_name,
+            summary,
+            detail,
+            is_error,
+            ..
+        } => {
+            let expanded = transcript_activity_expanded(
+                idx,
+                &state.expanded_tools,
+                state.prefs.auto_expand_tools,
+            );
+            let tag = if *is_error { "err" } else { "ok" };
+            lines.push(Line::from(format!("◂ {tool_name} [{tag}] {summary}")));
+            if expanded {
+                lines.extend(highlight_detail(syntax_set, theme, detail));
+            }
+        }
+        AgentEvent::Plan {
+            entries, markdown, ..
+        } => {
+            lines.push(Line::from(Span::styled(
+                "plan".to_string(),
+                Style::default().fg(Color::Yellow),
+            )));
+            if let Some(md) = markdown {
+                lines.extend(markdown_lines(skin, md, width));
+            } else {
+                for (content, status) in entries {
+                    lines.push(Line::from(format!("  - [{status}] {content}")));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+        AgentEvent::Mode { mode_id, .. } => {
+            lines.push(Line::from(format!("mode → {mode_id}")));
+        }
+        AgentEvent::Commands { commands, .. } => {
+            lines.push(Line::from(Span::styled(
+                "available commands".to_string(),
+                Style::default().fg(Color::Blue),
+            )));
+            for (name, description) in commands {
+                if description.is_empty() {
+                    lines.push(Line::from(format!("  /{name}")));
+                } else {
+                    lines.push(Line::from(format!("  /{name} — {description}")));
+                }
+            }
+            lines.push(Line::from(""));
+        }
+        AgentEvent::Modes {
+            current_mode_id,
+            modes,
+            ..
+        } => {
+            lines.push(Line::from(Span::styled(
+                format!("available modes (current={current_mode_id})"),
+                Style::default().fg(Color::Blue),
+            )));
+            for (id, name) in modes {
+                lines.push(Line::from(format!("  {id} — {name}")));
+            }
+            lines.push(Line::from(""));
+        }
+        AgentEvent::Permission {
+            tool_name,
+            question,
+            ..
+        } => {
+            lines.push(Line::from(Span::styled(
+                format!("permission · {tool_name}: {question}"),
+                Style::default().fg(Color::Magenta),
+            )));
+        }
+        AgentEvent::PermissionResolved {
+            allowed,
+            option_id,
+            note,
+            ..
+        } => {
+            let note = note.clone().unwrap_or_default();
+            lines.push(Line::from(format!(
+                "permission resolved · allowed={allowed} · {option_id} {note}"
+            )));
+        }
+        AgentEvent::Result {
+            success,
+            final_text,
+            ..
+        } => {
+            lines.push(Line::from(format!(
+                "result · success={success} {}",
+                final_text.chars().take(200).collect::<String>()
+            )));
+        }
+        AgentEvent::Error { text, .. } => {
+            lines.push(Line::from(Span::styled(
+                format!("error: {text}"),
+                Style::default().fg(Color::Red),
+            )));
+        }
+        AgentEvent::Raw { line, .. } => {
+            lines.push(Line::from(format!("raw: {line}")));
+        }
+        AgentEvent::Session { model, .. } => {
+            lines.push(Line::from(format!("session · model={model}")));
+        }
+        AgentEvent::Usage {
+            used_tokens,
+            window_tokens,
+            ..
+        } => {
+            lines.push(Line::from(format!(
+                "usage · {used_tokens}/{window_tokens} tokens"
+            )));
+        }
+        AgentEvent::Unknown { .. } => {}
+    }
+}
+
 fn render_queue_panel(queued: &[QueuedFollowUp], content_width: u16) -> Text<'static> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let visible = queued.len().min(MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize);
+    let visible = queued
+        .len()
+        .min(MAX_QUEUE_PANEL_ROWS.saturating_sub(1) as usize);
     // Leave room for "  N. " prefix (up to two digits) so previews never wrap.
     let max_preview = content_width.saturating_sub(6).max(8) as usize;
     for (idx, item) in queued.iter().take(visible).enumerate() {
@@ -1699,9 +1851,8 @@ fn unwrap_outer_markdown_fence(text: &str) -> std::borrow::Cow<'_, str> {
     }
 
     let last = lines[lines.len() - 1].trim();
-    let closes_fence = !last.is_empty()
-        && last.chars().all(|c| c == fence_char)
-        && last.len() >= open_len;
+    let closes_fence =
+        !last.is_empty() && last.chars().all(|c| c == fence_char) && last.len() >= open_len;
     if !closes_fence {
         return std::borrow::Cow::Borrowed(text);
     }
@@ -1888,6 +2039,7 @@ mod tests {
             image_paths: Vec::new(),
             scroll: 0,
             expanded_tools: Default::default(),
+            prefs: TranscriptPrefs::default(),
             pending_input: None,
             pending_answers: Default::default(),
             pending_focus: 0,
@@ -2415,16 +2567,14 @@ mod tests {
     #[test]
     fn plan_pending_entries_are_detected_like_android_web() {
         // Cursor Create Plan can end with pending rows while planMode stays off.
-        let pending = vec![
-            AgentEvent::Plan {
-                at_millis: 0,
-                entries: vec![
-                    ("Step one".into(), "pending".into()),
-                    ("Step two".into(), "completed".into()),
-                ],
-                markdown: None,
-            },
-        ];
+        let pending = vec![AgentEvent::Plan {
+            at_millis: 0,
+            entries: vec![
+                ("Step one".into(), "pending".into()),
+                ("Step two".into(), "completed".into()),
+            ],
+            markdown: None,
+        }];
         assert!(latest_plan_has_pending_entries(&pending));
         // A user turn after the plan supersedes it.
         let superseded = vec![
@@ -2486,18 +2636,12 @@ mod tests {
         state.status = "Done".into();
         state.plan_mode = true;
         state.events = vec![];
-        let mapped = map_key_action(
-            &state,
-            KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL),
-        );
+        let mapped = map_key_action(&state, KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL));
         assert_eq!(mapped, MappedKey::ImplementPlan);
         // And still not when the plan-mode predicate is unsatisfied.
         state.plan_mode = false;
         assert_eq!(
-            map_key_action(
-                &state,
-                KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL),
-            ),
+            map_key_action(&state, KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL),),
             MappedKey::None
         );
     }
@@ -2632,7 +2776,12 @@ mod tests {
         let plain: String = text
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(plain.contains("1. do the thing"));
@@ -2642,16 +2791,16 @@ mod tests {
     #[test]
     fn render_queue_panel_truncates_to_width() {
         let long = "x".repeat(200);
-        let text = render_queue_panel(
-            &[QueuedFollowUp {
-                text: long.clone(),
-            }],
-            20,
-        );
+        let text = render_queue_panel(&[QueuedFollowUp { text: long.clone() }], 20);
         let plain: String = text
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(plain.contains('…'), "got:\n{plain}");
@@ -2683,7 +2832,12 @@ mod tests {
         let plain: String = body
             .lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
@@ -2699,11 +2853,18 @@ mod tests {
         let lines = markdown_lines(&skin, text, 82);
         let plain: Vec<String> = lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect();
 
         // The heading is rendered (no leading literal `#`), not dumped as raw fenced text.
-        assert!(plain.iter().any(|l| l.contains("Sample Markdown") && !l.contains('#')));
+        assert!(plain
+            .iter()
+            .any(|l| l.contains("Sample Markdown") && !l.contains('#')));
         // The nested code sample still renders as code, without stray backtick fence markers.
         assert!(plain.iter().any(|l| l.contains("fun main")));
         assert!(!plain.iter().any(|l| l.trim() == "```kotlin"));
