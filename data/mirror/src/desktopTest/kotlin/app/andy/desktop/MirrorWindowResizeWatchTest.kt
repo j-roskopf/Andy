@@ -14,9 +14,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 
 /**
- * Pop-out mirror windows must freeze Metal geometry while they are being resized, exactly like the
- * main window. Watching only the main window let pop-out resize drags push AppKit geometry from the
- * EDT mid-drag, which froze the whole app.
+ * Pop-out mirror windows must block presenter attach while they are being resized, exactly like the
+ * main window. Watching only the main window let pop-out resize drags open an overlay from the EDT
+ * mid-drag — a main-thread dispatch_sync against AWT's own main→EDT hop, which froze the whole app.
+ * Geometry itself stays live so the mirror tracks the drag; only attach waits for the settle.
  */
 class MirrorWindowResizeWatchTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -31,7 +32,7 @@ class MirrorWindowResizeWatchTest {
     }
 
     @Test
-    fun resizingASecondaryWindowSuppressesMirrorGeometry() {
+    fun resizingASecondaryWindowSuppressesPresenterAttach() {
         if (GraphicsEnvironment.isHeadless()) return
 
         val resizingStates = mutableListOf<Boolean>()
@@ -47,8 +48,8 @@ class MirrorWindowResizeWatchTest {
         flushEdt()
 
         assertTrue(
-            MirrorPresentationGuard.suppressingGeometry,
-            "Resizing a pop-out window must suppress mirror geometry",
+            MirrorPresentationGuard.suppressingAttach,
+            "Resizing a pop-out window must suppress presenter attach",
         )
         assertTrue(
             synchronized(resizingStates) { resizingStates.contains(true) },
@@ -57,8 +58,8 @@ class MirrorWindowResizeWatchTest {
 
         awaitSettled()
         assertFalse(
-            MirrorPresentationGuard.suppressingGeometry,
-            "Geometry must resume once the resize settles",
+            MirrorPresentationGuard.suppressingAttach,
+            "Attach must resume once the resize settles",
         )
     }
 
@@ -72,12 +73,12 @@ class MirrorWindowResizeWatchTest {
         val popOut = showFrame("pop-out-uninstall")
         SwingUtilities.invokeAndWait { popOut.setSize(300, 640) }
         flushEdt()
-        assertTrue(MirrorPresentationGuard.suppressingGeometry)
+        assertTrue(MirrorPresentationGuard.suppressingAttach)
 
         watch.uninstall()
         assertFalse(
-            MirrorPresentationGuard.suppressingGeometry,
-            "Tearing the watch down must not strand mirrors with geometry suppressed",
+            MirrorPresentationGuard.suppressingAttach,
+            "Tearing the watch down must not strand mirrors with attach suppressed",
         )
     }
 
@@ -102,8 +103,8 @@ class MirrorWindowResizeWatchTest {
             flushEdt()
             awaitSettled()
             assertFalse(
-                MirrorPresentationGuard.suppressingGeometry,
-                "Popup windows opening must not suspend mirror geometry",
+                MirrorPresentationGuard.suppressingAttach,
+                "Popup windows opening must not suspend presenter attach",
             )
         } finally {
             SwingUtilities.invokeAndWait { popup.dispose() }
@@ -128,7 +129,7 @@ class MirrorWindowResizeWatchTest {
 
     private fun awaitSettled(timeoutMillis: Long = 2_000) {
         val deadline = System.currentTimeMillis() + timeoutMillis
-        while (MirrorPresentationGuard.suppressingGeometry && System.currentTimeMillis() < deadline) {
+        while (MirrorPresentationGuard.suppressingAttach && System.currentTimeMillis() < deadline) {
             Thread.sleep(20)
         }
         flushEdt()

@@ -58,6 +58,7 @@ import java.awt.geom.Ellipse2D
 import java.io.File
 import javax.imageio.ImageIO
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 import java.util.concurrent.CompletableFuture
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.Flow
@@ -311,7 +312,7 @@ private class MirrorPanel(
     }
 
     private fun attachGpuPresentationIfReady() {
-        if (MirrorPresentationGuard.suppressingGeometry || !prefersGpuHub()) return
+        if (!prefersGpuHub()) return
         // Boot attach before the Canvas has a real size leaves a stuck/invisible overlay;
         // tab remount works because size is already valid by then.
         if (!isShowing || width <= 0 || height <= 0) return
@@ -321,12 +322,23 @@ private class MirrorPanel(
             presenter.repaint()
             return
         }
+        // Only the attach is unsafe mid-drag: it opens the overlay through a main-thread
+        // dispatch_sync. The geometry path above stays live so the mirror tracks the resize.
+        if (MirrorPresentationGuard.suppressingAttach) return
         presenter.attach(this, fillNativePresentationHost)
     }
 
     private fun resumeGpuPresentationAfterShow() {
         if (!prefersGpuHub() || occluded || !hostsNativePresentation || !isDisplayable) return
         val resume = Runnable {
+            // Resume can reach attach(), which is the one AppKit-synchronous path. Retry on a timer
+            // once the drag settles rather than burning the bounded attempt budget on every EDT turn.
+            if (MirrorPresentationGuard.suppressingAttach) {
+                Timer(RESIZE_ATTACH_RETRY_MILLIS) { resumeGpuPresentationAfterShow() }
+                    .apply { isRepeats = false }
+                    .start()
+                return@Runnable
+            }
             // Retry until the hub session exists and the host has real bounds — on first
             // Live open the session often arrives after addNotify.
             if (!isDisplayable || !isShowing || width <= 0 || height <= 0 || !usesGpuHub()) {
@@ -345,18 +357,31 @@ private class MirrorPanel(
 
     private var presentationGeometryPending = false
 
+    /**
+     * Pushes the overlay's screen rect. Resize/move callbacks already run on the EDT, and every
+     * queue turn between the AWT resize and the AppKit setFrame is one more frame the mirror trails
+     * the window by — so apply inline there and only coalesce for off-EDT callers.
+     */
     private fun updatePresentationGeometry() {
-        if (MirrorPresentationGuard.suppressingGeometry || occluded || !hostsNativePresentation) return
+        if (occluded || !hostsNativePresentation) return
+        if (SwingUtilities.isEventDispatchThread()) {
+            applyPresentationGeometry()
+            return
+        }
         if (presentationGeometryPending) return
         presentationGeometryPending = true
         SwingUtilities.invokeLater {
             presentationGeometryPending = false
-            if (!isDisplayable || occluded || !hostsNativePresentation) return@invokeLater
-            if (usesGpuHub()) {
-                gpuPresenter?.updateGeometry(this)
-            } else {
-                NativeMirrorJni.updateMetalLayerGeometry(this)
-            }
+            applyPresentationGeometry()
+        }
+    }
+
+    private fun applyPresentationGeometry() {
+        if (!isDisplayable || occluded || !hostsNativePresentation) return
+        if (usesGpuHub()) {
+            gpuPresenter?.updateGeometry(this)
+        } else {
+            NativeMirrorJni.updateMetalLayerGeometry(this)
         }
     }
 
@@ -1308,6 +1333,9 @@ private class MirrorPanel(
 
     companion object {
         private const val DEVICE_MOVE_MIN_INTERVAL_NANOS = 8_000_000L
+
+        /** Re-check cadence for an attach that arrived mid resize-drag. */
+        private const val RESIZE_ATTACH_RETRY_MILLIS = 120
 
         /** Set ANDY_MIRROR_DEBUG=1 to trace mouse delivery into the mirror surface. */
         private val MIRROR_DEBUG = System.getenv("ANDY_MIRROR_DEBUG") == "1"

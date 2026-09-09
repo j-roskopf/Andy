@@ -35,19 +35,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.outlined.Fullscreen
-import androidx.compose.material.icons.outlined.FullscreenExit
-import androidx.compose.material.icons.outlined.Keyboard
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -98,6 +92,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.Button
 import app.andy.ui.components.EmptyState
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -534,8 +530,8 @@ fun ScreenViewerScreen(
                         onClick = { setKeyboardOpen(!isKeyboardOpen) },
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(
-                            Icons.Outlined.Keyboard,
+                        LucideIcon(
+                            Lucide.Keyboard,
                             contentDescription = if (isKeyboardOpen) "Hide keyboard" else "Show keyboard",
                             tint = if (isKeyboardOpen) tokens.accent else tokens.palette.textPrimary,
                             modifier = Modifier.size(20.dp),
@@ -545,8 +541,8 @@ fun ScreenViewerScreen(
                         onClick = { onFullScreenChange(false) },
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(
-                            Icons.Outlined.FullscreenExit,
+                        LucideIcon(
+                            Lucide.Minimize,
                             contentDescription = "Exit full screen",
                             tint = tokens.accent,
                             modifier = Modifier.size(20.dp),
@@ -668,10 +664,11 @@ fun ScreenViewerScreen(
                             ),
                             contentPadding = PaddingValues(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
                         ) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.Send,
+                            LucideIcon(
+                                Lucide.Send,
                                 contentDescription = "Send",
                                 modifier = Modifier.size(16.dp),
+                                tint = LocalContentColor.current,
                             )
                             Spacer(Modifier.width(4.dp))
                             Text("Send")
@@ -733,21 +730,28 @@ private fun ViewerHeader(
                 )
             }
             IconButton(onClick = onToggleKeyboard, modifier = Modifier.height(48.dp)) {
-                Icon(
-                    Icons.Outlined.Keyboard,
+                LucideIcon(
+                    Lucide.Keyboard,
                     contentDescription = if (keyboardOpen) "Hide keyboard" else "Show keyboard",
+                    modifier = Modifier.size(24.dp),
                     tint = if (keyboardOpen) tokens.accent else tokens.palette.textPrimary,
                 )
             }
             IconButton(onClick = onToggleFullScreen, modifier = Modifier.height(48.dp)) {
-                Icon(
-                    if (fullScreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                LucideIcon(
+                    if (fullScreen) Lucide.Minimize else Lucide.Maximize,
                     contentDescription = if (fullScreen) "Exit full screen" else "Enter full screen",
+                    modifier = Modifier.size(24.dp),
                     tint = if (fullScreen) tokens.accent else tokens.palette.textPrimary,
                 )
             }
             IconButton(onClick = onReconnect, modifier = Modifier.height(48.dp)) {
-                Icon(Icons.Outlined.Refresh, contentDescription = "Reconnect", tint = tokens.palette.textPrimary)
+                LucideIcon(
+                    Lucide.RefreshCw,
+                    contentDescription = "Reconnect",
+                    modifier = Modifier.size(24.dp),
+                    tint = tokens.palette.textPrimary,
+                )
             }
         }
         AndyHorizontalDivider(color = tokens.palette.border)

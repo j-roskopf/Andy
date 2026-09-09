@@ -1,19 +1,14 @@
 package com.joetr.andy.mobile.navigation
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.DesktopWindows
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation3.runtime.NavKey
+import app.andy.ui.components.Lucide
 import kotlinx.serialization.Serializable
 
-enum class MobileTab(val label: String, val icon: ImageVector) {
-    Hosts("Hosts", Icons.Outlined.Computer),
-    Screen("Screen", Icons.Outlined.DesktopWindows),
-    Projects("Projects", Icons.Outlined.ChatBubbleOutline),
-    Settings("Settings", Icons.Outlined.Settings),
+enum class MobileTab(val label: String, val icon: String) {
+    Hosts("Hosts", Lucide.Monitor),
+    Screen("Screen", Lucide.ScreenShare),
+    Projects("Projects", Lucide.MessageSquare),
+    Settings("Settings", Lucide.Settings),
 }
 
 @Serializable

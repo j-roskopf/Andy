@@ -21,11 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,6 +45,8 @@ import app.andy.ui.components.AndyHorizontalDivider
 import app.andy.ui.components.Button
 import app.andy.ui.components.Card
 import app.andy.ui.components.ChatMarkdown
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
@@ -61,6 +59,7 @@ import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.andyTokens
 import com.joetr.andy.mobile.data.SavedHost
+import com.joetr.andy.mobile.data.attention.AttentionPushService
 import com.joetr.andy.mobile.data.networkaccess.ChatDto
 import com.joetr.andy.mobile.data.networkaccess.ChatEventDto
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
@@ -73,8 +72,6 @@ import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
 import com.joetr.andy.mobile.data.networkaccess.TranscriptSettingsDto
 import com.joetr.andy.mobile.data.networkaccess.latestPlanHasPendingEntries
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import com.joetr.andy.mobile.data.networkaccess.showImplementPlan
@@ -180,9 +177,10 @@ fun ChatScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack, modifier = Modifier.height(48.dp)) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
+                LucideIcon(
+                    Lucide.ArrowLeft,
                     contentDescription = "Back",
+                    modifier = Modifier.size(24.dp),
                     tint = tokens.palette.textPrimary,
                 )
             }
@@ -404,6 +402,7 @@ fun ChatScreen(
                         try {
                             client.respond(chatId, request.id, answers)
                             pendingInput = null
+                            AttentionPushService.ensureRunning(context)
                         } catch (e: Exception) {
                             error = e.message
                         }
@@ -420,6 +419,7 @@ fun ChatScreen(
                         try {
                             client.implementPlan(chatId)
                             chat = chat?.copy(planMode = false, status = "Working")
+                            AttentionPushService.ensureRunning(context)
                         } catch (e: Exception) {
                             error = e.message
                         }
@@ -432,6 +432,7 @@ fun ChatScreen(
                         optimistic = feedback
                         try {
                             client.reply(chatId, feedback)
+                            AttentionPushService.ensureRunning(context)
                         } catch (e: Exception) {
                             optimistic = null
                             error = e.message
@@ -490,6 +491,7 @@ fun ChatScreen(
                             draft = ""
                             try {
                                 client.reply(chatId, message)
+                                AttentionPushService.ensureRunning(context)
                             } catch (e: NetworkAccessException) {
                                 optimistic = null
                                 error = e.message
@@ -504,9 +506,10 @@ fun ChatScreen(
                     enabled = draft.isNotBlank() && !sending,
                     modifier = Modifier.height(48.dp),
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.Send,
+                    LucideIcon(
+                        Lucide.Send,
                         contentDescription = "Send",
+                        modifier = Modifier.size(24.dp),
                         tint = if (draft.isNotBlank() && !sending) tokens.accent else tokens.palette.textTertiary,
                     )
                 }
@@ -697,8 +700,8 @@ private fun ActivityRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            Icon(
-                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            LucideIcon(
+                if (expanded) Lucide.ChevronUp else Lucide.ChevronDown,
                 contentDescription = if (expanded) "Collapse" else "Expand",
                 tint = tokens.palette.textTertiary,
                 modifier = Modifier.size(20.dp),

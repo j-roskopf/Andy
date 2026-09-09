@@ -17,18 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,15 +44,17 @@ import app.andy.ui.components.Card
 import app.andy.ui.components.CardVariant
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.IconButton
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
-import app.andy.ui.components.TextButton
+import app.andy.ui.components.ThinkingOrb
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
+import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.DisplayFont
-import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.andyTokens
 import com.joetr.andy.mobile.data.HostRepository
 import com.joetr.andy.mobile.data.SavedHost
@@ -100,8 +94,8 @@ fun ProjectsScreen(
                         .border(1.dp, tokens.palette.borderMedium, AndyShape.Sheet),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        Icons.Outlined.Computer,
+                    LucideIcon(
+                        Lucide.Monitor,
                         contentDescription = null,
                         modifier = Modifier.size(28.dp),
                         tint = tokens.palette.textTertiary,
@@ -124,11 +118,15 @@ fun ProjectsScreen(
     val scope = rememberCoroutineScope()
     var authModePassword by remember { mutableStateOf(true) }
     var authCredentialInput by remember { mutableStateOf("") }
+    var overflowMenuOpen by remember { mutableStateOf(false) }
     val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val groups by viewModel.groups.collectAsStateWithLifecycle()
     val expanded by viewModel.expandedProjectIds.collectAsStateWithLifecycle()
+    val hostEndpoint = host.resolvedNetworkAccessBaseUrl()
+        .removePrefix("https://")
+        .removePrefix("http://")
 
     suspend fun handleAuthFailure(e: NetworkAccessException, clearLegacy: Boolean = false) {
         val authDead = e.unauthorized ||
@@ -221,40 +219,62 @@ fun ProjectsScreen(
             .fillMaxSize()
             .background(tokens.palette.windowBg),
     ) {
+        val showFullLoading = loading && (!signedIn || groups.isEmpty())
         Column(Modifier.fillMaxSize()) {
             MobileHeader(
                 title = "Projects",
-                subtitle = host.displayName,
+                subtitle = "${host.displayName} ($hostEndpoint)",
                 actions = {
                     if (signedIn) {
-                        IconButton(
-                            onClick = {
-                                scope.launch { networkClient?.let { refresh(it, showLoading = groups.isEmpty()) } }
-                            },
-                            modifier = Modifier.size(AndyLayout.ControlHeightMd),
-                            contentDescription = "Refresh",
-                        ) {
-                            Icon(
-                                Icons.Outlined.Refresh,
-                                contentDescription = null,
-                                tint = tokens.palette.textSecondary,
-                            )
+                        Box {
+                            IconButton(
+                                onClick = { overflowMenuOpen = true },
+                                modifier = Modifier.size(AndyLayout.ControlHeightMd),
+                                contentDescription = "More actions",
+                            ) {
+                                LucideIcon(
+                                    Lucide.Ellipsis,
+                                    contentDescription = null,
+                                    tint = tokens.palette.textSecondary,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = overflowMenuOpen,
+                                onDismissRequest = { overflowMenuOpen = false },
+                                shape = AndyShape.Menu,
+                                containerColor = tokens.palette.surfacePopover,
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Refresh", color = tokens.palette.textPrimary) },
+                                    onClick = {
+                                        overflowMenuOpen = false
+                                        scope.launch {
+                                            networkClient?.let { refresh(it, showLoading = groups.isEmpty()) }
+                                        }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Sign out", color = tokens.palette.textPrimary) },
+                                    onClick = {
+                                        overflowMenuOpen = false
+                                        viewModel.markSignedOut()
+                                        networkClient?.sessionToken = null
+                                        repository.saveNetworkAccessSession(host.id, null)
+                                        onSignedOut()
+                                    },
+                                )
+                            }
                         }
                     }
                 },
             )
-            Text(
-                host.resolvedNetworkAccessBaseUrl(),
-                modifier = Modifier.padding(horizontal = AndySpace.Space4),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = MonoFont,
-                color = tokens.palette.textTertiary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(AndySpace.Space3))
 
-            if (!signedIn) {
+            if (showFullLoading) {
+                ProjectsLoadingState(
+                    label = if (!signedIn) "Connecting…" else "Loading projects…",
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else if (!signedIn) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -271,8 +291,8 @@ fun ProjectsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
                         ) {
-                            Icon(
-                                Icons.Outlined.Lock,
+                            LucideIcon(
+                                Lucide.Lock,
                                 contentDescription = null,
                                 tint = tokens.accent,
                                 modifier = Modifier.size(18.dp),
@@ -360,29 +380,11 @@ fun ProjectsScreen(
                             shape = AndyShape.Interactive,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (loading) "Connecting…" else "Connect")
+                            Text("Connect")
                         }
                     }
                 }
             } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = AndySpace.Space4),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(
-                        onClick = {
-                            viewModel.markSignedOut()
-                            networkClient?.sessionToken = null
-                            repository.saveNetworkAccessSession(host.id, null)
-                            onSignedOut()
-                        },
-                    ) {
-                        Text("Sign out", color = tokens.palette.textTertiary)
-                    }
-                    Spacer(Modifier.weight(1f))
-                }
                 error?.let {
                     Text(
                         it,
@@ -391,17 +393,18 @@ fun ProjectsScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                if (loading && groups.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = tokens.accent)
-                    }
-                } else if (groups.isEmpty()) {
+                if (groups.isEmpty()) {
                     EmptyState(
                         title = "No projects found",
                         description = "Start a new chat to run tasks with autonomous agents on this host.",
                         actions = {
                             Button(onClick = onNewChat, shape = AndyShape.Interactive) {
-                                Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                LucideIcon(
+                                    Lucide.Plus,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = LocalContentColor.current,
+                                )
                                 Spacer(Modifier.width(AndySpace.Space2))
                                 Text("New chat")
                             }
@@ -452,7 +455,7 @@ fun ProjectsScreen(
                 }
             }
         }
-        if (signedIn) {
+        if (signedIn && !showFullLoading) {
             FloatingActionButton(
                 onClick = onNewChat,
                 modifier = Modifier
@@ -462,8 +465,38 @@ fun ProjectsScreen(
                 contentColor = tokens.onAccent,
                 shape = AndyShape.Sheet,
             ) {
-                Icon(Icons.Outlined.Add, contentDescription = "New chat")
+                LucideIcon(
+                    Lucide.Plus,
+                    contentDescription = "New chat",
+                    modifier = Modifier.size(24.dp),
+                    tint = tokens.onAccent,
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun ProjectsLoadingState(
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val tokens = andyTokens()
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+        ) {
+            ThinkingOrb(
+                size = 48.dp,
+                color = Cyan,
+                contentDescription = label,
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = tokens.palette.textSecondary,
+            )
         }
     }
 }
@@ -489,14 +522,14 @@ private fun ProjectHeader(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            Icon(
-                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            LucideIcon(
+                if (expanded) Lucide.ChevronUp else Lucide.ChevronDown,
                 contentDescription = null,
                 tint = tokens.palette.textTertiary,
                 modifier = Modifier.size(20.dp),
             )
-            Icon(
-                Icons.Outlined.Folder,
+            LucideIcon(
+                Lucide.Folder,
                 contentDescription = null,
                 tint = tokens.accent,
                 modifier = Modifier.size(18.dp),
@@ -565,8 +598,8 @@ private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
                 color = tokens.palette.textTertiary,
             )
         }
-        Icon(
-            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+        LucideIcon(
+            Lucide.ChevronRight,
             contentDescription = null,
             tint = tokens.palette.textTertiary,
             modifier = Modifier.size(16.dp),

@@ -206,9 +206,18 @@ class GpuMirrorPresenter internal constructor(
         attachedHost?.let(::updateGeometry)
     }
 
+    /**
+     * Not guarded by [MirrorPresentationGuard]: [applyGeometry]'s JNI call only stores pending
+     * values and coalesces onto the main queue, so it is safe mid resize-drag — and running it
+     * there is what keeps the Metal overlay travelling with the window instead of snapping into
+     * place after the drag settles. Callers already on the EDT skip the extra queue turn.
+     */
     fun updateGeometry(component: Component) {
-        if (MirrorPresentationGuard.suppressingGeometry) return
         if (!component.isDisplayable) return
+        if (SwingUtilities.isEventDispatchThread()) {
+            if (attachedHost === component) applyGeometry(component)
+            return
+        }
         if (geometryUpdateScheduled) return
         geometryUpdateScheduled = true
         SwingUtilities.invokeLater {

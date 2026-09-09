@@ -12,8 +12,9 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
@@ -41,6 +42,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import app.andy.service.AppUpdateState
 import app.andy.ui.components.AndyHorizontalDivider
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.theme.AndySurfaceMode
 import app.andy.ui.theme.AndyTheme
 import app.andy.ui.theme.AndyTint
@@ -227,7 +229,12 @@ fun AndyMobileApp(
                                                         }
                                                     },
                                                     icon = {
-                                                        Icon(item.icon, contentDescription = item.label)
+                                                        LucideIcon(
+                                                            item.icon,
+                                                            tint = LocalContentColor.current,
+                                                            modifier = Modifier.size(24.dp),
+                                                            contentDescription = item.label,
+                                                        )
                                                     },
                                                     label = {
                                                         Text(
@@ -394,6 +401,7 @@ fun AndyMobileApp(
                                 client = client,
                                 onBack = { backStack.removeLastOrNull() },
                                 onStarted = { id ->
+                                    AttentionPushService.ensureRunning(context)
                                     backStack.removeLastOrNull() // pop NewChat
                                     backStack.add(MobileNavKey.Chat(id))
                                 },

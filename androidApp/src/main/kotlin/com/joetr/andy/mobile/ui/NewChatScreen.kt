@@ -13,14 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -38,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.andy.ui.components.Button
 import app.andy.ui.components.IconButton
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
@@ -109,9 +108,10 @@ fun NewChatScreen(
                 modifier = Modifier.size(AndyLayout.ControlHeightMd),
                 contentDescription = "Back",
             ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
+                LucideIcon(
+                    Lucide.ArrowLeft,
                     contentDescription = null,
+                    modifier = Modifier.size(24.dp),
                     tint = tokens.palette.textPrimary,
                 )
             }

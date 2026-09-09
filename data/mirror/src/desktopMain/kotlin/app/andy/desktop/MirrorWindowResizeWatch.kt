@@ -12,12 +12,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Freezes Metal mirror geometry while **any** Andy window is being live-resized.
+ * Blocks Metal presenter attach while **any** Andy window is being live-resized.
  *
  * Pop-out mirror windows host their own [app.andy.desktop.service.mirror.GpuMirrorPresenter], so a
- * pop-out resize drags AppKit geometry from the EDT exactly like a main-window resize does — and
- * the main thread is busy inside AWT resize callbacks the whole time. Watching only the main window
- * left pop-outs unguarded and froze the app on the first resize drag.
+ * pop-out resize can open an overlay from the EDT exactly like a main-window resize does — and the
+ * main thread is busy inside AWT resize callbacks the whole time. Watching only the main window left
+ * pop-outs unguarded and froze the app on the first resize drag.
  *
  * A Toolkit-wide [AWTEventListener] (rather than per-window listeners) is deliberate: it sees
  * COMPONENT_RESIZED before it reaches the mirror SwingPanel peers, so the guard is already up when
