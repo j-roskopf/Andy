@@ -50,7 +50,9 @@ A project is a repo path plus context. Each project has tabs for chats, tasks, a
 
 **Automations (desktop).** Schedule recurring agent work with once, hourly, daily, weekday, weekly, interval, or cron schedules. Choose standalone, dedicated-thread, or heartbeat mode. Set failure policy, max iterations, and notifications. Arm with Resume, run by hand, or drive from MCP `automation.*` tools while `andyd` is up.
 
-**Kanban (desktop).** Track work on a drag-and-drop board. Andy starts with To-Do, Doing, and Done lanes. Add, rename, reorder, or delete lanes. Create cards with a title, description, and tags. Assign cards to agent chats. Start a spec from a card. The board is local. It is not available while Andy is connected to a remote `andyd`.
+**Kanban (desktop).** Track work on a drag-and-drop board. Andy starts with To-Do, Doing, and Done lanes. Add, rename, reorder, or delete lanes. Create cards with a title, description, and tags. Assign cards to agent chats. Start a spec from a card. The board is local to Andy Desktop. It is not available when Andy Desktop uses `andyd` (local or remote). Quit `andyd` and restart Andy to edit the board.
+
+When Andy Desktop uses `andyd`, scratchpad and profile writes do not save through the client. Creating a build pair over that client is not wired yet.
 
 ### 2. Coding agents
 
@@ -70,19 +72,31 @@ Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes,
 - Send or queue follow-ups. Archive chats or mark them unread.
 - Check provider quota from the inbox. Use voice dictation when enabled in Settings.
 
+**Andy slash commands.** Type `/` in the composer. Andy shows native commands, provider commands, and installed skills. Andy installs these orchestration skills for you:
+
+| Command | What it does |
+| --- | --- |
+| `/goal <text>` | Sets a persistent goal for this task (Codex and Claude Code). Use `/goal clear` to remove it. |
+| `/andy-handoff …` | Gives the task to a new agent with a full briefing. |
+| `/andy-loop …` | Runs a worker and a verifier until the goal is done or a limit stops the loop. |
+| `/andy-advisor …` | Starts one read-only advisor for a second opinion. |
+| `/andy-committee …` | Starts two advisors to plan root cause and review. |
+
+Orchestration commands need Andy MCP on the chat. Select one of these skills in the new-task composer to attach MCP. Set default providers in Settings → Agents → Orchestration.
+
 ### 3. Mobile-first device work
 
 Android is the primary platform. On macOS, Andy also covers day-to-day iOS Simulator work.
 
-**Devices.** Discover connected Android devices and created emulators. Search and filter by type or API level. Start or stop emulators. Jump into a live session. Pair physical devices over Wi‑Fi from a QR or pairing dialog. Save pairs, reconnect, or forget them without USB. Use multi-select to fan out Install, Uninstall, Clear data, Launch, Stop, Controls, and Screenshot across targets. Save device groups, labels, and notes.
+**Devices.** Discover connected Android devices and created emulators. Search and filter by type or API level. Start or stop emulators. Jump into a live session. Pair physical devices over Wi‑Fi from a QR or pairing dialog. Save pairs, reconnect, or forget them without USB. Set a custom label on each device.
 
 **Virtual devices and catalog.** Create AVDs from SDK profiles and system images. Set orientation, RAM, storage, CPU, GPU, locale, cameras, and keyboard. Browse installed and available system images. Download or remove images when no AVD depends on them.
 
 **Snapshots.** Save, restore, and delete emulator snapshots so you can return a test device to a known state.
 
-**Live mirror.** Stream an Android device or emulator with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text. Record into the Recordings library. Annotate screenshots with redaction, shapes, text, and an optional device frame. Drag an APK onto the mirror to install it. Tune size, bitrate, FPS, and renderer. Grid mode mirrors up to four targets. Dock Live, Logcat, Terminal, or Browser beside or below the main content. Pop the mirror into a focused window when you want it alone.
+**Live mirror.** Stream an Android device or emulator with an embedded H.264 mirror. Send touch, keyboard, navigation, power, volume, rotation, screenshot, and text. Record into the Recordings library. Annotate screenshots with redaction, shapes, text, and an optional device frame. Drag an APK onto the mirror to install it. Tune size, bitrate, FPS, and renderer. Split Live into panes so you can mirror several targets at once. Dock Live, Logcat, Terminal, or Browser beside or below the main content. Pop the mirror into a focused window when you want it alone.
 
-**iOS on macOS.** Manage Simulators (create, boot, clone, erase, rename, delete). Mirror a booted Simulator with touch. Browse apps and sandbox files, Prefs, and SQLite. Tail `simctl log stream`. Drive URL-scheme intents. Use Simulator controls for appearance, Dynamic Type, status bar, location, privacy, clipboard, and push notifications. List crash reports and try `atos` symbolication when a matching `.dSYM` is available. Physical iOS devices support USB Live mirror plus apps/files/crash management when Developer Mode is on (input stays simulator-only). MCP and `andy` expose the same hybrid surface: shared device tools accept Android serials or iOS UDIDs, with `andy ios …` for simulator lifecycle and Controls.
+**iOS on macOS.** Manage Simulators (create, boot, clone, erase, rename, delete). Mirror a booted Simulator with touch. Browse apps and sandbox files, Prefs, and SQLite. Tail `simctl log stream`. Drive URL-scheme intents. Use Simulator controls for appearance, Dynamic Type, status bar, location, privacy, clipboard, and push notifications. List crash reports and try `atos` symbolication when a matching `.dSYM` is available. Physical iOS devices support USB Live mirror plus apps, file copy, and crash management when Developer Mode is on. Input stays simulator-only. MCP and `andy` expose the same hybrid surface: shared device tools accept Android serials or iOS UDIDs, with `andy ios …` for simulator lifecycle and Controls.
 
 ### 4. Debug and inspection tools
 
@@ -104,7 +118,7 @@ Android is the primary platform. On macOS, Andy also covers day-to-day iOS Simul
 | **Inspector** | Capture the on-screen view hierarchy, properties, 2.5D layers, and structural diffs. No on-device agent required. |
 | **Bugs** | Capture actions, video frames, logcat, metadata, and notes. Replay, scrub, export, or delete. Use Explain… to start a read-only agent chat with selected evidence after you confirm the sheet. |
 | **Recordings** | Browse screen recordings. Export trimmed GIF, WebP, MP4, or PNG sequence. |
-| **Android Auto** | Launch Google's Desktop Head Unit beside Live when the DHU toolchain is installed. |
+| **Android Auto** | Launch Google's Desktop Head Unit from Live when the DHU toolchain is installed. DHU opens in its own window. Live shows the DHU console. |
 | **Computer files** | Browse host folders. Open files in a syntax-themed editor. Search across indexed roots. |
 
 ### 5. Remote connection paths
@@ -206,9 +220,9 @@ Shared tools take an optional `serial` (Android serial **or** iOS UDID). If omit
 | **Input** | `tap`, `swipe`, `input_text`, `press_key` | Android + iOS Simulator (`press_key`: home/power on Simulator; physical iOS input unsupported) |
 | **Sight** | `screenshot` | Android + iOS |
 | **Sight** | `ui_dump`, `capture_view_hierarchy`, `find_node_by_text`, `get_node_properties` | Android |
-| **Apps** | `list_apps`, `launch_app`, `stop_app`, `clear_app_data`, `uninstall_app`, `install_app`, `list_permissions`, `list_activities` | Android + iOS (`list_activities` is Android-oriented; physical iOS needs Developer Mode) |
+| **Apps** | `list_apps`, `launch_app`, `stop_app`, `clear_app_data`, `uninstall_app`, `install_app`, `list_permissions`, `list_activities` | Android + iOS except `clear_app_data` (Android only). `list_activities` is Android-oriented. Physical iOS needs Developer Mode. |
 | **Intents** | `send_intent` | Android intents + iOS Simulator URL schemes |
-| **Files** | `file_list_dir`, `file_pull`, `file_push`, `file_delete` | Android + iOS (physical iOS needs Developer Mode) |
+| **Files** | `file_list_dir`, `file_pull`, `file_push`, `file_delete` | Android + iOS Simulator. Physical iOS: list, pull, and push when Developer Mode is on. No delete on physical iOS. |
 | **Logs** | `logcat_snapshot` | Android + iOS Simulator (not physical iOS) |
 | **Network** | `start_network_proxy`, `stop_network_proxy`, `configure_device_proxy`, `list_network_requests`, `get_network_request`, `clear_network_requests`, `list_network_mock_rules`, `upsert_network_mock_rule`, `set_network_mock_rules`, `delete_network_mock_rule` | Android |
 | **Emulator controls** | `set_device_location`, `set_device_sensor`, `set_battery_state`, `reset_battery_state`, `set_thermal_status`, `simulate_incoming_call`, `send_sms`, `set_network_type`, `set_device_locale` | Android (use `ios_*` Controls on Simulator) |
@@ -217,7 +231,7 @@ Shared tools take an optional `serial` (Android serial **or** iOS UDID). If omit
 | **Recordings** | `start_screen_recording`, `stop_screen_recording`, `export_recording` | Android + iOS (via Live mirror) |
 | **Host** | `screenshot_host` | Host desktop (opt-in in Settings → MCP) |
 
-**Physical iOS.** Screenshot, apps, files, crashes, and Live recordings when Developer Mode is on. No MCP input, Controls, or log streaming yet.
+**Physical iOS.** Screenshot, apps, file list/pull/push, crashes, and Live recordings when Developer Mode is on. No MCP input, Controls, log streaming, clear-app-data, or file delete yet.
 
 The CLI wraps these as noun-verb commands (`andy device list`, `andy input tap`, `andy ios boot`, …). Use `andy tool list` / `andy tool call` for the full surface. More hybrid detail is in [docs/ANDYD.md](docs/ANDYD.md). Agent and project MCP tools (`chat.*`, `project.*`, `workflow.*`, `automation.*`) are documented there too.
 
