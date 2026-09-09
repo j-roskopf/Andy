@@ -54,12 +54,18 @@ class AttentionPushService : Service() {
     private val pushStatus = AtomicReference("push connecting…")
     private val pullStatus = AtomicReference("pull starting…")
     private var hostLabel: String = "Andy host"
+    private lateinit var listenerPrefs: AttentionListenerPreferences
+
+    /** Last poll that saw a Working chat; drives the idle shutdown in [stopIfIdle]. */
+    @Volatile
+    private var lastActiveAtMillis = 0L
 
     override fun onCreate() {
         super.onCreate()
         notifications = AndroidChatNotificationService(this)
         notifications.ensureChannel()
         ensureListeningChannel()
+        listenerPrefs = AttentionListenerPreferences(this)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -229,6 +235,9 @@ class AttentionPushService : Service() {
                 for (event in tracker.onChatsChanged(chats)) {
                     deliver(event)
                 }
+                if (chats.any(ChatAttentionTracker::isWorking)) {
+                    lastActiveAtMillis = System.currentTimeMillis()
+                }
                 chats.size
             }
             result.onSuccess {
@@ -247,8 +256,28 @@ class AttentionPushService : Service() {
                 pullStatus.set("pull down")
                 publishStatus()
             }
+            if (stopIfIdle()) return
             delay(PULL_INTERVAL_MS)
         }
+    }
+
+    /**
+     * Shuts the listener down once nothing is Working.
+     *
+     * A foreground service must post an ongoing notification for as long as it runs (API 26+), so
+     * the only way to keep the shade clean is to not be running. Alerts only matter while an agent
+     * is mid-turn, so we idle out shortly after the last one finishes and the app starts us again
+     * the next time it hands the host work.
+     *
+     * @return true when the service is stopping and the caller should unwind.
+     */
+    private fun stopIfIdle(): Boolean {
+        if (listenerPrefs.alwaysListen) return false
+        val idleForMs = System.currentTimeMillis() - lastActiveAtMillis
+        if (idleForMs < IDLE_STOP_AFTER_MS) return false
+        Log.i(TAG, "no chat working for ${idleForMs}ms — stopping listener")
+        stopSelf()
+        return true
     }
 
     private fun combinedStatus(): String {
@@ -316,6 +345,9 @@ class AttentionPushService : Service() {
     }
 
     private fun startAsForeground(status: String) {
+        // Every start (sign-in, ensureRunning, system restart) buys a fresh idle grace window so
+        // we never shut down before the first poll has had a chance to see the work.
+        lastActiveAtMillis = System.currentTimeMillis()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(
                 LISTENING_NOTIFICATION_ID,
@@ -352,7 +384,7 @@ class AttentionPushService : Service() {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .addAction(0, "Stop", stop)
             .build()
     }
@@ -360,10 +392,15 @@ class AttentionPushService : Service() {
     private fun ensureListeningChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
+        // MIN keeps the ongoing notification out of the status bar — it only appears once the
+        // shade is pulled down. Importance is fixed when a channel is created (the system ignores
+        // it on re-create so users keep control), so the downgrade from LOW needs a fresh id;
+        // drop the old channel or both linger in app notification settings.
+        manager.deleteNotificationChannel(LEGACY_LISTENING_CHANNEL_ID)
         val channel = NotificationChannel(
             LISTENING_CHANNEL_ID,
             "Chat listener",
-            NotificationManager.IMPORTANCE_LOW,
+            NotificationManager.IMPORTANCE_MIN,
         ).apply {
             description = "Keeps a live connection to your Andy host for chat alerts"
             setShowBadge(false)
@@ -379,13 +416,21 @@ class AttentionPushService : Service() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_HOST_NAME = "host_name"
 
-        private const val LISTENING_CHANNEL_ID = "andy_attention_listening"
+        private const val LISTENING_CHANNEL_ID = "andy_attention_listening_v2"
+        /** Pre-MIN channel, deleted on first run so it stops showing in notification settings. */
+        private const val LEGACY_LISTENING_CHANNEL_ID = "andy_attention_listening"
         private const val LISTENING_NOTIFICATION_ID = 42_001
         private const val PREFS = "andy_attention_push"
         private const val KEY_BASE = "base_url"
         private const val KEY_TOKEN = "token"
         private const val KEY_HOST = "host_name"
         private const val PULL_INTERVAL_MS = 1_500L
+        /**
+         * Grace period after the last Working chat before the listener stops. Long enough that a
+         * Done → follow-up turn does not thrash the service, short enough that the ongoing
+         * notification clears soon after the work does.
+         */
+        private const val IDLE_STOP_AFTER_MS = 2 * 60_000L
         private const val DEDUPE_MS = 5_000L
         /** Suppress repeat Done/Error alerts for the same chat (push + pull + confidence). */
         private const val TERMINAL_DEDUPE_MS = 60 * 60_000L
@@ -401,6 +446,21 @@ class AttentionPushService : Service() {
                 putExtra(EXTRA_HOST_NAME, hostName)
             }
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        /**
+         * Restarts the listener for the stored session after an idle shutdown.
+         *
+         * Call this whenever the app hands the host work (new chat, reply, permission answer,
+         * plan implement) — that is the moment a Done/Blocked/Error event becomes possible again.
+         * Cheap to call when already running: [connect] no-ops for an unchanged live session.
+         *
+         * Must be called while the app is in the foreground — Android 12+ rejects foreground
+         * service starts from the background.
+         */
+        fun ensureRunning(context: Context) {
+            val session = loadSession(context) ?: return
+            start(context, session.baseUrl, session.token, session.hostName)
         }
 
         fun stop(context: Context) {

@@ -1472,10 +1472,13 @@ private fun ProjectSessionRow(
             onClick = onOpen,
             showAgentIcon = false,
             showRelativeAge = true,
-            // Blocked takes layout width (like Agents inbox) so the tag never paints over the title.
+            // Tags/glyphs take layout width (like Agents inbox) so they never paint over the title or age.
             trailing = when {
                 task.status == AgentStatus.Blocked -> {
                     { StatusTag("blocked", Red) }
+                }
+                task.worktreePath != null || task.branchName != null -> {
+                    { WorktreeBranchGlyph() }
                 }
                 else -> null
             },
@@ -1542,17 +1545,12 @@ private fun SessionRowEndOverlay(
     selected: Boolean,
     onDelete: () -> Unit,
 ) {
-    // Blocked is rendered via trailing (layout space). Overlay is hover chrome + worktree only.
-    val hasIdleGlyph = task.status != AgentStatus.Blocked &&
-        (task.worktreePath != null || task.branchName != null)
-    if (!hovered && !hasIdleGlyph) return
+    // The idle worktree glyph is rendered via trailing (layout space). The overlay is
+    // hover-only chrome (agent pill + delete), so hovering never shifts the row's content.
+    if (!hovered) return
 
-    val scrimColor = when {
-        selected -> AndyColors.SurfaceSelected
-        hovered -> AndyColors.SurfaceHover
-        else -> Color.Transparent
-    }
-    // Fade the title out, then a solid gap, then icons — so glyphs never sit against the provider mark.
+    val scrimColor = if (selected) AndyColors.SurfaceSelected else AndyColors.SurfaceHover
+    // Fade the age out, then a solid gap, then icons — so chrome never sits against the title/age.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
@@ -1571,13 +1569,9 @@ private fun SessionRowEndOverlay(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space1),
         ) {
-            if (hovered) {
-                // 14.dp matches kanban chips; overlay so hover never shifts the row.
-                AgentPillIcon(task.agent, Modifier.size(14.dp))
-                SessionRowDeleteButton(onClick = onDelete)
-            } else if (task.worktreePath != null || task.branchName != null) {
-                WorktreeBranchGlyph()
-            }
+            // 14.dp matches kanban chips; overlay so hover never shifts the row.
+            AgentPillIcon(task.agent, Modifier.size(14.dp))
+            SessionRowDeleteButton(onClick = onDelete)
         }
     }
 }

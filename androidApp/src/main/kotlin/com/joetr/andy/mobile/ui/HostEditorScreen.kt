@@ -19,10 +19,6 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -44,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import app.andy.service.RemoteHostCapabilities
 import app.andy.ui.components.Button
 import app.andy.ui.components.IconButton
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
@@ -98,9 +96,10 @@ fun HostEditorScreen(
                 modifier = Modifier.size(AndyLayout.ControlHeightMd),
                 contentDescription = "Back",
             ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
+                LucideIcon(
+                    Lucide.ArrowLeft,
                     contentDescription = null,
+                    modifier = Modifier.size(24.dp),
                     tint = tokens.palette.textPrimary,
                 )
             }
@@ -179,8 +178,8 @@ fun HostEditorScreen(
                 verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
             ) {
-                Icon(
-                    Icons.Outlined.Info,
+                LucideIcon(
+                    Lucide.Info,
                     contentDescription = null,
                     tint = tokens.palette.textTertiary,
                     modifier = Modifier.size(16.dp),

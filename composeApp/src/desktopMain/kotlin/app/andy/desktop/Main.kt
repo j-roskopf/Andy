@@ -100,9 +100,9 @@ fun main() {
         val scope = rememberCoroutineScope()
         var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutWindows by remember { mutableStateOf(mapOf<String, MirrorPopOutWindow>()) }
-        // Mirror geometry must stay frozen while *any* Andy window is being live-resized, pop-outs
-        // included: pushing AppKit geometry/visibility from the EDT while the main thread is inside
-        // a resize drag freezes the whole app (see MirrorPresentationGuard).
+        // Presenter *attach* must stay blocked while *any* Andy window is being live-resized,
+        // pop-outs included: opening an overlay from the EDT while the main thread is inside a
+        // resize drag freezes the whole app. Geometry still tracks the drag (MirrorPresentationGuard).
         var windowResizing by remember { mutableStateOf(false) }
         DisposableEffect(Unit) {
             val watch = MirrorWindowResizeWatch(onResizingChanged = { windowResizing = it })

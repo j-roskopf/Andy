@@ -1,7 +1,6 @@
 package app.andy.desktop.service.mirror
 
 import app.andy.service.MirrorFrame
-import app.andy.desktop.MirrorPresentationGuard
 import app.andy.desktop.nsWindowNumber
 import java.awt.Canvas
 import java.awt.Component
@@ -139,17 +138,21 @@ object NativeMirrorJni {
     /**
      * Keeps the inline Metal surface over the aspect-fitted video rectangle inside [component].
      *
-     * Geometry is coalesced onto a single EDT pass: window-resize callbacks fire rapidly, and
-     * pushing each one synchronously into AppKit freezes the Live UI.
+     * The native side already coalesces every push onto one main-queue pass, so resize callbacks
+     * can be applied inline on the EDT; hopping through invokeLater there just adds a queue turn
+     * of lag between the window moving and the overlay following it.
      */
     fun updateMetalLayerGeometry(component: Component) {
-        if (MirrorPresentationGuard.suppressingGeometry) return
         if (!loadResult.isSuccess || !component.isDisplayable || !metalInlineOverlayOpen) return
         // The overlay is shared across Live + pop-out hosts. Only the active host may position it;
         // otherwise the main window keeps stealing Metal back and pop-outs stay black.
         val active = NativeMirrorHostRegistry.current()
         if (active != null && active !== component) return
         geometryHost = component
+        if (SwingUtilities.isEventDispatchThread()) {
+            applyMetalLayerGeometry(component)
+            return
+        }
         if (geometryUpdateScheduled) return
         geometryUpdateScheduled = true
         javax.swing.SwingUtilities.invokeLater {

@@ -18,16 +18,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.DesktopWindows
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,6 +47,8 @@ import app.andy.ui.components.Card
 import app.andy.ui.components.CardVariant
 import app.andy.ui.components.EmptyState
 import app.andy.ui.components.IconButton
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.StatusDot
 import app.andy.ui.components.StatusDotVariant
@@ -151,7 +147,12 @@ fun HostsScreen(
                 contentColor = tokens.onAccent,
                 shape = AndyShape.Sheet,
             ) {
-                Icon(Icons.Outlined.Add, contentDescription = "Add host")
+                LucideIcon(
+                    Lucide.Plus,
+                    contentDescription = "Add host",
+                    modifier = Modifier.size(24.dp),
+                    tint = tokens.onAccent,
+                )
             }
         }
     }
@@ -177,8 +178,8 @@ private fun EmptyHosts(modifier: Modifier = Modifier, onAddHost: () -> Unit) {
                         .border(1.dp, tokens.palette.borderMedium, AndyShape.Sheet),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        Icons.Outlined.Computer,
+                    LucideIcon(
+                        Lucide.Monitor,
                         contentDescription = null,
                         modifier = Modifier.size(28.dp),
                         tint = tokens.palette.textTertiary,
@@ -190,10 +191,11 @@ private fun EmptyHosts(modifier: Modifier = Modifier, onAddHost: () -> Unit) {
                     onClick = onAddHost,
                     shape = AndyShape.Interactive,
                 ) {
-                    Icon(
-                        Icons.Outlined.Add,
+                    LucideIcon(
+                        Lucide.Plus,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
+                        tint = LocalContentColor.current,
                     )
                     Spacer(Modifier.width(AndySpace.Space2))
                     Text("Add host")
@@ -257,8 +259,8 @@ private fun HostCard(
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Outlined.Computer,
+                LucideIcon(
+                    Lucide.Monitor,
                     contentDescription = null,
                     modifier = Modifier.size(22.dp),
                     tint = if (selected) tokens.accent else tokens.palette.textPrimary,
@@ -297,8 +299,8 @@ private fun HostCard(
                     modifier = Modifier.size(AndyLayout.ControlHeightMd),
                     contentDescription = "Host actions",
                 ) {
-                    Icon(
-                        Icons.Outlined.MoreHoriz,
+                    LucideIcon(
+                        Lucide.Ellipsis,
                         contentDescription = null,
                         tint = tokens.palette.textTertiary,
                     )
@@ -364,10 +366,11 @@ private fun HostCard(
                 modifier = Modifier.weight(1f),
                 shape = AndyShape.Interactive,
             ) {
-                Icon(
-                    Icons.Outlined.DesktopWindows,
+                LucideIcon(
+                    Lucide.ScreenShare,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
+                    tint = LocalContentColor.current,
                 )
                 Spacer(Modifier.width(AndySpace.Space2))
                 Text("Screen")
@@ -377,10 +380,11 @@ private fun HostCard(
                 modifier = Modifier.weight(1f),
                 shape = AndyShape.Interactive,
             ) {
-                Icon(
-                    Icons.Outlined.ChatBubbleOutline,
+                LucideIcon(
+                    Lucide.MessageSquare,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
+                    tint = LocalContentColor.current,
                 )
                 Spacer(Modifier.width(AndySpace.Space2))
                 Text("Projects")

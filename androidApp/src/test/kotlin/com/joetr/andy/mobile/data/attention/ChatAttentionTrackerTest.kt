@@ -3,6 +3,7 @@ package com.joetr.andy.mobile.data.attention
 import com.joetr.andy.mobile.data.networkaccess.ChatDto
 import com.joetr.andy.mobile.data.networkaccess.UserInputRequestDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -107,6 +108,33 @@ class ChatAttentionTrackerTest {
         )
     }
 
+    @Test
+    fun isWorkingHoldsTheListenerOpenOnlyWhileAnAgentRuns() {
+        assertTrue(ChatAttentionTracker.isWorking(chat(status = "Working")))
+        assertTrue(ChatAttentionTracker.isWorking(chat(status = "working")))
+        // Terminal states wait on the user, who restarts the listener when they act.
+        assertFalse(ChatAttentionTracker.isWorking(chat(status = "Done", finishedAtMillis = 5L)))
+        assertFalse(ChatAttentionTracker.isWorking(chat(status = "Error")))
+        assertFalse(ChatAttentionTracker.isWorking(chat(status = "Blocked", inputId = "r1")))
+        assertFalse(ChatAttentionTracker.isWorking(chat(status = "Working", archived = true)))
+    }
+
+    @Test
+    fun isWorkingCoversLaggingStatusStrings() {
+        // Started, not finished, nothing asked: still running even with no status yet.
+        assertTrue(ChatAttentionTracker.isWorking(chat(status = "", startedAtMillis = 10L)))
+        // Never started — an idle chat must not pin the listener open forever.
+        assertFalse(ChatAttentionTracker.isWorking(chat(status = "")))
+        assertFalse(
+            ChatAttentionTracker.isWorking(
+                chat(status = "", startedAtMillis = 10L, finishedAtMillis = 20L),
+            ),
+        )
+        assertFalse(
+            ChatAttentionTracker.isWorking(chat(status = "", startedAtMillis = 10L, inputId = "r1")),
+        )
+    }
+
     private fun chat(
         id: String = "task",
         status: String = "",
@@ -114,11 +142,15 @@ class ChatAttentionTrackerTest {
         prompt: String = "prompt text",
         inputId: String? = null,
         finishedAtMillis: Long = 0L,
+        startedAtMillis: Long = 0L,
+        archived: Boolean = false,
     ) = ChatDto(
         id = id,
         title = title,
         prompt = prompt,
         status = status,
+        archived = archived,
+        startedAtMillis = startedAtMillis,
         finishedAtMillis = finishedAtMillis,
         userInputRequest = inputId?.let { UserInputRequestDto(id = it) },
     )

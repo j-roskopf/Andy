@@ -7,15 +7,22 @@ import javax.swing.SwingUtilities
 import javax.swing.Timer
 
 /**
- * Pauses Metal geometry while the main Andy window is being resized.
+ * Blocks the *synchronous* AppKit calls in the mirror presenters while an Andy window is live-resized.
  *
  * [beginWindowResize] must not touch JNI/AppKit — it can run from an [java.awt.event.AWTEventListener]
  * before COMPONENT_RESIZED reaches mirror SwingPanel peers. Calling orderOut/setFrame there deadlocks
  * the EDT and the UI never recovers.
+ *
+ * Only presenter *attach* is suppressed, because opening an overlay window reaches AppKit through a
+ * main-thread `dispatch_sync` (`run_on_main`) — and AWT's own resize handling hops main→EDT, so a
+ * mid-drag dispatch_sync from the EDT deadlocks both. Geometry pushes are deliberately **not**
+ * suppressed: they only store pending values and coalesce onto the main queue with `dispatch_async`,
+ * so the Metal overlay can follow the drag instead of freezing at its pre-resize rect and snapping
+ * into place after the settle delay.
  */
 internal object MirrorPresentationGuard {
     @Volatile
-    var suppressingGeometry: Boolean = false
+    var suppressingAttach: Boolean = false
         private set
 
     /**
@@ -28,7 +35,7 @@ internal object MirrorPresentationGuard {
 
     /** Synchronous flag only; safe inside AWT resize dispatch. */
     fun beginWindowResize() {
-        suppressingGeometry = true
+        suppressingAttach = true
         cancelDeferredRefresh()
     }
 
@@ -38,11 +45,11 @@ internal object MirrorPresentationGuard {
      * the last COMPONENT_RESIZED; skip it on watch teardown.
      */
     fun endWindowResize(scheduleDeferredRefresh: Boolean = true) {
-        suppressingGeometry = false
+        suppressingAttach = false
         cancelDeferredRefresh()
         val wantDeferred = scheduleDeferredRefresh
         SwingUtilities.invokeLater {
-            if (suppressingGeometry) return@invokeLater
+            if (suppressingAttach) return@invokeLater
             refreshNativePresentation()
             if (wantDeferred) scheduleDeferredRefresh()
         }
@@ -52,7 +59,7 @@ internal object MirrorPresentationGuard {
         cancelDeferredRefresh()
         deferredRefresh = Timer(POST_FULLSCREEN_REFRESH_MS) {
             deferredRefresh = null
-            if (!suppressingGeometry) refreshNativePresentation()
+            if (!suppressingAttach) refreshNativePresentation()
         }.apply {
             isRepeats = false
             start()

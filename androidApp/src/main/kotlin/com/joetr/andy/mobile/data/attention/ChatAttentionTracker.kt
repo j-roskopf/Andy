@@ -124,6 +124,24 @@ class ChatAttentionTracker(
             }
         }
 
+        /**
+         * True while an agent is mid-turn, so another attention event is still coming.
+         *
+         * Drives the listener's idle shutdown: Done/Blocked/Error are terminal until the *user*
+         * acts, and when they do it is from this app, which restarts the service itself.
+         */
+        fun isWorking(chat: ChatDto): Boolean {
+            if (chat.archived) return false
+            val status = chat.status.trim()
+            if (status.equals("Working", ignoreCase = true)) return true
+            // Status can lag the run (see attentionKind) — a started, unfinished chat with no
+            // question outstanding is still live.
+            return status.isBlank() &&
+                chat.startedAtMillis > 0L &&
+                chat.finishedAtMillis == 0L &&
+                chat.userInputRequest == null
+        }
+
         fun notificationTitle(chat: ChatDto): String {
             val prompt = chat.prompt.takeIf { it.isNotBlank() }
             val text = prompt ?: chat.title.takeIf { it.isNotBlank() } ?: "Chat"

@@ -16,12 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
@@ -46,6 +44,8 @@ import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
 import app.andy.ui.components.Card
 import app.andy.ui.components.CardVariant
+import app.andy.ui.components.Lucide
+import app.andy.ui.components.LucideIcon
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -54,6 +54,8 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.andyTokens
 import app.andy.updates.AndyBuildInfo
+import com.joetr.andy.mobile.data.attention.AttentionListenerPreferences
+import com.joetr.andy.mobile.data.attention.AttentionPushService
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.TranscriptSettingsDto
 import kotlinx.coroutines.launch
@@ -77,6 +79,8 @@ fun SettingsScreen(
     var transcriptPrefs by remember { mutableStateOf(TranscriptSettingsDto()) }
     var transcriptError by remember { mutableStateOf<String?>(null) }
     var transcriptLoaded by remember { mutableStateOf(false) }
+    val listenerPrefs = remember(context) { AttentionListenerPreferences(context) }
+    var alwaysListen by remember { mutableStateOf(listenerPrefs.alwaysListen) }
 
     LaunchedEffect(networkClient) {
         transcriptLoaded = false
@@ -93,7 +97,7 @@ fun SettingsScreen(
     Column(modifier.background(tokens.palette.windowBg)) {
         MobileHeader(
             title = "Settings",
-            subtitle = "Transcript options, about, and updates",
+            subtitle = "Notifications, transcript options, about, and updates",
         )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -105,6 +109,47 @@ fun SettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
         ) {
+            item(key = "notifications") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    variant = CardVariant.Default,
+                    shape = AndyShape.Sheet,
+                    backgroundColor = tokens.palette.surfaceRaised,
+                    borderColor = tokens.palette.borderMedium,
+                    contentPadding = PaddingValues(AndySpace.Space4),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+                ) {
+                    Text(
+                        "Notifications",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tokens.palette.textPrimary,
+                    )
+                    Text(
+                        "Andy listens for chats that finish, fail, or need your input. " +
+                            "Listening needs a foreground service, which Android requires to show " +
+                            "an ongoing notification.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.palette.textSecondary,
+                    )
+                    SettingsToggleRow(
+                        label = "Always listen",
+                        description = "Keeps listening — and the ongoing notification — for the " +
+                            "whole session. Off, Andy stops a couple of minutes after the last " +
+                            "chat finishes and starts again when you send the host work, so the " +
+                            "notification is only up while an agent is running. Turn on to catch " +
+                            "runs started from Andy Desktop while this app is closed.",
+                        checked = alwaysListen,
+                        enabled = true,
+                        onCheckedChange = { value ->
+                            listenerPrefs.alwaysListen = value
+                            alwaysListen = value
+                            if (value) AttentionPushService.ensureRunning(context)
+                        },
+                    )
+                }
+            }
             if (networkClient != null) {
                 item(key = "transcript") {
                     Card(
@@ -135,7 +180,7 @@ fun SettingsScreen(
                                 color = tokens.error,
                             )
                         }
-                        TranscriptToggleRow(
+                        SettingsToggleRow(
                             label = "Show thinking on timeline",
                             description = "Keeps each thinking step as its own expanded row. Thoughts are not folded into the collapsed tool activity summary.",
                             checked = transcriptPrefs.showThinkingOnTimeline,
@@ -152,7 +197,7 @@ fun SettingsScreen(
                                 }
                             },
                         )
-                        TranscriptToggleRow(
+                        SettingsToggleRow(
                             label = "Auto-expand tool sections",
                             description = "Opens each tool call and file edit when it appears. You can still collapse sections manually.",
                             checked = transcriptPrefs.autoExpandToolSections,
@@ -169,7 +214,7 @@ fun SettingsScreen(
                                 }
                             },
                         )
-                        TranscriptToggleRow(
+                        SettingsToggleRow(
                             label = "Collapse activity between messages",
                             description = "Groups consecutive tool steps into one block between user and assistant messages. Thinking stays separate when shown on the timeline.",
                             checked = transcriptPrefs.collapseActivityBetweenMessages,
@@ -259,10 +304,11 @@ fun SettingsScreen(
                         ) {
                             Text("Releases")
                             Spacer(Modifier.width(AndySpace.Space1))
-                            Icon(
-                                Icons.AutoMirrored.Outlined.OpenInNew,
+                            LucideIcon(
+                                Lucide.SquareArrowOutUpRight,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp),
+                                tint = LocalContentColor.current,
                             )
                         }
                     }
@@ -432,7 +478,7 @@ private fun UpdatesCard(
 }
 
 @Composable
-private fun TranscriptToggleRow(
+private fun SettingsToggleRow(
     label: String,
     description: String,
     checked: Boolean,
