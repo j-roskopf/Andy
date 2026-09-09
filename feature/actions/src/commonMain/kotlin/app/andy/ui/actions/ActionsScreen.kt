@@ -864,6 +864,12 @@ private fun ProjectCockpit(
                                         canvas = ProjectCanvas.Chat
                                         services.agentRuns.setChatViewing(taskId, viewing = true)
                                     },
+                                    onOpenTerminalIn = { dir ->
+                                        onNotifyTerminalRun(services.actionRuns.openShell(current, dir))
+                                    },
+                                    onRunActionIn = { action, dir ->
+                                        onNotifyTerminalRun(services.actionRuns.run(current, action, dir))
+                                    },
                                     onConfirm = { pendingConfirmation = it },
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -1700,6 +1706,8 @@ private fun ProjectWorktrees(
     services: AndyServices,
     project: ActionProject,
     onOpenTask: (String) -> Unit,
+    onOpenTerminalIn: (String) -> Unit,
+    onRunActionIn: (ProjectAction, String) -> Unit,
     onConfirm: (PendingConfirmation) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1787,6 +1795,8 @@ private fun ProjectWorktrees(
                             project = project,
                             services = services,
                             onOpenTask = onOpenTask,
+                            onOpenTerminalIn = onOpenTerminalIn,
+                            onRunActionIn = onRunActionIn,
                             onCopyPath = { copyText(it) },
                             onMerge = { taskId, sourcePath, branch, targetDir, targetLabel ->
                                 onConfirm(
@@ -1886,6 +1896,8 @@ private fun WorktreeTreeRow(
     project: ActionProject,
     services: AndyServices,
     onOpenTask: (String) -> Unit,
+    onOpenTerminalIn: (String) -> Unit,
+    onRunActionIn: (ProjectAction, String) -> Unit,
     onCopyPath: (String) -> Unit,
     onMerge: (taskId: String, sourcePath: String, branch: String, targetDir: String, targetLabel: String) -> Unit,
     onDelete: (String) -> Unit,
@@ -1895,6 +1907,7 @@ private fun WorktreeTreeRow(
     val taskId = node.taskId
     val branch = node.branch
     val indent = (row.depth * 16).dp
+    var runMenuOpen by remember(node.path) { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -1949,6 +1962,39 @@ private fun WorktreeTreeRow(
             modifier = Modifier.clickable { onCopyPath(node.path) },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Testing a worktree shouldn't mean leaving Andy: both of these spawn in node.path.
+            OutlinedButton(
+                onClick = { onOpenTerminalIn(node.path) },
+                modifier = Modifier.height(28.dp).testTag("worktree-terminal"),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            ) { Text("terminal", fontSize = 10.sp) }
+            if (project.actions.isNotEmpty()) {
+                Box {
+                    OutlinedButton(
+                        onClick = { runMenuOpen = true },
+                        modifier = Modifier.height(28.dp).testTag("worktree-run"),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    ) { Text("run…", fontSize = 10.sp) }
+                    DropdownMenu(expanded = runMenuOpen, onDismissRequest = { runMenuOpen = false }) {
+                        project.actions.forEach { action ->
+                            DropdownMenuItem(
+                                text = { Text(action.name, fontFamily = MonoFont, fontSize = 11.sp) },
+                                onClick = {
+                                    runMenuOpen = false
+                                    onRunActionIn(action, node.path)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            if (taskId != null) {
+                OutlinedButton(
+                    onClick = { onOpenTask(taskId) },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("open chat", fontSize = 10.sp) }
+            }
             OutlinedButton(
                 onClick = { onCopyPath(node.path) },
                 modifier = Modifier.height(28.dp),

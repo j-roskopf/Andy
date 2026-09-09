@@ -75,7 +75,7 @@ class DesktopActionRunService(
         })
     }
 
-    override fun openShell(project: ActionProject): String = start(
+    override fun openShell(project: ActionProject, cwdOverride: String?): String = start(
         project = project,
         action = ProjectAction(
             id = "terminal",
@@ -84,14 +84,17 @@ class DesktopActionRunService(
             command = "",
         ),
         initialCommand = null,
+        cwdOverride = cwdOverride,
     )
 
-    override fun run(project: ActionProject, action: ProjectAction): String {
+    override fun run(project: ActionProject, action: ProjectAction, cwdOverride: String?): String {
         val command = action.command.takeIf { it.isNotBlank() }
+        val cwd = resolveCwd(project, action, cwdOverride)
         synchronized(lifecycleLock) {
             val existing = _running.value.lastOrNull {
                 it.projectId == project.id &&
                     it.actionId == action.id &&
+                    it.cwd == cwd &&
                     it.status in ACTIVE_STATUSES
             }
             if (existing != null) {
@@ -99,17 +102,23 @@ class DesktopActionRunService(
                 return existing.runId
             }
         }
-        clearExistingRuns(project.id, action.id)
+        clearExistingRuns(project.id, action.id, cwd)
         return start(
             project = project,
             action = action,
             initialCommand = command,
+            cwdOverride = cwdOverride,
         )
     }
 
-    private fun start(project: ActionProject, action: ProjectAction, initialCommand: String?): String {
+    private fun start(
+        project: ActionProject,
+        action: ProjectAction,
+        initialCommand: String?,
+        cwdOverride: String? = null,
+    ): String {
         val runId = "run-${nextRun.getAndIncrement()}"
-        val remoteCwd = resolveCwd(project, action)
+        val remoteCwd = resolveCwd(project, action, cwdOverride)
         val snapshot = RunningAction(
             runId = runId,
             projectId = project.id,
@@ -240,9 +249,10 @@ class DesktopActionRunService(
         }
     }
 
-    private fun clearExistingRuns(projectId: String, actionId: String) {
+    /** Only clears prior runs in the same directory — a worktree run must not evict the checkout's. */
+    private fun clearExistingRuns(projectId: String, actionId: String, cwd: String) {
         _running.value
-            .filter { it.projectId == projectId && it.actionId == actionId }
+            .filter { it.projectId == projectId && it.actionId == actionId && it.cwd == cwd }
             .forEach { clear(it.runId) }
     }
 
@@ -300,12 +310,17 @@ class DesktopActionRunService(
         }
     }
 
-    private fun resolveCwd(project: ActionProject, action: ProjectAction): String {
+    /**
+     * [cwdOverride] (a worktree path) replaces the project root entirely; an action's relative
+     * `cwd` still applies on top of it so `./gradlew` in `androidApp/` lands in the worktree copy.
+     */
+    private fun resolveCwd(project: ActionProject, action: ProjectAction, cwdOverride: String? = null): String {
+        val root = cwdOverride?.takeIf { it.isNotBlank() } ?: project.contextDir
         val override = action.cwd?.takeIf { it.isNotBlank() }
         return when {
-            override == null -> project.contextDir
+            override == null -> root
             File(override).isAbsolute -> override
-            else -> File(project.contextDir, override).path
+            else -> File(root, override).path
         }
     }
 }

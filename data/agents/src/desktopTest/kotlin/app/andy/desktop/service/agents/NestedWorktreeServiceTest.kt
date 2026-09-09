@@ -67,6 +67,44 @@ class NestedWorktreeServiceTest {
     }
 
     @Test
+    fun baseRefForksFromThatBranchWithoutMovingTheCheckout() = runBlocking {
+        withHarness { harness ->
+            val featureTip = harness.commitOnBranch("feature", "feature.txt", "feature\n")
+            harness.checkout("main")
+            val mainTip = revParse(harness.repo, "main")
+
+            val task = harness.startWorktreeTask(title = "tint color", baseRef = "feature")
+
+            val branch = assertNotNull(task.branchName)
+            assertEquals(featureTip, revParse(harness.repo, branch))
+            assertTrue(featureTip != mainTip)
+            // Picking a base must not switch the branch the user has checked out.
+            assertEquals("main", harness.service.currentBranch(harness.repo.absolutePath))
+        }
+    }
+
+    @Test
+    fun baseWorktreeTaskIdWinsOverBaseRef() = runBlocking {
+        withHarness { harness ->
+            harness.commitOnBranch("feature", "feature.txt", "feature\n")
+            harness.checkout("main")
+
+            val parent = harness.startWorktreeTask(title = "parent")
+            val parentBranch = assertNotNull(parent.branchName)
+            val child = harness.startWorktreeTask(
+                title = "child",
+                baseWorktreeTaskId = parent.id,
+                baseRef = "feature",
+            )
+
+            assertEquals(
+                revParse(harness.repo, parentBranch),
+                revParse(harness.repo, assertNotNull(child.branchName)),
+            )
+        }
+    }
+
+    @Test
     fun parentWorktreeTaskIdRoundTripsThroughStoreRestart() = runBlocking {
         withHarness { harness ->
             val parent = harness.startWorktreeTask(title = "parent")
@@ -384,6 +422,7 @@ class NestedWorktreeServiceTest {
         suspend fun startWorktreeTask(
             title: String,
             baseWorktreeTaskId: String? = null,
+            baseRef: String? = null,
         ): AgentTask {
             val task = service.createAndStart(
                 AgentTaskDraft(
@@ -394,6 +433,7 @@ class NestedWorktreeServiceTest {
                     directory = repo.absolutePath,
                     useWorktree = true,
                     baseWorktreeTaskId = baseWorktreeTaskId,
+                    baseRef = baseRef,
                 ),
             )
             withTimeout(15_000) {

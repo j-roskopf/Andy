@@ -1427,6 +1427,26 @@ internal class ShellState(
         destination = AndyDestination.Live
     }
 
+    /** Project whose env/runbook applies to a directory launch, preferring the chat's own project. */
+    private fun launchProject(projectId: String?): ActionProject? =
+        actionsConfig.projects.firstOrNull { it.id == projectId }
+            ?: actionsConfig.projects.firstOrNull { it.id == workspaceState.lastActionProjectId }
+            ?: actionsConfig.projects.firstOrNull()
+
+    fun projectActions(projectId: String?): List<ProjectAction> = launchProject(projectId)?.actions.orEmpty()
+
+    /** Opens and reveals a shell rooted at [dir] (a worktree path) with [projectId]'s environment. */
+    fun openTerminalIn(projectId: String?, dir: String) {
+        val project = launchProject(projectId) ?: return
+        focusTerminalRun(services.actionRuns.openShell(project, dir))
+    }
+
+    /** Runs a runbook [action] against [dir] instead of the project checkout, and reveals it. */
+    fun runActionIn(projectId: String?, action: ProjectAction, dir: String) {
+        val project = launchProject(projectId) ?: return
+        focusTerminalRun(services.actionRuns.run(project, action, dir))
+    }
+
     fun runAction(project: ActionProject, action: ProjectAction) {
         updateWorkspace {
             it.copy(

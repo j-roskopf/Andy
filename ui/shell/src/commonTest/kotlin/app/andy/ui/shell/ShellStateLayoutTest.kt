@@ -92,7 +92,7 @@ class ShellStateLayoutTest {
         val services = baseServices.copy(
             capabilities = PlatformCapabilities.Desktop,
             actionRuns = object : ActionRunService by UnavailableActionRunService {
-                override fun openShell(project: ActionProject): String = "run-restored"
+                override fun openShell(project: ActionProject, cwdOverride: String?): String = "run-restored"
             },
         )
         val scope = CoroutineScope(EmptyCoroutineContext)

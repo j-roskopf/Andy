@@ -92,6 +92,8 @@ internal fun ComposerContextBar(
     branch: String?,
     workingTreeStatus: WorkingTreeStatus?,
     branches: List<GitBranchInfo>,
+    worktreeBaseRef: String?,
+    onWorktreeBaseRefChange: (String?) -> Unit,
     onRefreshGit: () -> Unit,
     onCheckoutBranch: suspend (String) -> String?,
     onCreateAndCheckoutBranch: suspend (String) -> String?,
@@ -122,6 +124,10 @@ internal fun ComposerContextBar(
                     branch = branch,
                     workingTreeStatus = workingTreeStatus,
                     branches = branches,
+                    // In worktree mode the chip picks the fork point; the checkout stays put.
+                    worktreeMode = useWorktree,
+                    worktreeBaseRef = worktreeBaseRef,
+                    onWorktreeBaseRefChange = onWorktreeBaseRefChange,
                     onRefreshGit = onRefreshGit,
                     onCheckoutBranch = onCheckoutBranch,
                     onCreateAndCheckoutBranch = onCreateAndCheckoutBranch,
@@ -356,6 +362,9 @@ private fun ComposerBranchChip(
     branch: String?,
     workingTreeStatus: WorkingTreeStatus?,
     branches: List<GitBranchInfo>,
+    worktreeMode: Boolean,
+    worktreeBaseRef: String?,
+    onWorktreeBaseRefChange: (String?) -> Unit,
     onRefreshGit: () -> Unit,
     onCheckoutBranch: suspend (String) -> String?,
     onCreateAndCheckoutBranch: suspend (String) -> String?,
@@ -383,9 +392,14 @@ private fun ComposerBranchChip(
         }
     }
 
+    // Worktree chats fork a fresh andy/… branch, so the chip names the fork point, not a checkout.
+    val effectiveBase = worktreeBaseRef ?: branch
     Box {
         ComposerContextMenuChip(
-            text = branch ?: "detached",
+            text = when {
+                worktreeMode -> "from ${effectiveBase ?: "HEAD"}"
+                else -> branch ?: "detached"
+            },
             expanded = expanded,
             onClick = { expanded = true },
             leading = {
@@ -398,6 +412,19 @@ private fun ComposerBranchChip(
             modifier = Modifier.widthIn(min = 280.dp, max = 360.dp),
         ) {
             Column(Modifier.padding(AndySpace.Space1)) {
+                if (worktreeMode) {
+                    AndyDropdownMenuSectionLabel("Fork the new worktree from")
+                    if (workingTreeStatus?.isDirty == true) {
+                        // Easy to miss otherwise: a worktree forks from the branch tip, not the desk.
+                        Text(
+                            "Uncommitted changes stay in your checkout — the worktree starts from the branch tip.",
+                            color = Yellow,
+                            fontFamily = DisplayFont,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
+                        )
+                    }
+                }
                 TextField(
                     value = query,
                     onValueChange = {
@@ -460,10 +487,17 @@ private fun ComposerBranchChip(
                                         if (hovered) AndyColors.SurfaceHover else Color.Transparent,
                                     )
                                     .clickable(
-                                        enabled = !busy && !info.isCurrent,
+                                        enabled = !busy && (worktreeMode || !info.isCurrent),
                                         interactionSource = interaction,
                                         indication = null,
                                     ) {
+                                        if (worktreeMode) {
+                                            // Picking a fork point never moves the user's checkout.
+                                            onWorktreeBaseRefChange(info.name.takeIf { !info.isCurrent })
+                                            error = null
+                                            expanded = false
+                                            return@clickable
+                                        }
                                         busy = true
                                         error = null
                                         scope.launch {
@@ -491,9 +525,14 @@ private fun ComposerBranchChip(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
-                                    if (info.isCurrent) {
+                                    val tag = when {
+                                        worktreeMode && info.name == effectiveBase -> "base"
+                                        info.isCurrent -> "current"
+                                        else -> null
+                                    }
+                                    tag?.let {
                                         Text(
-                                            "current",
+                                            it,
                                             color = TextSecondary,
                                             fontFamily = DisplayFont,
                                             fontSize = 11.sp,

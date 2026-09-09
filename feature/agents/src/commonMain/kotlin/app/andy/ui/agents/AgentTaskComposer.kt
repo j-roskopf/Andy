@@ -351,6 +351,8 @@ private class AgentTaskComposerFormState(
     var workingTreeStatus by mutableStateOf<WorkingTreeStatus?>(null)
     var baseWorktreeTaskId by mutableStateOf<String?>(null)
     var availableBases by mutableStateOf<List<WorktreeBaseOption>>(emptyList())
+    /** Branch a new worktree forks from; null follows the project checkout's current HEAD. */
+    var worktreeBaseRef by mutableStateOf<String?>(null)
     /** Last agent whose provider defaults were seeded into this draft; avoids clobbering restored drafts. */
     var defaultsSeededForAgent: AgentKind? = null
 
@@ -532,6 +534,7 @@ private fun rememberAgentTaskComposerForm(
             state.workingTreeStatus = null
             state.availableBases = emptyList()
             state.baseWorktreeTaskId = null
+            state.worktreeBaseRef = null
             return@LaunchedEffect
         }
         refreshComposerGitState(services, directory, state)
@@ -542,6 +545,10 @@ private fun rememberAgentTaskComposerForm(
         }
         if (state.baseWorktreeTaskId != null && state.availableBases.none { it.taskId == state.baseWorktreeTaskId }) {
             state.baseWorktreeTaskId = null
+        }
+        // A base branch only means something for a new worktree, and only while it still exists.
+        if (!state.useWorktree || state.localBranches.none { it.name == state.worktreeBaseRef }) {
+            state.worktreeBaseRef = null
         }
     }
     LaunchedEffect(state.agent, state.modelId, selectedModel) {
@@ -620,6 +627,7 @@ private class AgentTaskComposerForm(
             directory = directory?.trim()?.takeIf { it.isNotBlank() },
             useWorktree = state.useWorktree,
             baseWorktreeTaskId = state.baseWorktreeTaskId,
+            baseRef = state.worktreeBaseRef?.takeIf { state.useWorktree },
             attachAndyMcp = state.attachMcp,
             autonomy = state.autonomy,
             sandboxMode = state.sandboxMode,
@@ -824,6 +832,8 @@ private fun AgentChatComposer(
                     branch = state.currentBranch,
                     workingTreeStatus = state.workingTreeStatus,
                     branches = state.localBranches,
+                    worktreeBaseRef = state.worktreeBaseRef,
+                    onWorktreeBaseRefChange = { state.worktreeBaseRef = it },
                     onRefreshGit = {
                         form.scope.launch {
                             refreshComposerGitState(form.services, form.directory, state)
@@ -844,6 +854,9 @@ private fun AgentChatComposer(
                         val result = form.services.agentRuns.createAndCheckoutBranch(dir, name)
                         if (result.isSuccess) {
                             refreshComposerGitState(form.services, dir, state)
+                            // In worktree mode the checkout isn't what the agent works in, so make
+                            // the branch the user just made the fork point instead of a dead end.
+                            if (state.useWorktree) state.worktreeBaseRef = name.trim()
                             null
                         } else {
                             result.stderr.ifBlank { result.stdout }.ifBlank { "Create branch failed" }
