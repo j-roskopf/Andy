@@ -132,6 +132,43 @@ class McpHubRegistryStoreTest {
     }
 
     @Test
+    fun importFromCodexTomlPreservesBearerAuthHeader() {
+        val home = kotlin.io.path.createTempDirectory("andy-mcp-codex-bearer").toFile()
+        val originalHome = System.getProperty("user.home")
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            val codex = File(home, ".codex/config.toml")
+            codex.parentFile.mkdirs()
+            codex.writeText(
+                """
+                [mcp_servers.andy]
+                url = "http://127.0.0.1:8565/mcp-http"
+
+                [mcp_servers.sentry]
+                url = "https://mcp.sentry.dev/mcp"
+                http_headers = { Authorization = "Bearer tok-static" }
+                """.trimIndent(),
+            )
+            val store = McpHubRegistryStore(rootDir = File(home, ".andy/mcp"))
+            val (_, imported) = store.importFrom("Codex")
+            assertEquals(listOf("sentry"), imported)
+            val config = store.load().servers["sentry"]
+            assertEquals(McpHubAuthKind.Bearer, config?.auth)
+            assertEquals("tok-static", config?.bearerToken)
+        } finally {
+            System.setProperty("user.home", originalHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun extractBearerHeaderParsesInlineTable() {
+        assertEquals("tok-abc", McpHubRegistryStore.extractBearerHeader("""{ Authorization = "Bearer tok-abc" }"""))
+        assertEquals("tok-single", McpHubRegistryStore.extractBearerHeader("""{ Authorization = 'Bearer tok-single' }"""))
+        assertEquals(null, McpHubRegistryStore.extractBearerHeader("""{ Accept = "application/json" }"""))
+    }
+
+    @Test
     fun importSourceLabelsIncludeMajorProviders() {
         val labels = McpHubRegistryStore().importSourceLabels()
         assertTrue(labels.contains("Cursor"))

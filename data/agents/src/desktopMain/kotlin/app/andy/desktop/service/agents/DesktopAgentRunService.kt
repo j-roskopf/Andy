@@ -4192,7 +4192,7 @@ class DesktopAgentRunService(
         bearerToken: String? = null,
     ) {
         if (mcp.hubRequiresClientAttach()) {
-            val stripIds = mcp.hubStatus().servers.map { it.id }
+            val stripIds = mcp.hubFederatedServerIds()
             McpClientConfig.writeConfigAsSoleEntry(
                 client = client,
                 port = port,

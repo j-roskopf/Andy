@@ -1051,6 +1051,7 @@ interface McpServerService {
         url: String,
         auth: McpHubAuthKind = McpHubAuthKind.Oauth,
         enabled: Boolean = true,
+        bearerToken: String? = null,
     ): CommandResult = CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
 
     /** Start OAuth (or import existing Cursor tokens) for [serverId]. */
@@ -1068,10 +1069,19 @@ interface McpServerService {
     fun writeConfigAsSoleMcp(clientName: String, port: Int): Boolean = writeConfig(clientName, port)
 
     /**
+     * Ids of hub upstreams Andy actually federates (enabled HTTP servers). Used to strip
+     * duplicates from provider configs so clients talk to the hub instead of upstream directly.
+     * Disabled, stdio, and failed entries are never stripped — the hub cannot serve them.
+     */
+    fun hubFederatedServerIds(): List<String> = hubStatus().servers
+        .filter { it.enabled && it.transport == McpHubTransport.Http }
+        .map { it.id }
+
+    /**
      * True when the hub has enabled upstream servers — Andy chats should attach MCP
      * and provider configs should point at Andy.
      */
-    fun hubRequiresClientAttach(): Boolean = hubStatus().servers.any { it.enabled }
+    fun hubRequiresClientAttach(): Boolean = hubFederatedServerIds().isNotEmpty()
 
     /**
      * Ensure Cursor / Codex / Claude / Antigravity (and related) configs point at Andy

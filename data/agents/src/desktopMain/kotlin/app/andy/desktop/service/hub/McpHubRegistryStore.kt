@@ -144,6 +144,16 @@ class McpHubRegistryStore(
     }
 
     companion object {
+        /** Pull a `Bearer <token>` out of a Codex-style `http_headers` inline table. */
+        internal fun extractBearerHeader(httpHeaders: String?): String? {
+            val headers = httpHeaders?.trim() ?: return null
+            val match = Regex(
+                """Authorization\s*=\s*["']Bearer\s+([^"']+)["']""",
+                RegexOption.IGNORE_CASE,
+            ).find(headers) ?: return null
+            return match.groupValues[1].trim().takeIf { it.isNotEmpty() }
+        }
+
         fun normalizeId(raw: String): String? {
             val id = raw.trim().lowercase().replace(Regex("[^a-z0-9_-]+"), "-")
                 .trim('-')
@@ -247,6 +257,7 @@ class McpHubRegistryStore(
                 }
                 val url = props["url"] ?: props["uri"]
                 val command = props["command"]
+                val bearer = extractBearerHeader(props["http_headers"])
                 val config = when {
                     command != null -> McpHubServerConfig(
                         transport = McpHubTransport.Stdio,
@@ -256,11 +267,12 @@ class McpHubRegistryStore(
                     url != null -> McpHubServerConfig(
                         transport = McpHubTransport.Http,
                         url = url,
-                        auth = if (url.startsWith("https://", ignoreCase = true)) {
-                            McpHubAuthKind.Oauth
-                        } else {
-                            McpHubAuthKind.None
+                        auth = when {
+                            bearer != null -> McpHubAuthKind.Bearer
+                            url.startsWith("https://", ignoreCase = true) -> McpHubAuthKind.Oauth
+                            else -> McpHubAuthKind.None
                         },
+                        bearerToken = bearer,
                     )
                     else -> null
                 }

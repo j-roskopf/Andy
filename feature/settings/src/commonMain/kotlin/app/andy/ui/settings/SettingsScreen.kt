@@ -2710,6 +2710,9 @@ private fun McpHubPanel(mcpService: McpServerService) {
     var busy by remember { mutableStateOf(false) }
     var addId by remember { mutableStateOf("") }
     var addUrl by remember { mutableStateOf("") }
+    var addAuth by remember { mutableStateOf(McpHubAuthKind.Oauth) }
+    var addBearer by remember { mutableStateOf("") }
+    var authMenuExpanded by remember { mutableStateOf(false) }
     val importSources = remember { mcpService.hubImportSources().ifEmpty { listOf("Cursor") } }
     var selectedImport by remember { mutableStateOf(importSources.firstOrNull() ?: "Cursor") }
     var importMenuExpanded by remember { mutableStateOf(false) }
@@ -2890,6 +2893,38 @@ private fun McpHubPanel(mcpService: McpServerService) {
                 colors = fieldColors(),
                 placeholder = { Text("https://mcp.example.com/mcp", color = TextSecondary) },
             )
+            if (addAuth == McpHubAuthKind.Bearer) {
+                TextField(
+                    addBearer,
+                    { addBearer = it },
+                    singleLine = true,
+                    modifier = Modifier.width(140.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                    textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                    colors = fieldColors(),
+                    placeholder = { Text("Bearer token", color = TextSecondary) },
+                )
+            }
+            Box {
+                OutlinedButton(
+                    onClick = { authMenuExpanded = true },
+                    enabled = !busy,
+                ) { Text("Auth: ${addAuth.name.lowercase()} ▾") }
+                DropdownMenu(
+                    expanded = authMenuExpanded,
+                    onDismissRequest = { authMenuExpanded = false },
+                    containerColor = AndyColors.Neutral750,
+                ) {
+                    listOf(McpHubAuthKind.None, McpHubAuthKind.Oauth, McpHubAuthKind.Bearer).forEach { kind ->
+                        DropdownMenuItem(
+                            text = { Text(kind.name.lowercase(), color = TextPrimary) },
+                            onClick = {
+                                addAuth = kind
+                                authMenuExpanded = false
+                            },
+                        )
+                    }
+                }
+            }
             Button(
                 onClick = {
                     scope.launch {
@@ -2898,18 +2933,22 @@ private fun McpHubPanel(mcpService: McpServerService) {
                         val result = mcpService.hubUpsertHttpServer(
                             serverId = addId,
                             url = addUrl,
-                            auth = if (addUrl.startsWith("https://")) McpHubAuthKind.Oauth else McpHubAuthKind.None,
+                            auth = addAuth,
+                            enabled = true,
+                            bearerToken = addBearer,
                         )
                         operationStatus = if (result.isSuccess) result.stdout else result.stderr
                         if (result.isSuccess) {
                             addId = ""
                             addUrl = ""
+                            addBearer = ""
                         }
                         refresh()
                         busy = false
                     }
                 },
-                enabled = !busy && addId.isNotBlank() && addUrl.isNotBlank(),
+                enabled = !busy && addId.isNotBlank() && addUrl.isNotBlank() &&
+                    (addAuth != McpHubAuthKind.Bearer || addBearer.isNotBlank()),
             ) { Text("Add") }
         }
         operationStatus?.let {

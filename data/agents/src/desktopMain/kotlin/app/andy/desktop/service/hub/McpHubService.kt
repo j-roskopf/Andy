@@ -62,7 +62,18 @@ class McpHubService(
 
     fun federatedToolNames(): List<String> = status().federatedToolNames
 
-    fun requiresClientAttach(): Boolean = status().servers.any { it.enabled }
+    /**
+     * Only enabled HTTP upstreams are actually federated through Andy (stdio is imported but
+     * not yet proxied). Requiring attach only when one of these is present avoids rewriting
+     * provider configs to a hub that cannot serve a disabled/stdio/failed upstream.
+     */
+    private fun federatableServers(): List<McpHubServerStatus> =
+        status().servers.filter { it.enabled && it.transport == McpHubTransport.Http }
+
+    /** Ids of upstreams Andy actually federates; used to strip duplicates from client configs. */
+    fun federatedServerIds(): List<String> = federatableServers().map { it.id }
+
+    fun requiresClientAttach(): Boolean = federatableServers().isNotEmpty()
 
     /**
      * Point primary agent providers at Andy and strip hub upstream ids from their configs
@@ -70,9 +81,9 @@ class McpHubService(
      */
     fun syncProviderClients(port: Int, bearerToken: String? = null, cwd: java.io.File? = null): CommandResult {
         if (!requiresClientAttach()) {
-            return CommandResult.success("Hub has no enabled upstreams; skipped client sync")
+            return CommandResult.success("Hub has no enabled HTTP upstreams; skipped client sync")
         }
-        val stripIds = status().servers.map { it.id }
+        val stripIds = federatedServerIds()
         val results = linkedMapOf<String, Boolean>()
         for (client in HubSyncedClients) {
             results[client.label] = McpClientConfig.writeConfigAsSoleEntry(
@@ -140,6 +151,7 @@ class McpHubService(
         url: String,
         auth: McpHubAuthKind = McpHubAuthKind.Oauth,
         enabled: Boolean = true,
+        bearerToken: String? = null,
     ): CommandResult = withContext(Dispatchers.IO) {
         mutex.withLock {
             runCatching {
@@ -155,6 +167,7 @@ class McpHubService(
                         url = trimmedUrl,
                         enabled = enabled,
                         auth = auth,
+                        bearerToken = bearerToken?.trim()?.takeIf { it.isNotEmpty() },
                     ),
                 )
                 if (enabled) connectLocked(id)

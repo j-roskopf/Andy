@@ -137,10 +137,20 @@ class DesktopMcpServerService(
 
     fun startUnixSocketBlocking(socketPath: File): CommandResult {
         return try {
-            runCatching { kotlinx.coroutines.runBlocking { hub.warmUp() } }
             unixSocketServer?.stopBlocking()
             val server = McpUnixSocketServer(socketPath) { createMcpServer() }
             server.startBlocking()
+            // Warm the hub on a daemon thread so a slow/unreachable upstream cannot delay
+            // binding the Unix control socket; per-connection server creation picks up tools.
+            runCatching {
+                Thread {
+                    kotlinx.coroutines.runBlocking { hub.warmUp() }
+                }.apply {
+                    isDaemon = true
+                    name = "andy-mcp-hub-warmup"
+                    start()
+                }
+            }
             unixSocketServer = server
             check(socketPath.exists()) {
                 "unix socket missing after start: ${socketPath.absolutePath}"
@@ -339,8 +349,9 @@ class DesktopMcpServerService(
         url: String,
         auth: app.andy.model.McpHubAuthKind,
         enabled: Boolean,
+        bearerToken: String?,
     ): CommandResult {
-        val result = hub.upsertHttpServer(serverId, url, auth, enabled)
+        val result = hub.upsertHttpServer(serverId, url, auth, enabled, bearerToken)
         syncHubClientsAfterMutation()
         return result
     }
@@ -369,7 +380,7 @@ class DesktopMcpServerService(
             .getOrElse { WorkspaceState() }
         val bearer = workspace.takeIf { it.networkAccessEnabled }
             ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
-        val stripIds = hub.status().servers.map { it.id }
+        val stripIds = hub.federatedServerIds()
         return McpClientConfig.writeConfigAsSoleEntry(
             client = client,
             port = port,

@@ -83,8 +83,6 @@ object McpHubOAuthLogin {
                 append("&state=").append(enc(state))
                 append("&code_challenge=").append(enc(challenge))
                 append("&code_challenge_method=S256")
-                // Sentry scopes; harmless if ignored.
-                append("&scope=").append(enc("org:read project:write team:write event:write"))
             }
             openBrowser(URI(authUrl))
             val code = callback.awaitCode(state, timeoutSeconds)
