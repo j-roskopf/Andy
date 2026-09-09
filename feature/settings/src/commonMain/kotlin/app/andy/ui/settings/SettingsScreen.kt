@@ -95,6 +95,8 @@ import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationSound
 import app.andy.model.AgentNotificationTiming
 import app.andy.model.EditorSyntaxTheme
+import app.andy.model.McpHubAuthKind
+import app.andy.model.McpHubServerConnectionState
 import app.andy.model.OrchestrationPreferences
 import app.andy.model.OrchestrationProviderRole
 import app.andy.model.ProxyStartOptions
@@ -268,6 +270,7 @@ fun SettingsScreen(
                     mcpStatus = mcpStatus,
                     mcpRunning = mcpRunning,
                 )
+                McpHubPanel(mcpService = services.mcp)
                 NetworkAccessPanel(
                     workspaceState = workspaceState,
                     onUpdateWorkspace = onUpdateWorkspace,
@@ -2700,6 +2703,233 @@ private fun HostScreenshotSettingsPanel(
 }
 
 @Composable
+private fun McpHubPanel(mcpService: McpServerService) {
+    val scope = rememberCoroutineScope()
+    var hubStatus by remember { mutableStateOf(mcpService.hubStatus()) }
+    var operationStatus by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var addId by remember { mutableStateOf("") }
+    var addUrl by remember { mutableStateOf("") }
+    val importSources = remember { mcpService.hubImportSources().ifEmpty { listOf("Cursor") } }
+    var selectedImport by remember { mutableStateOf(importSources.firstOrNull() ?: "Cursor") }
+    var importMenuExpanded by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        hubStatus = mcpService.hubStatus()
+    }
+
+    SettingsGroup(
+        title = "MCP Hub",
+        description = "Connect upstream MCP servers once in Andy. Enabled hub servers are auto-synced into Cursor, Codex, Claude, and Antigravity (Andy becomes their gateway; duplicates like sentry are stripped). Andy chats auto-attach MCP while the hub has upstreams.",
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box {
+                OutlinedButton(
+                    onClick = { importMenuExpanded = true },
+                    enabled = !busy,
+                ) { Text("Import from $selectedImport ▾") }
+                DropdownMenu(
+                    expanded = importMenuExpanded,
+                    onDismissRequest = { importMenuExpanded = false },
+                    containerColor = AndyColors.Neutral750,
+                ) {
+                    importSources.forEach { source ->
+                        DropdownMenuItem(
+                            text = { Text(source, color = TextPrimary) },
+                            onClick = {
+                                selectedImport = source
+                                importMenuExpanded = false
+                                scope.launch {
+                                    busy = true
+                                    operationStatus = null
+                                    val result = mcpService.hubImportFrom(source)
+                                    operationStatus =
+                                        if (result.isSuccess) result.stdout else result.stderr
+                                    refresh()
+                                    busy = false
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        operationStatus = null
+                        val result = mcpService.hubReconnect()
+                        operationStatus = if (result.isSuccess) result.stdout else result.stderr
+                        refresh()
+                        busy = false
+                    }
+                },
+                enabled = !busy,
+            ) { Text("Reconnect all") }
+            if (busy) {
+                Spinner(spinnerSize = SpinnerSize.Sm)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        if (hubStatus.servers.isEmpty()) {
+            Text(
+                "No upstream servers yet. Import from a provider above or add an HTTP server below.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        } else {
+            hubStatus.servers.forEach { server ->
+                PanelCard(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    background = AndyColors.Neutral850,
+                    borderColor = AndyColors.OrangeBorder.copy(alpha = 0.35f),
+                    contentPadding = PaddingValues(AndySpace.Space3),
+                    verticalArrangement = Arrangement.Top,
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(server.id, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                buildString {
+                                    append(server.state.name.lowercase())
+                                    if (server.toolCount > 0) append(" · ${server.toolCount} tools")
+                                    server.url?.let { append(" · $it") }
+                                    server.message?.let { append(" — $it") }
+                                },
+                                color = when (server.state) {
+                                    McpHubServerConnectionState.Connected -> Green
+                                    McpHubServerConnectionState.NeedsAuth -> Rust
+                                    McpHubServerConnectionState.Error -> Rust
+                                    else -> TextSecondary
+                                },
+                                fontSize = 11.sp,
+                                fontFamily = MonoFont,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (server.auth == McpHubAuthKind.Oauth &&
+                                server.state != McpHubServerConnectionState.Connected
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            busy = true
+                                            operationStatus = null
+                                            val result = mcpService.hubSignIn(server.id)
+                                            operationStatus =
+                                                if (result.isSuccess) result.stdout else result.stderr
+                                            refresh()
+                                            busy = false
+                                        }
+                                    },
+                                    enabled = !busy,
+                                ) { Text("Sign in") }
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        val result = mcpService.hubSetServerEnabled(server.id, !server.enabled)
+                                        operationStatus =
+                                            if (result.isSuccess) result.stdout else result.stderr
+                                        refresh()
+                                        busy = false
+                                    }
+                                },
+                                enabled = !busy,
+                            ) { Text(if (server.enabled) "Disable" else "Enable") }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        busy = true
+                                        val result = mcpService.hubReconnect(server.id)
+                                        operationStatus =
+                                            if (result.isSuccess) result.stdout else result.stderr
+                                        refresh()
+                                        busy = false
+                                    }
+                                },
+                                enabled = !busy && server.enabled,
+                            ) { Text("Reconnect") }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("Add HTTP upstream", color = TextSecondary, fontSize = 12.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextField(
+                addId,
+                { addId = it.filter { ch -> ch.isLetterOrDigit() || ch == '-' || ch == '_' }.take(32) },
+                singleLine = true,
+                modifier = Modifier.width(120.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                colors = fieldColors(),
+                placeholder = { Text("server-id", color = TextSecondary) },
+            )
+            TextField(
+                addUrl,
+                { addUrl = it },
+                singleLine = true,
+                modifier = Modifier.weight(1f).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                colors = fieldColors(),
+                placeholder = { Text("https://mcp.example.com/mcp", color = TextSecondary) },
+            )
+            Button(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        operationStatus = null
+                        val result = mcpService.hubUpsertHttpServer(
+                            serverId = addId,
+                            url = addUrl,
+                            auth = if (addUrl.startsWith("https://")) McpHubAuthKind.Oauth else McpHubAuthKind.None,
+                        )
+                        operationStatus = if (result.isSuccess) result.stdout else result.stderr
+                        if (result.isSuccess) {
+                            addId = ""
+                            addUrl = ""
+                        }
+                        refresh()
+                        busy = false
+                    }
+                },
+                enabled = !busy && addId.isNotBlank() && addUrl.isNotBlank(),
+            ) { Text("Add") }
+        }
+        operationStatus?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, color = if (it.contains("fail", ignoreCase = true) || it.contains("error", ignoreCase = true)) Rust else TextSecondary, fontSize = 12.sp)
+        }
+        if (hubStatus.federatedToolNames.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Federated: ${hubStatus.federatedToolNames.take(8).joinToString(", ")}" +
+                    if (hubStatus.federatedToolNames.size > 8) "…" else "",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                fontFamily = MonoFont,
+            )
+        }
+    }
+}
+
+@Composable
 private fun McpClientsPanel(
     mcpService: McpServerService,
     mcpServerPort: Int,
@@ -2760,6 +2990,19 @@ private fun McpClientsPanel(
                 enabled = mcpService.isAutoWriteSupported(selectedClientLabel),
             ) {
                 Text("Add to config")
+            }
+            OutlinedButton(
+                onClick = {
+                    val success = mcpService.writeConfigAsSoleMcp(selectedClientLabel, mcpServerPort)
+                    operationStatus = if (success) {
+                        "Wrote Andy and stripped hub upstream duplicates for $selectedClientLabel."
+                    } else {
+                        "Failed to update configuration for $selectedClientLabel."
+                    }
+                },
+                enabled = mcpService.isAutoWriteSupported(selectedClientLabel),
+            ) {
+                Text("Make Andy the only MCP")
             }
             OutlinedButton(
                 onClick = {

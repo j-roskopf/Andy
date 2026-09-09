@@ -25,6 +25,7 @@ import java.util.Base64
 import app.andy.service.AgentRunService
 import app.andy.service.ProjectWorkflowService
 import app.andy.desktop.service.proxy.resolveNetworkAccessHosts
+import app.andy.desktop.service.hub.McpHubService
 import app.andy.desktop.service.webchat.AttentionHub
 import app.andy.desktop.service.webchat.NetworkAccessPasswordHasher
 import app.andy.desktop.service.webchat.NetworkAccessSessionStore
@@ -83,6 +84,7 @@ class DesktopMcpServerService(
     private var agentRuns: AgentRunService? = null
     private var projectWorkflows: ProjectWorkflowService? = null
     private var automations: AutomationService? = null
+    private val hub = McpHubService()
 
     /**
      * Test-only: force Network Access peer classification (e.g. `"203.0.113.10"`)
@@ -135,6 +137,7 @@ class DesktopMcpServerService(
 
     fun startUnixSocketBlocking(socketPath: File): CommandResult {
         return try {
+            runCatching { kotlinx.coroutines.runBlocking { hub.warmUp() } }
             unixSocketServer?.stopBlocking()
             val server = McpUnixSocketServer(socketPath) { createMcpServer() }
             server.startBlocking()
@@ -147,6 +150,11 @@ class DesktopMcpServerService(
                 running.value = true
             } else {
                 status.value = "${status.value}; unix:${socketPath.absolutePath}"
+            }
+            runCatching {
+                val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+                    .getOrElse { WorkspaceState() }
+                hubSyncProviderClients(workspace.mcpServerPort)
             }
             CommandResult.success("Unix MCP socket at ${socketPath.absolutePath}")
         } catch (error: Exception) {
@@ -282,13 +290,92 @@ class DesktopMcpServerService(
     }
 
     override suspend fun start(port: Int): CommandResult =
-        withContext(Dispatchers.IO) { startHttpBlocking(port) }
+        withContext(Dispatchers.IO) {
+            runCatching { hub.warmUp() }
+            val started = startHttpBlocking(port)
+            if (started.isSuccess) {
+                runCatching { hubSyncProviderClients(port) }
+            }
+            started
+        }
 
     override suspend fun stop(): CommandResult = withContext(Dispatchers.IO) {
         synchronized(httpLock) {
             stopEngine()
             CommandResult.success("Server stopped")
         }
+    }
+
+    override fun hubStatus(): app.andy.model.McpHubStatus = hub.status()
+
+    override fun hubImportSources(): List<String> = hub.importSources()
+
+    override fun hubRequiresClientAttach(): Boolean = hub.requiresClientAttach()
+
+    override fun hubSyncProviderClients(port: Int): CommandResult {
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
+        return hub.syncProviderClients(port = port, bearerToken = bearer)
+    }
+
+    override suspend fun hubImportFrom(source: String): CommandResult {
+        val result = hub.importFrom(source)
+        syncHubClientsAfterMutation()
+        return result
+    }
+
+    override suspend fun hubImportFromCursor(): CommandResult = hubImportFrom("Cursor")
+
+    override suspend fun hubSetServerEnabled(serverId: String, enabled: Boolean): CommandResult {
+        val result = hub.setServerEnabled(serverId, enabled)
+        syncHubClientsAfterMutation()
+        return result
+    }
+
+    override suspend fun hubUpsertHttpServer(
+        serverId: String,
+        url: String,
+        auth: app.andy.model.McpHubAuthKind,
+        enabled: Boolean,
+    ): CommandResult {
+        val result = hub.upsertHttpServer(serverId, url, auth, enabled)
+        syncHubClientsAfterMutation()
+        return result
+    }
+
+    override suspend fun hubSignIn(serverId: String): CommandResult {
+        val result = hub.signIn(serverId)
+        syncHubClientsAfterMutation()
+        return result
+    }
+
+    override suspend fun hubReconnect(serverId: String?): CommandResult {
+        val result = hub.reconnect(serverId)
+        syncHubClientsAfterMutation()
+        return result
+    }
+
+    private fun syncHubClientsAfterMutation() {
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        runCatching { hubSyncProviderClients(workspace.mcpServerPort) }
+    }
+
+    override fun writeConfigAsSoleMcp(clientName: String, port: Int): Boolean {
+        val client = McpClientConfig.ClientType.entries.firstOrNull { it.label == clientName } ?: return false
+        val workspace = runCatching { kotlinx.coroutines.runBlocking { workspaceStore.load() } }
+            .getOrElse { WorkspaceState() }
+        val bearer = workspace.takeIf { it.networkAccessEnabled }
+            ?.networkAccessToken?.trim()?.takeIf { it.isNotEmpty() }
+        val stripIds = hub.status().servers.map { it.id }
+        return McpClientConfig.writeConfigAsSoleEntry(
+            client = client,
+            port = port,
+            stripServerIds = stripIds,
+            bearerToken = bearer,
+        )
     }
 
     private fun stopEngine() {
@@ -361,7 +448,8 @@ class DesktopMcpServerService(
         "capture_heap_dump", "get_memory_breakdown", "get_battery_stats",
         "start_screen_recording", "stop_screen_recording", "export_recording",
         "screenshot_host",
-    ) + IosMcpToolNames + agentProjectToolNames()
+        "hub_status",
+    ) + IosMcpToolNames + agentProjectToolNames() + hub.federatedToolNames()
 
     private fun createMcpServer(callerTaskId: String? = null): Server {
         val mcpServer = Server(
@@ -374,6 +462,7 @@ class DesktopMcpServerService(
         )
 
         registerTools(mcpServer)
+        hub.registerFederatedTools(mcpServer)
         val agents = agentRuns
         val projects = projectWorkflows
         if (agents != null && projects != null) {

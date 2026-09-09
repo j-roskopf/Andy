@@ -1707,7 +1707,7 @@ class DesktopAgentRunService(
                 val projectEnv = task.projectId?.let { projectId ->
                     runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
                 }.orEmpty()
-                val endpoint = if (task.attachAndyMcp) prepareAcpMcp(task.id) else null
+                val endpoint = if (task.attachAndyMcp || mcp.hubRequiresClientAttach()) prepareAcpMcp(task.id) else null
                 val acpEnv = buildAgentLaunchEnvironment(projectEnv) + mapOf(
                     AndyStatusHookInstaller.TASK_ID_ENV to task.id,
                 )
@@ -2248,7 +2248,7 @@ class DesktopAgentRunService(
             }
         }
 
-        val mcpUrl = if (taskForLaunch.attachAndyMcp) {
+        val mcpUrl = if (taskForLaunch.attachAndyMcp || mcp.hubRequiresClientAttach()) {
             runCatching {
                 prepareMcp(taskForLaunch.runtimeKind(), taskForLaunch.id, taskForLaunch.cwd?.let(::File))
             }.getOrElse { error ->
@@ -2688,7 +2688,7 @@ class DesktopAgentRunService(
         val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
             AndyStatusHookInstaller.TASK_ID_ENV to taskForLaunch.id,
         ) + extraProviderLaunchEnv(taskForLaunch)
-        val mcpEndpoint = if (taskForLaunch.attachAndyMcp) {
+        val mcpEndpoint = if (taskForLaunch.attachAndyMcp || mcp.hubRequiresClientAttach()) {
             runCatching { prepareAcpMcp(taskForLaunch.id) }.getOrElse { error ->
                 finishTask(taskId, AgentStatus.Error, null, "failed to prepare Andy MCP: ${error.message}")
                 return
@@ -2779,7 +2779,7 @@ class DesktopAgentRunService(
                 val env = buildAgentLaunchEnvironment(projectEnv) + mapOf(
                     AndyStatusHookInstaller.TASK_ID_ENV to task.id,
                 ) + extraProviderLaunchEnv(task)
-                val endpoint = if (task.attachAndyMcp) prepareAcpMcp(task.id) else null
+                val endpoint = if (task.attachAndyMcp || mcp.hubRequiresClientAttach()) prepareAcpMcp(task.id) else null
                 runCatching {
                     acpManager.start(task, env, endpoint) { snapshot -> applyStatusSnapshot(taskId, snapshot) }
                 }.getOrElse {
@@ -4151,37 +4151,57 @@ class DesktopAgentRunService(
             // These only support config-file registration; write it and pass no URL.
             // Shared config cannot carry a per-task andyTaskId — CLI/ANDY_TASK_ID covers those.
             AgentKind.Cursor -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Cursor, port, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.Cursor, port, bearerToken = bearer)
                 null
             }
             AgentKind.Antigravity -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Antigravity, port, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.Antigravity, port, bearerToken = bearer)
                 null
             }
             AgentKind.OpenCode -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenCode, port, cwd, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.OpenCode, port, cwd, bearerToken = bearer)
                 null
             }
             // Pi has no native MCP config; wire ~/.pi/mcp.json for pi-mcp-compatible extensions
             // and pass ANDY_MCP_URL to Andy's Pi extension.
             AgentKind.Pi -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Pi, port, cwd, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.Pi, port, cwd, bearerToken = bearer)
                 mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
             AgentKind.Hermes -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Hermes, port, cwd, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.Hermes, port, cwd, bearerToken = bearer)
                 null
             }
             AgentKind.OpenClaw -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.OpenClaw, port, cwd, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.OpenClaw, port, cwd, bearerToken = bearer)
                 null
             }
             AgentKind.Goose -> {
-                McpClientConfig.writeConfig(McpClientConfig.ClientType.Goose, port, cwd, bearerToken = bearer)
+                writeProviderMcpConfig(McpClientConfig.ClientType.Goose, port, cwd, bearerToken = bearer)
                 mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
             AgentKind.Ollama, AgentKind.LMStudio ->
                 error("local model backends must launch through OpenCode, Pi, or Goose")
+        }
+    }
+
+    private fun writeProviderMcpConfig(
+        client: McpClientConfig.ClientType,
+        port: Int,
+        cwd: File? = null,
+        bearerToken: String? = null,
+    ) {
+        if (mcp.hubRequiresClientAttach()) {
+            val stripIds = mcp.hubStatus().servers.map { it.id }
+            McpClientConfig.writeConfigAsSoleEntry(
+                client = client,
+                port = port,
+                stripServerIds = stripIds,
+                cwd = cwd,
+                bearerToken = bearerToken,
+            )
+        } else {
+            McpClientConfig.writeConfig(client, port, cwd, bearerToken = bearerToken)
         }
     }
 
@@ -4203,6 +4223,8 @@ class DesktopAgentRunService(
             val result = mcp.start(port)
             check(result.isSuccess) { result.stderr.ifBlank { "server failed to start" } }
         }
+        // Keep provider configs pointed at Andy when hub has upstreams (IDE/CLI outside this chat).
+        runCatching { mcp.hubSyncProviderClients(port) }
         AndyMcpEndpoint(
             port = port,
             httpUrl = mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId),
