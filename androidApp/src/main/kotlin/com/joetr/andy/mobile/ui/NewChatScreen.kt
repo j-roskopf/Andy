@@ -31,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.andy.ui.components.Button
@@ -42,6 +43,7 @@ import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
 import app.andy.ui.theme.andyTokens
+import com.joetr.andy.mobile.data.attention.AttentionPushService
 import com.joetr.andy.mobile.data.networkaccess.AgentDto
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.ProjectDto
@@ -58,6 +60,7 @@ fun NewChatScreen(
 ) {
     val tokens = andyTokens()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var agents by remember { mutableStateOf<List<AgentDto>>(emptyList()) }
     var projects by remember { mutableStateOf<List<ProjectDto>>(emptyList()) }
     var prompt by remember { mutableStateOf("") }
@@ -184,6 +187,10 @@ fun NewChatScreen(
                     error = "Choose a model to continue"
                     return@Button
                 }
+                // Re-arm the listener from the foreground click path. startChat awaits the host,
+                // so starting the service only in onStarted can run after the user backgrounds the
+                // app, which Android 12+ rejects with ForegroundServiceStartNotAllowedException.
+                AttentionPushService.ensureRunning(context)
                 scope.launch {
                     starting = true
                     error = null
