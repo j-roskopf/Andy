@@ -201,6 +201,133 @@ object McpClientConfig {
         }
     }
 
+    /**
+     * Write Andy into the client config and remove [stripServerIds] so agents talk only to Andy
+     * for those upstreams (Andy hub federates them).
+     */
+    fun writeConfigAsSoleEntry(
+        client: ClientType,
+        port: Int,
+        stripServerIds: Collection<String>,
+        cwd: File? = null,
+        bearerToken: String? = null,
+    ): Boolean {
+        if (!writeConfig(client, port, cwd, bearerToken)) return false
+        return stripUpstreamServers(client, stripServerIds, cwd)
+    }
+
+    /** Remove named upstream MCP servers from a client config (keeps `andy`). */
+    fun stripUpstreamServers(
+        client: ClientType,
+        serverIds: Collection<String>,
+        cwd: File? = null,
+    ): Boolean {
+        val ids = serverIds.mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+            .filter { !it.equals("andy", ignoreCase = true) }
+            .toSet()
+        if (ids.isEmpty()) return true
+        if (client == ClientType.Pi) {
+            return stripPiServers(ids)
+        }
+        val file = when (client) {
+            ClientType.OpenCode -> getOpenCodeProjectConfig(cwd) ?: getConfigFile(client)
+            else -> getConfigFile(client)
+        } ?: return false
+        if (!file.isFile) return false
+        return try {
+            val current = file.readText()
+            if (current.isNotBlank()) {
+                File(file.absolutePath + ".bak").writeText(current)
+            }
+            val updated = when (client) {
+                ClientType.ClaudeCode, ClientType.Cursor, ClientType.ClaudeDesktop, ClientType.Antigravity ->
+                    stripJsonMcpServers(current, ids, rootKey = "mcpServers")
+                ClientType.OpenCode, ClientType.OpenClaw ->
+                    stripJsonMcpServers(current, ids, rootKey = "mcp")
+                ClientType.Codex -> stripTomlMcpServers(current, ids)
+                ClientType.Hermes -> stripYamlMcpServers(current, ids, rootKey = "mcp_servers:")
+                ClientType.Goose -> stripYamlMcpServers(current, ids, rootKey = "extensions:")
+                else -> return false
+            } ?: return false
+            file.writeText(updated)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    private fun stripPiServers(ids: Set<String>): Boolean {
+        val file = File(System.getProperty("user.home"), ".pi/mcp.json")
+        if (!file.isFile) return true
+        return try {
+            val current = file.readText()
+            if (current.isNotBlank()) File(file.absolutePath + ".bak").writeText(current)
+            val updated = stripJsonMcpServers(current, ids, rootKey = "mcpServers") ?: return false
+            file.writeText(updated)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    internal fun stripJsonMcpServers(content: String, ids: Set<String>, rootKey: String): String? {
+        val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: return null
+        val block = (json[rootKey] as? JsonObject)?.toMutableMap() ?: return content
+        var changed = false
+        for (id in ids) {
+            val match = block.keys.firstOrNull { it.equals(id, ignoreCase = true) } ?: continue
+            block.remove(match)
+            changed = true
+        }
+        if (!changed) return content
+        val updated = json.toMutableMap().apply { this[rootKey] = JsonObject(block) }
+        return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), JsonObject(updated))
+    }
+
+    internal fun stripTomlMcpServers(content: String, ids: Set<String>): String {
+        val lines = content.lines().toMutableList()
+        var i = 0
+        while (i < lines.size) {
+            val header = lines[i].trim()
+            val match = ids.firstOrNull { id ->
+                header.equals("[mcp_servers.$id]", ignoreCase = true)
+            }
+            if (match != null) {
+                var end = i + 1
+                while (end < lines.size && !lines[end].trim().startsWith("[")) end++
+                lines.subList(i, end).clear()
+                continue
+            }
+            i++
+        }
+        return lines.joinToString("\n").trimEnd() + if (content.endsWith("\n")) "\n" else ""
+    }
+
+    internal fun stripYamlMcpServers(content: String, ids: Set<String>, rootKey: String): String {
+        val lines = content.lines().toMutableList()
+        val root = lines.indexOfFirst { it.trim() == rootKey.trimEnd(':') + ":" || it.trim() == rootKey }
+        if (root < 0) return content
+        var i = root + 1
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.isNotBlank() && !line.startsWith(" ") && !line.startsWith("\t")) break
+            val trimmed = line.trim()
+            val match = ids.firstOrNull { id -> trimmed.equals("$id:", ignoreCase = true) }
+            if (match != null && line.startsWith("  ")) {
+                var end = i + 1
+                while (end < lines.size && (lines[end].isBlank() || lines[end].startsWith("    "))) {
+                    end++
+                }
+                lines.subList(i, end).clear()
+                continue
+            }
+            i++
+        }
+        return lines.joinToString("\n").trimEnd() + "\n"
+    }
+
     private fun mergeJson(client: ClientType, content: String, port: Int, bearerToken: String? = null): String {
         val json = runCatching { Json.parseToJsonElement(content).jsonObject }.getOrNull() ?: JsonObject(emptyMap())
         val mcpServers = (json["mcpServers"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()

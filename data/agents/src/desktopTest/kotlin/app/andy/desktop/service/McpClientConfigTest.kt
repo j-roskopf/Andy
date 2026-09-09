@@ -148,4 +148,59 @@ class McpClientConfigTest {
         assertTrue(files.any { it.endsWith(".config/goose/config.yaml") })
         assertTrue(files.any { it.endsWith("Library/Application Support/Block/goose/config.yaml") })
     }
+
+    @Test
+    fun writeConfigAsSoleEntryStripsUpstreamServersFromCursorJson() {
+        val originalHome = System.getProperty("user.home")
+        val testHome = kotlin.io.path.createTempDirectory("andy-mcp-home").toFile()
+        try {
+            System.setProperty("user.home", testHome.absolutePath)
+            val file = File(testHome, ".cursor/mcp.json")
+            file.parentFile.mkdirs()
+            file.writeText(
+                """
+                {
+                  "mcpServers": {
+                    "andy": { "type": "http", "url": "http://127.0.0.1:1/mcp-http" },
+                    "sentry": { "type": "http", "url": "https://mcp.sentry.dev/mcp" },
+                    "other": { "type": "http", "url": "https://example.com/mcp" }
+                  }
+                }
+                """.trimIndent(),
+            )
+
+            val ok = McpClientConfig.writeConfigAsSoleEntry(
+                client = McpClientConfig.ClientType.Cursor,
+                port = 8565,
+                stripServerIds = listOf("sentry"),
+            )
+            assertTrue(ok)
+            val content = file.readText()
+            assertTrue(content.contains(""""andy""""))
+            assertTrue(content.contains("127.0.0.1:8565"))
+            assertFalse(content.contains("sentry"))
+            assertTrue(content.contains("other"))
+        } finally {
+            System.setProperty("user.home", originalHome)
+            testHome.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stripTomlMcpServersRemovesNamedBlocks() {
+        val input = """
+            [mcp_servers.andy]
+            url = "http://127.0.0.1:8565/mcp-http"
+
+            [mcp_servers.sentry]
+            url = "https://mcp.sentry.dev/mcp"
+
+            [mcp_servers.keep]
+            url = "https://example.com"
+        """.trimIndent()
+        val stripped = McpClientConfig.stripTomlMcpServers(input, setOf("sentry"))
+        assertTrue(stripped.contains("[mcp_servers.andy]"))
+        assertTrue(stripped.contains("[mcp_servers.keep]"))
+        assertFalse(stripped.contains("[mcp_servers.sentry]"))
+    }
 }

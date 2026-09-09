@@ -1028,6 +1028,68 @@ interface McpServerService {
     fun writeConfig(clientName: String, port: Int): Boolean
     fun getToolNames(): List<String>
 
+    /** Live status of Andy's upstream MCP hub (federated third-party servers). */
+    fun hubStatus(): McpHubStatus = McpHubStatus()
+
+    /** Provider labels that can be imported into the hub (Cursor, Codex, Claude, …). */
+    fun hubImportSources(): List<String> = emptyList()
+
+    /** Import upstream server definitions from a provider config into Andy's hub registry. */
+    suspend fun hubImportFrom(source: String): CommandResult =
+        CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
+    /** Import upstream server definitions from `~/.cursor/mcp.json` into Andy's hub registry. */
+    suspend fun hubImportFromCursor(): CommandResult = hubImportFrom("Cursor")
+
+    /** Enable or disable a hub upstream server. */
+    suspend fun hubSetServerEnabled(serverId: String, enabled: Boolean): CommandResult =
+        CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
+    /** Add or replace an HTTP upstream (auth defaults to oauth when [url] looks remote). */
+    suspend fun hubUpsertHttpServer(
+        serverId: String,
+        url: String,
+        auth: McpHubAuthKind = McpHubAuthKind.Oauth,
+        enabled: Boolean = true,
+        bearerToken: String? = null,
+    ): CommandResult = CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
+    /** Start OAuth (or import existing Cursor tokens) for [serverId]. */
+    suspend fun hubSignIn(serverId: String): CommandResult =
+        CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
+    /** Reconnect / refresh tools for one or all enabled upstreams. */
+    suspend fun hubReconnect(serverId: String? = null): CommandResult =
+        CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
+    /**
+     * Write Andy into [clientName]'s MCP config and remove hub upstream ids that would
+     * duplicate federation (e.g. strip `sentry` after Andy hubs it).
+     */
+    fun writeConfigAsSoleMcp(clientName: String, port: Int): Boolean = writeConfig(clientName, port)
+
+    /**
+     * Ids of hub upstreams Andy actually federates (enabled HTTP servers). Used to strip
+     * duplicates from provider configs so clients talk to the hub instead of upstream directly.
+     * Disabled, stdio, and failed entries are never stripped — the hub cannot serve them.
+     */
+    fun hubFederatedServerIds(): List<String> = hubStatus().servers
+        .filter { it.enabled && it.transport == McpHubTransport.Http }
+        .map { it.id }
+
+    /**
+     * True when the hub has enabled upstream servers — Andy chats should attach MCP
+     * and provider configs should point at Andy.
+     */
+    fun hubRequiresClientAttach(): Boolean = hubFederatedServerIds().isNotEmpty()
+
+    /**
+     * Ensure Cursor / Codex / Claude / Antigravity (and related) configs point at Andy
+     * and strip hub upstream duplicates so those providers use the hub.
+     */
+    fun hubSyncProviderClients(port: Int): CommandResult =
+        CommandResult(exitCode = 1, stdout = "", stderr = "MCP hub unavailable")
+
     /**
      * Reachable hosts for Network Access (LAN first, then VPN/Tailscale/WireGuard).
      * Used for Settings URL list + QR. Default is loopback-only.
