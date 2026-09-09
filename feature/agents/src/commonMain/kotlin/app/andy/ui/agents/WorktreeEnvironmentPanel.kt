@@ -149,7 +149,9 @@ internal fun WorktreeEnvironmentPanel(
     val worktreePath = task.worktreePath ?: return
     val scope = rememberCoroutineScope()
     val launcher = LocalProjectDirLauncher.current
-    val worktreeActions = remember(launcher, task.projectId) { launcher.actionsFor(task.projectId) }
+    // Read reactively (not remember-cached) so runbook edits, disk refresh, or a remote-host
+    // switch while this chat is open refresh the actions; actionsFor reads a mutableStateOf.
+    val worktreeActions = launcher.actionsFor(task.projectId)
 
     var treeStatus by remember(task.id) { mutableStateOf<WorkingTreeStatus?>(null) }
     var changesExpanded by remember(task.id) { mutableStateOf(false) }
@@ -201,6 +203,15 @@ internal fun WorktreeEnvironmentPanel(
         }
     }
 
+    fun copyMergeCommand() {
+        val branch = task.branchName ?: return
+        val parentPath = task.parentWorktreeTaskId?.let { parentId ->
+            services.agentRuns.tasks.value.firstOrNull { it.id == parentId }?.worktreePath
+        }
+        val targetDir = parentPath ?: task.originDir ?: return
+        onCopyText(services.agentRuns.mergeCommand(targetDir, branch))
+    }
+
     val selectedLabel = when (val action = selectedAction) {
         SelectedEnvironmentAction.Terminal -> "Terminal"
         is SelectedEnvironmentAction.Run -> action.action.name
@@ -246,6 +257,7 @@ internal fun WorktreeEnvironmentPanel(
                 onRunSelected = ::runSelected,
                 onOpenTerminal = ::openTerminal,
                 onCopyText = onCopyText,
+                onCopyMergeCommand = ::copyMergeCommand,
                 showTuckControl = shouldAutoTuck,
                 onTuck = { pinnedOpen = false },
             )
@@ -341,6 +353,7 @@ private fun EnvironmentExpandedCard(
     onRunSelected: () -> Unit,
     onOpenTerminal: () -> Unit,
     onCopyText: (String) -> Unit,
+    onCopyMergeCommand: () -> Unit,
     showTuckControl: Boolean,
     onTuck: () -> Unit,
 ) {
@@ -445,6 +458,16 @@ private fun EnvironmentExpandedCard(
                         },
                         leading = {
                             LucideIcon(Lucide.Copy, TextSecondary, Modifier.size(14.dp))
+                        },
+                    )
+                    AndyDropdownMenuItem(
+                        label = "Copy merge cmd",
+                        onClick = {
+                            onOverflowOpenChange(false)
+                            onCopyMergeCommand()
+                        },
+                        leading = {
+                            LucideIcon(Lucide.GitBranch, TextSecondary, Modifier.size(14.dp))
                         },
                     )
                     AndyDropdownMenuItem(
