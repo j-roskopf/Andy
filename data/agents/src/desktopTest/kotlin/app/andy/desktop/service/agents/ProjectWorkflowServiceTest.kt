@@ -939,7 +939,16 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun stopCurrentTerminatesTheRunAndRequiresAttention() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
+        withHarness(
+            WorkflowAdapter(
+                // Hold the build open so stopBuildPair reliably lands mid-run. A short
+                // sleep races under loaded macOS CI where start/observe can exceed the
+                // delay, letting the build finish before the stop arrives and stranding
+                // the NeedsAttention await on its 900s macOS-CI timeout.
+                stageDelayMillis = 400,
+                buildKeepAliveSeconds = (harnessTimeoutMillis(60_000, 180_000, 300_000) / 1_000L).toInt(),
+            ),
+        ) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Running }
