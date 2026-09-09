@@ -500,6 +500,14 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "Optional Andy task id whose worktree branch to fork from")
             },
+            "baseRef" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Optional branch the new worktree forks from (defaults to the project's current HEAD). " +
+                        "Ignored when baseWorktreeTaskId is set.",
+                )
+            },
             "parentChatTaskId" to buildJsonObject {
                 put("type", "string")
                 put(
@@ -643,6 +651,7 @@ fun Server.registerAgentProjectTools(
                 useWorktree = useWorktree,
                 existingWorktreePath = existingWorktreePath,
                 baseWorktreeTaskId = str(args, "baseWorktreeTaskId")?.takeIf { it.isNotBlank() },
+                baseRef = str(args, "baseRef")?.takeIf { it.isNotBlank() },
                 parentChatTaskId = str(args, "parentChatTaskId")?.takeIf { it.isNotBlank() }
                     ?: parentTask?.id,
                 attachAndyMcp = attachAndyMcp,

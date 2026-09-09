@@ -104,6 +104,55 @@ class DesktopActionRunServiceTest {
     }
 
     @Test
+    fun runsTheSameActionInAWorktreeWithoutEvictingTheCheckoutRun() = runBlocking {
+        val service = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        val root = createTempDirectory("andy-worktree-action-root").toString()
+        val worktree = createTempDirectory("andy-worktree-action-tree").toString()
+        val project = ActionProject(id = "project", name = "Project", contextDir = root)
+        val action = ProjectAction(id = "run", name = "Run", command = "echo hello")
+
+        val rootRunId = service.run(project, action)
+        val worktreeRunId = service.run(project, action, cwdOverride = worktree)
+        try {
+            // Same project + action, different directories: two live runs, not a reused one.
+            assertTrue(rootRunId != worktreeRunId)
+            assertEquals(
+                listOf(root, worktree),
+                service.running.value.map { it.cwd },
+            )
+            // Re-running against the worktree still reuses that worktree's shell.
+            assertEquals(worktreeRunId, service.run(project, action, cwdOverride = worktree))
+            assertEquals(2, service.running.value.size)
+        } finally {
+            service.stop(rootRunId)
+            service.stop(worktreeRunId)
+            awaitRunFinished(service, rootRunId)
+            awaitRunFinished(service, worktreeRunId)
+        }
+    }
+
+    @Test
+    fun worktreeOverrideRebasesAnActionsRelativeCwd() = runBlocking {
+        val service = DesktopActionRunService(CoroutineScope(SupervisorJob() + Dispatchers.IO))
+        val root = createTempDirectory("andy-relative-cwd-root").toString()
+        val worktree = createTempDirectory("andy-relative-cwd-tree").toString()
+        java.io.File(worktree, "androidApp").mkdirs()
+        val project = ActionProject(id = "project", name = "Project", contextDir = root)
+        val action = ProjectAction(id = "run", name = "Run", command = "echo hello", cwd = "androidApp")
+
+        val runId = service.run(project, action, cwdOverride = worktree)
+        try {
+            assertEquals(
+                java.io.File(worktree, "androidApp").path,
+                service.running.value.single().cwd,
+            )
+        } finally {
+            service.stop(runId)
+            awaitRunFinished(service, runId)
+        }
+    }
+
+    @Test
     fun remotedOpenShellSpawnsSshInsteadOfLocalShell() = runBlocking {
         val spawned = AtomicReference<List<String>?>(null)
         val service = DesktopActionRunService(

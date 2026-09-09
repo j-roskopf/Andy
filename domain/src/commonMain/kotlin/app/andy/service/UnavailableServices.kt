@@ -307,8 +307,8 @@ object UnavailableMcpService : McpServerService {
 
 object UnavailableActionRunService : ActionRunService {
     override val running: StateFlow<List<RunningAction>> = MutableStateFlow(emptyList())
-    override fun openShell(project: ActionProject) = ""
-    override fun run(project: ActionProject, action: ProjectAction) = ""
+    override fun openShell(project: ActionProject, cwdOverride: String?) = ""
+    override fun run(project: ActionProject, action: ProjectAction, cwdOverride: String?) = ""
     override fun stop(runId: String) = Unit
     override fun clear(runId: String) = Unit
 }

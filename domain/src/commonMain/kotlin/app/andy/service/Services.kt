@@ -561,9 +561,17 @@ interface ActionConfigStore {
 
 interface ActionRunService {
     val running: StateFlow<List<RunningAction>>
-    /** Opens an interactive login shell rooted at the project's context directory. */
-    fun openShell(project: ActionProject): String
-    fun run(project: ActionProject, action: ProjectAction): String
+    /**
+     * Opens an interactive login shell rooted at the project's context directory, or at
+     * [cwdOverride] when set — used to drop a shell straight into one of the project's worktrees.
+     */
+    fun openShell(project: ActionProject, cwdOverride: String? = null): String
+    /**
+     * Runs [action] in the project's context directory (or the action's own `cwd`), unless
+     * [cwdOverride] redirects it — e.g. running a build against a worktree instead of the checkout.
+     * Runs are deduplicated per directory, so the same action can be live in several worktrees.
+     */
+    fun run(project: ActionProject, action: ProjectAction, cwdOverride: String? = null): String
     fun stop(runId: String)
     fun clear(runId: String)
     /** Best-effort root pid for a project terminal PTY (for local-server attribution). */

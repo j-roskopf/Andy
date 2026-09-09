@@ -25,10 +25,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import app.andy.ui.components.bottomBorder
@@ -50,6 +48,8 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -69,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
 import app.andy.HostCodeEditor
 import app.andy.rememberCopyText
 import app.andy.currentTimeMillis
@@ -141,7 +142,6 @@ import app.andy.ui.components.onChatImagePaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.AndyOverlay
 import app.andy.ui.theme.AndyRadius
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.Border
@@ -671,6 +671,8 @@ fun AgentTaskDetail(
                 )
             }
         }
+        var chatPaneWidth by remember(task.id) { mutableStateOf(0.dp) }
+        val density = LocalDensity.current
         Box(
             Modifier
                 .weight(1f)
@@ -681,7 +683,10 @@ fun AgentTaskDetail(
                         else -> 280.dp
                     },
                 )
-                .clipToBounds(),
+                .clipToBounds()
+                .onSizeChanged { size ->
+                    chatPaneWidth = with(density) { size.width.toDp() }
+                },
         ) {
             val terminalModifier = remember { Modifier.fillMaxSize() }
             val imagesStagedLatest = rememberUpdatedState(
@@ -774,6 +779,22 @@ fun AgentTaskDetail(
                     onImagesStaged = onImagesStaged,
                     maskBottomChrome = showCompletedTurnChrome && !terminalSessionActive,
                     modifier = terminalModifier,
+                )
+            }
+            // Cursor-style Environment chip: floats top-right over the chat/terminal pane.
+            if (task.worktreePath != null && !terminalSessionActive) {
+                WorktreeEnvironmentPanel(
+                    services = services,
+                    task = task,
+                    diffSummary = diffSummary,
+                    onDiffSummaryChange = { diffSummary = it },
+                    onCopyText = copyText,
+                    paneWidth = chatPaneWidth,
+                    contentFullBleed = !acpTask,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = AndySpace.Space2, end = AndySpace.Space2)
+                        .zIndex(2f),
                 )
             }
         }
@@ -1260,50 +1281,6 @@ fun AgentTaskDetail(
                     }
                 },
             )
-        }
-
-        // Same rule as change-summary: never steal height from a live terminal.
-        if (task.worktreePath != null && !terminalSessionActive) {
-            PanelCard(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp, max = 160.dp),
-                background = AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium),
-                contentPadding = PaddingValues(AndySpace.Space3),
-                verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
-            ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("worktree ${task.branchName.orEmpty()}", color = TextSecondary, fontFamily = MonoFont, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    OutlinedButton(
-                        onClick = { copyText(task.worktreePath.orEmpty()) },
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) { Text("copy path", fontSize = 10.sp) }
-                    OutlinedButton(
-                        onClick = {
-                            val branch = task.branchName ?: return@OutlinedButton
-                            val parentPath = task.parentWorktreeTaskId?.let { parentId ->
-                                services.agentRuns.tasks.value.firstOrNull { it.id == parentId }?.worktreePath
-                            }
-                            val targetDir = parentPath ?: task.originDir ?: return@OutlinedButton
-                            copyText(services.agentRuns.mergeCommand(targetDir, branch))
-                        },
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) { Text("copy merge cmd", fontSize = 10.sp) }
-                    OutlinedButton(
-                        onClick = { scope.launch { diffSummary = services.agentRuns.worktreeDiffSummary(task.id) } },
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    ) { Text("refresh diff", fontSize = 10.sp) }
-                }
-                Text(
-                    diffSummary ?: "loading diff…",
-                    color = TextSecondary,
-                    fontFamily = MonoFont,
-                    fontSize = 11.sp,
-                    lineHeight = 14.sp,
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                )
-            }
         }
     }
     }

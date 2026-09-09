@@ -792,6 +792,12 @@ data class AgentTaskDraft(
     val existingBranchName: String? = null,
     /** When set (and useWorktree = true), the new worktree forks from this task's branch instead of originDir's current HEAD. */
     val baseWorktreeTaskId: String? = null,
+    /**
+     * Git ref (branch name) the new worktree forks from when [baseWorktreeTaskId] is unset.
+     * Null keeps originDir's current HEAD. Lets a chat build on a branch the user picked without
+     * having to check that branch out in the main working tree first.
+     */
+    val baseRef: String? = null,
     /** Chat this draft is a side chat of, if launched from a dock Chat pane. */
     val parentChatTaskId: String? = null,
     val workflowTaskId: String? = null,

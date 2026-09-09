@@ -1421,8 +1421,10 @@ class DesktopAgentRunService(
                 persist()
                 return task
             }
+            // A base task's branch wins; otherwise the draft's explicit base ref, else current HEAD.
+            val startPoint = baseTask?.branchName ?: draft.baseRef?.trim()?.takeIf { it.isNotBlank() }
             val created = withContext(Dispatchers.IO) {
-                worktrees.create(originDir, task.id, task.agent, task.title, startPoint = baseTask?.branchName)
+                worktrees.create(originDir, task.id, task.agent, task.title, startPoint = startPoint)
             }
             task = created.fold(
                 onSuccess = {

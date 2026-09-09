@@ -717,8 +717,8 @@ internal object ScreenshotServices {
 
     private object ScreenshotActionRuns : ActionRunService {
         override val running: StateFlow<List<RunningAction>> = MutableStateFlow(listOf(RunningAction("run-1", "garden", "test", "Run unit tests", "run", "./gradlew test", "/workspace/sample-app", ActionRunStatus.Running, startedAtMillis = now - 9_000)))
-        override fun openShell(project: ActionProject) = "shell-1"
-        override fun run(project: ActionProject, action: ProjectAction) = "run-1"
+        override fun openShell(project: ActionProject, cwdOverride: String?) = "shell-1"
+        override fun run(project: ActionProject, action: ProjectAction, cwdOverride: String?) = "run-1"
         override fun stop(runId: String) = Unit
         override fun clear(runId: String) = Unit
     }

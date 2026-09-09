@@ -60,7 +60,7 @@ Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes,
 
 - Compose prompts with images, `@file` mentions, and `/` skills.
 - Choose model, autonomy, and provider sandbox or approvals.
-- Isolate a run in a git worktree when you need a clean boundary.
+- Isolate a run in a git worktree when you need a clean boundary. Pick the branch it forks from, then test it in place: the chat's worktree card and the project's Worktrees tab open a terminal or run any runbook action rooted in that worktree.
 - Toggle plan mode. Set a persistent `/goal` for Codex and Claude Code.
 - Import a vendor thread or session id to resume an existing conversation.
 - Attach Andy MCP so the agent can drive Android and iOS targets ([device tools](#10-mcp-for-device-control)).

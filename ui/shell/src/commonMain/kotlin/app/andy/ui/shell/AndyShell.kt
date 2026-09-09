@@ -45,6 +45,8 @@ import app.andy.ui.components.HorizontalPaneDivider
 import app.andy.LocalSuppressHeavyweightSurfaces
 import app.andy.ui.components.LocalOpenAgentTask
 import app.andy.ui.components.LocalOpenInvestigation
+import app.andy.ui.components.LocalProjectDirLauncher
+import app.andy.ui.components.ProjectDirLauncher
 import app.andy.ui.components.PaneDivider
 import app.andy.ui.components.ModalDialogRegistry
 import app.andy.ui.components.PendingConfirmation
@@ -276,6 +278,13 @@ internal fun AndyShell(
         LocalSuppressHeavyweightSurfaces provides ModalDialogRegistry.anyOpen,
         LocalOpenAgentTask provides state::openAgentTask,
         LocalOpenInvestigation provides state::openInvestigation,
+        LocalProjectDirLauncher provides remember(state) {
+            ProjectDirLauncher(
+                actionsFor = state::projectActions,
+                openTerminal = state::openTerminalIn,
+                runAction = state::runActionIn,
+            )
+        },
         LocalChatComposerInbox provides remember { ChatComposerInbox() },
     ) {
     Box(

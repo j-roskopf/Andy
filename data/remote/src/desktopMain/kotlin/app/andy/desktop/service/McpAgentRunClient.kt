@@ -727,6 +727,7 @@ class McpAgentRunClient(
                     put("existingWorktreePath", JsonPrimitive(it))
                 }
                 draft.baseWorktreeTaskId?.let { put("baseWorktreeTaskId", JsonPrimitive(it)) }
+                draft.baseRef?.takeIf { it.isNotBlank() }?.let { put("baseRef", JsonPrimitive(it)) }
                 put("attachAndyMcp", JsonPrimitive(draft.attachAndyMcp))
                 put("autonomy", JsonPrimitive(draft.autonomy.name))
                 draft.model?.takeIf { it.isNotBlank() }?.let { put("model", JsonPrimitive(it)) }
