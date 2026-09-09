@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/desktopMain/resources/icons/andy.png" alt="Andy logo" width="128">
+  <img src="composeApp/src/desktopMain/resources/icons/andy.png" alt="Andy logo" width="128">
 </p>
 
 # Andy
