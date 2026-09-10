@@ -141,6 +141,13 @@ class SwappableAgentBackend(
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
 
     override suspend fun refreshProviderQuotas() = runs().refreshProviderQuotas()
+
+    override suspend fun awaitTasksLoaded() {
+        runs().awaitTasksLoaded()
+        // Mirror may lag one collect behind the active backend; sync before callers seed.
+        _tasks.value = runs().tasks.value
+    }
+
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = runs().setQuotaAccess(agent, enabled)
     override fun setProviderLane(agent: AgentKind, lane: AgentLaneKind) = runs().setProviderLane(agent, lane)
     override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> =
@@ -172,6 +179,7 @@ class SwappableAgentBackend(
     override fun isLaneLive(taskId: String): Boolean = runs().isLaneLive(taskId)
     override fun sessionRootPid(taskId: String): Long? = runs().sessionRootPid(taskId)
     override fun isViewing(taskId: String): Boolean = runs().isViewing(taskId)
+    override val viewingTaskId: StateFlow<String?> get() = runs().viewingTaskId
     override fun setAppForeground(foreground: Boolean) = runs().setAppForeground(foreground)
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) =
         runs().respondToUserInput(taskId, requestId, answers)

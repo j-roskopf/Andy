@@ -1,0 +1,24 @@
+id = "examples.pane-echo"
+name = "Pane Echo"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "Demonstrates plugin Terminal panes"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "open-tab"
+title = "Open echo tab"
+contexts = ["global"]
+command = ["sh", "-c", "\"$ANDY_BIN_PATH\" plugin pane open --plugin examples.pane-echo --entrypoint echo-tab"]
+
+[[panes]]
+id = "echo-tab"
+title = "Echo (tab)"
+placement = "tab"
+command = ["node", "echo.mjs", "tab"]
+
+[[panes]]
+id = "echo-split"
+title = "Echo (split)"
+placement = "split"
+command = ["node", "echo.mjs", "split"]

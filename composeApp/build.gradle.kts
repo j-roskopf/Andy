@@ -112,11 +112,14 @@ kotlin {
                 implementation(project(":core:platform"))
                 implementation(project(":ui:core"))
                 implementation(project(":ui:components"))
+                implementation(project(":feature:agents"))
+                implementation(project(":feature:settings"))
                 implementation(project(":data:mirror"))
                 implementation(project(":data:agents"))
                 implementation(project(":data:workspace"))
                 implementation(project(":data:platform-tools"))
                 implementation(compose.desktop.currentOs)
+                implementation(compose.material3)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("io.github.kdroidfilter:composenativetray:1.3.3")
             }
@@ -325,6 +328,7 @@ val buildAndyVoiceJniMacArm64 by tasks.registering(Exec::class) {
         source.asFile.absolutePath,
         "-framework", "AVFoundation",
         "-framework", "Foundation",
+        "-framework", "Carbon",
         "-o", output.get().asFile.absolutePath,
     )
 }
@@ -410,6 +414,7 @@ val buildAndyVoiceJniMacX64 by tasks.registering(Exec::class) {
         source.asFile.absolutePath,
         "-framework", "AVFoundation",
         "-framework", "Foundation",
+        "-framework", "Carbon",
         "-o", output.get().asFile.absolutePath,
     )
 }

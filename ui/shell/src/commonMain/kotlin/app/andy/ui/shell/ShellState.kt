@@ -156,6 +156,22 @@ internal class ShellState(
     val inspectorState = InspectorState()
     val transfer = DeviceTransferCoordinator()
 
+    init {
+        scope.launch {
+            services.plugins.paneOpenRequests.collect { request ->
+                val placement = when (request.placement) {
+                    app.andy.model.PluginPanePlacement.Split,
+                    app.andy.model.PluginPanePlacement.Tab,
+                    -> lastTerminalPlacement
+                    app.andy.model.PluginPanePlacement.Overlay,
+                    app.andy.model.PluginPanePlacement.Zoomed,
+                    -> DockPlacement.Right
+                }
+                focusTerminalRun(request.runId, placement)
+            }
+        }
+    }
+
     fun navigateTo(value: AndyDestination) {
         if (value == AndyDestination.Tracing) {
             destination = AndyDestination.Performance
@@ -1498,6 +1514,11 @@ internal class ShellState(
                 lastActionId = resolvedActionId,
             )
         }
+        services.plugins.emitEvent(
+            event = "workspace.focused",
+            data = mapOf("workspace_id" to projectId),
+            context = app.andy.model.PluginInvocationContext(workspaceId = projectId),
+        )
     }
 
     private fun resolveLastActionId(projectId: String, actionId: String?): String? {

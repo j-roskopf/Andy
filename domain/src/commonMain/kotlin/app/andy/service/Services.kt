@@ -572,14 +572,64 @@ interface ActionRunService {
      * Runs are deduplicated per directory, so the same action can be live in several worktrees.
      */
     fun run(project: ActionProject, action: ProjectAction, cwdOverride: String? = null): String
+    /**
+     * Spawns [argv] directly in a dockable terminal (plugin panes / one-off tools).
+     * Returns a run id suitable for [ShellState.focusTerminalRun].
+     */
+    fun startCommand(
+        title: String,
+        argv: List<String>,
+        cwd: String,
+        env: Map<String, String> = emptyMap(),
+        projectId: String = "plugin",
+        actionId: String = "plugin",
+    ): String = ""
     fun stop(runId: String)
     fun clear(runId: String)
     /** Best-effort root pid for a project terminal PTY (for local-server attribution). */
     fun sessionRootPid(runId: String): Long? = null
 }
 
+/**
+ * Out-of-process plugin host: install/link manifests, run actions/events, open panes.
+ */
+interface PluginService {
+    val plugins: StateFlow<List<InstalledPluginInfo>>
+    val commandLogs: StateFlow<List<PluginCommandLog>>
+    val openPanes: StateFlow<List<PluginPaneSession>>
+    /** GUI should collect this and call focusTerminalRun. */
+    val paneOpenRequests: Flow<PluginPaneOpenRequest>
+
+    suspend fun refresh()
+    suspend fun link(path: String, enabled: Boolean = true): InstalledPluginInfo
+    suspend fun unlink(pluginId: String)
+    suspend fun installGithub(spec: String, ref: String? = null, yes: Boolean = false): InstalledPluginInfo
+    suspend fun uninstall(pluginIdOrSpec: String)
+    suspend fun setEnabled(pluginId: String, enabled: Boolean)
+    fun configDir(pluginId: String): String
+    suspend fun listActions(pluginId: String? = null): List<Pair<InstalledPluginInfo, PluginManifestAction>>
+    suspend fun invokeAction(
+        actionId: String,
+        pluginId: String? = null,
+        context: PluginInvocationContext = PluginInvocationContext(),
+    ): PluginCommandLog
+    suspend fun openPane(
+        pluginId: String,
+        entrypoint: String,
+        placement: PluginPanePlacement? = null,
+        context: PluginInvocationContext = PluginInvocationContext(),
+    ): PluginPaneSession
+    suspend fun focusPane(paneId: String): PluginPaneSession?
+    suspend fun closePane(paneId: String)
+    /** Emit a host event; enabled plugins with matching `[[events]]` run asynchronously. */
+    fun emitEvent(event: String, data: Map<String, String> = emptyMap(), context: PluginInvocationContext = PluginInvocationContext())
+    /** Run `[[startup]]` hooks once after andyd is ready. */
+    fun runStartupHooks()
+}
+
 /** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
 private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+private val NoViewingTask: StateFlow<String?> = MutableStateFlow(null)
 private val NoLocalModelBackends: StateFlow<Map<AgentKind, Boolean>> = MutableStateFlow(emptyMap())
 private val DefaultTerminalSessionsRevision: StateFlow<Long> = MutableStateFlow(0L)
 
@@ -671,6 +721,19 @@ interface AgentRunService {
      * earns an unread badge and an OS banner when its turn ends.
      */
     fun isViewing(taskId: String): Boolean = false
+
+    /**
+     * The id of the chat currently focused on screen, published independently of [tasks]
+     * so focus changes are observable even when focusing an already-read chat (which does
+     * not re-emit a task value). null when nothing is focused.
+     */
+    val viewingTaskId: StateFlow<String?> get() = NoViewingTask
+
+    /**
+     * Suspends until the persisted chat list has been loaded into [tasks] once.
+     * Plugin event wiring uses this so store hydration is not mistaken for N new panes.
+     */
+    suspend fun awaitTasksLoaded() = Unit
 
     /**
      * Publishes window visibility/focus. Losing focus makes the open chat behave like a
@@ -1273,9 +1336,17 @@ data class AndyServices(
     val projectWorkflows: ProjectWorkflowService,
     val kanban: KanbanService = UnavailableKanbanService,
     val automations: AutomationService = UnavailableAutomationService,
+    val plugins: PluginService = UnavailablePluginService,
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
+    /**
+     * macOS Carbon global hotkey for voice-new-thread. False on Windows/Linux so Settings
+     * hides the shortcut row rather than recording a dead combo.
+     */
+    val supportsGlobalVoiceHotKey: Boolean = false,
+    /** Why the last global hotkey registration failed, if any. */
+    val globalVoiceHotKeyError: StateFlow<String?> = MutableStateFlow(null),
     val orchestrationPreferences: OrchestrationPreferencesService = UnavailableOrchestrationPreferencesService,
     val localServers: LocalServerService = UnavailableLocalServerService,
     val remoteSession: RemoteSessionService = UnavailableRemoteSessionService,

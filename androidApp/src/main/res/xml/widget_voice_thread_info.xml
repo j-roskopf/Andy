@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_voice_new_thread_description"
+    android:initialLayout="@layout/widget_voice_thread"
+    android:minWidth="40dp"
+    android:minHeight="40dp"
+    android:previewImage="@mipmap/ic_shortcut_voice_thread"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="1"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

@@ -1,0 +1,38 @@
+id = "examples.workspace-watch"
+name = "Workspace Watch"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "Logs project create / focus / rename / close — proves GUI workspace events"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "dump"
+title = "Dump watch.log"
+contexts = ["global"]
+command = ["node", "dump.mjs"]
+
+[[events]]
+on = "workspace.created"
+command = ["node", "watch.mjs"]
+
+[[events]]
+on = "workspace.focused"
+command = ["node", "watch.mjs"]
+
+[[events]]
+on = "workspace.updated"
+command = ["node", "watch.mjs"]
+
+[[events]]
+on = "workspace.renamed"
+command = ["node", "watch.mjs"]
+
+[[events]]
+on = "workspace.closed"
+command = ["node", "watch.mjs"]
+
+[[panes]]
+id = "tail"
+title = "Workspace watch"
+placement = "tab"
+command = ["node", "tail.mjs"]

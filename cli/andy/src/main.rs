@@ -7,6 +7,7 @@ use andy_cli::device_cli::{
 };
 use andy_cli::file_picker;
 use andy_cli::mcp::{default_socket_path, McpClient};
+use andy_cli::plugin_cli::{self, PluginCmd};
 use andy_cli::remote::{self, RemoteTunnel};
 use andy_cli::tool_cmd::{self, ToolCmd};
 use andy_cli::tui;
@@ -86,6 +87,9 @@ enum Commands {
     /// Generic MCP tool list / call (full parity escape hatch)
     #[command(subcommand)]
     Tool(ToolCmd),
+    /// Install and run workflow plugins
+    #[command(subcommand)]
+    Plugin(PluginCmd),
     /// Open a shell tunneled to a remote andyd (GUI Host switcher)
     Remote {
         /// user@host or ssh Host alias
@@ -278,6 +282,7 @@ async fn dispatch_command(cmd: Commands, client: &mut McpClient, json_out: bool)
         Commands::Network(cmd) => device_cli::run_network(client, cmd, json_out).await?,
         Commands::Ios(cmd) => device_cli::run_ios(client, cmd, json_out).await?,
         Commands::Tool(cmd) => tool_cmd::run_tool(client, cmd, json_out).await?,
+        Commands::Plugin(cmd) => plugin_cli::run(client, cmd, json_out).await?,
         Commands::Tui | Commands::Remote { .. } => unreachable!("handled in main"),
     }
     Ok(())

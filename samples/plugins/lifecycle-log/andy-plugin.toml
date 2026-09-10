@@ -1,0 +1,51 @@
+id = "examples.lifecycle-log"
+name = "Lifecycle Log"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "Teaching sample: one activity.log for startup, UI events, actions, and a tail pane"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["node", "log.mjs", "startup"]
+
+[[actions]]
+id = "ping"
+title = "Ping (write to activity.log)"
+contexts = ["global"]
+command = ["node", "log.mjs", "action", "ping"]
+
+[[actions]]
+id = "show-path"
+title = "Print activity.log path"
+contexts = ["global"]
+command = ["node", "show-path.mjs"]
+
+[[events]]
+on = "workspace.focused"
+command = ["node", "log.mjs", "event"]
+
+[[events]]
+on = "workspace.created"
+command = ["node", "log.mjs", "event"]
+
+[[events]]
+on = "workspace.closed"
+command = ["node", "log.mjs", "event"]
+
+[[events]]
+on = "tab.focused"
+command = ["node", "log.mjs", "event"]
+
+[[events]]
+on = "pane.created"
+command = ["node", "log.mjs", "event"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "log.mjs", "event"]
+
+[[panes]]
+id = "tail"
+title = "Lifecycle activity"
+placement = "tab"
+command = ["node", "tail.mjs"]

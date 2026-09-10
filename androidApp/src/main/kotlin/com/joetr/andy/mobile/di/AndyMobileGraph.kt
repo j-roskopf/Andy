@@ -3,6 +3,7 @@ package com.joetr.andy.mobile.di
 import android.app.Application
 import android.content.Context
 import com.joetr.andy.mobile.data.HostRepository
+import com.joetr.andy.mobile.data.VoiceDefaultsStore
 import com.joetr.andy.mobile.data.attention.AndroidChatNotificationService
 import com.joetr.andy.mobile.data.secrets.KeystoreSecretStore
 import com.joetr.andy.mobile.data.updates.AndroidAppUpdateService
@@ -23,6 +24,7 @@ import java.util.concurrent.TimeUnit
 @DependencyGraph(MobileScope::class)
 interface AndyMobileGraph : SessionGraph.Factory {
     val hostRepository: HostRepository
+    val voiceDefaultsStore: VoiceDefaultsStore
     val secretStore: KeystoreSecretStore
     val sessionManager: SessionManager
     val updateService: AndroidAppUpdateService

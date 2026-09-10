@@ -18,6 +18,8 @@ Andy is a local-first desktop app for people who build software using coding age
 ·
 [Daemon and CLI](docs/ANDYD.md)
 ·
+[Plugins](docs/PLUGINS.md)
+·
 [Android companion](docs/ANDROID_MOBILE.md)
 
 ## How the pieces fit
@@ -49,6 +51,8 @@ A project is a repo path plus context. Each project has tabs for chats, tasks, a
 **Artifacts (desktop).** Browse Media and Documents for workflow outputs, uploads, and pinned files. Preview text. Reveal files on disk. Pin or unpin entries. An unscoped Agents catalog collects artifacts that are not tied to a project.
 
 **Automations (desktop).** Schedule recurring agent work with once, hourly, daily, weekday, weekly, interval, or cron schedules. Choose standalone, dedicated-thread, or heartbeat mode. Set failure policy, max iterations, and notifications. Arm with Resume, run by hand, or drive from MCP `automation.*` tools while `andyd` is up.
+
+**Plugins (desktop).** Install out-of-process workflow packages (`andy-plugin.toml`) that react to chat/project events, expose actions, and open Terminal dock panes. Manage them from Settings → Plugins or `andy plugin …`. Samples live in [`samples/plugins/`](samples/plugins/); authoring guide: [`docs/PLUGINS.md`](docs/PLUGINS.md).
 
 **Kanban (desktop).** Track work on a drag-and-drop board. Andy starts with To-Do, Doing, and Done lanes. Add, rename, reorder, or delete lanes. Create cards with a title, description, and tags. Assign cards to agent chats. Start a spec from a card. The board is local to Andy Desktop. It is not available when Andy Desktop uses `andyd` (local or remote). Quit `andyd` and restart Andy to edit the board.
 

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.joetr.andy.mobile.data.HostRepository
 import com.joetr.andy.mobile.data.SavedHost
+import com.joetr.andy.mobile.data.VoiceDefaultsStore
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import com.joetr.andy.mobile.data.networkaccess.ProjectGroup
@@ -134,6 +135,7 @@ class ProjectsViewModel(
 @Inject
 class SettingsViewModel(
     val updates: AndroidAppUpdateService,
+    val voiceDefaultsStore: VoiceDefaultsStore,
 ) : ViewModel()
 
 @Inject

@@ -174,6 +174,7 @@ private enum class DesktopSettingsCategory(
     Agents("Agents", "Sessions, orchestration, and notifications"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
+    Plugins("Plugins", "Install, enable, and run workflow plugins"),
     Updates("Updates", "Version, desktop app, CLI, andyd, and extras"),
     Onboarding("Onboarding", "Replay guided introductions"),
 }
@@ -251,7 +252,12 @@ fun SettingsScreen(
                 }
                 AgentNotificationsPanel(workspaceState, onUpdateWorkspace, services)
                 if (services.voiceSetup !is UnavailableVoiceSetupService) {
-                    VoiceDictationPanel(services.voiceSetup, workspaceState, onUpdateWorkspace)
+                    VoiceDictationPanel(
+                        voiceSetup = services.voiceSetup,
+                        workspaceState = workspaceState,
+                        onUpdateWorkspace = onUpdateWorkspace,
+                        services = services,
+                    )
                 }
             }
             DesktopSettingsCategory.Proxy -> ProxyPanel(
@@ -287,6 +293,7 @@ fun SettingsScreen(
                     mcpServerPort = workspaceState.mcpServerPort,
                 )
             }
+            DesktopSettingsCategory.Plugins -> PluginsPanel(services = services)
             DesktopSettingsCategory.Updates -> UpdatesPanel(
                 updates = services.updates,
                 runtimeBundle = services.runtimeBundle,
@@ -1586,17 +1593,30 @@ private fun VoiceDictationPanel(
     voiceSetup: VoiceSetupService,
     workspaceState: WorkspaceState,
     onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    services: AndyServices,
 ) {
     val scope = rememberCoroutineScope()
     val state by voiceSetup.state.collectAsState()
     val enabled = state !is VoiceSetupState.NotEnabled
     val shortcut = remember(workspaceState.voiceDictationShortcut) { KeyCombo.decode(workspaceState.voiceDictationShortcut) }
+    val newThreadShortcut = remember(workspaceState.voiceNewThreadShortcut) {
+        KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
+    }
     var confirmReset by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     // Bump after delete so enablement refreshes even when state stays NotEnabled.
     var downloadsEpoch by remember { mutableStateOf(0) }
     val hasDownloads = remember(state, downloadsEpoch) { voiceSetup.hasDownloads() }
-    val canResetVoice = hasDownloads || shortcut != null || enabled
+    val canResetVoice = hasDownloads || shortcut != null || newThreadShortcut != null || enabled
+    val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
+    val providerModels by services.agentRuns.providerModels.collectAsState()
+    var actionsConfig by remember { mutableStateOf(app.andy.model.ActionsConfig()) }
+    LaunchedEffect(Unit) {
+        runCatching { actionsConfig = services.actionConfig.load() }
+    }
+    val availableAgents = remember(cliStatuses) {
+        cliStatuses.filter { it.available }.map { it.kind }.ifEmpty { AgentKind.entries }
+    }
     SettingsGroup(
         title = "Voice dictation",
         description = "Click-to-toggle mic in the new-task and follow-up composers. Downloads a local whisper.cpp binary and English model on first enable (~150 MB).",
@@ -1634,7 +1654,82 @@ private fun VoiceDictationPanel(
         }
         VoiceDictationShortcutRow(
             shortcut = shortcut,
+            label = "Toggle mic shortcut",
+            contentDescription = "Voice dictation shortcut",
             onChange = { combo -> onUpdateWorkspace { it.copy(voiceDictationShortcut = combo?.encode()) } },
+        )
+        // New-thread subsection — global hotkey is macOS-only (Carbon); hide the binding
+        // elsewhere so Settings never records a combo that cannot fire.
+        Text(
+            "New thread from voice",
+            color = TextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            "Press a global hotkey (even while Andy is in the background) to dictate a new agent thread. Confirm before it starts.",
+            color = TextSecondary,
+            fontSize = 11.sp,
+        )
+        if (services.supportsGlobalVoiceHotKey) {
+            VoiceDictationShortcutRow(
+                shortcut = newThreadShortcut,
+                label = "New-thread hotkey",
+                contentDescription = "New thread from voice shortcut",
+                onChange = { combo -> onUpdateWorkspace { it.copy(voiceNewThreadShortcut = combo?.encode()) } },
+            )
+            val hotKeyError by services.globalVoiceHotKeyError.collectAsState()
+            hotKeyError?.let {
+                Text(it, color = Rust, fontSize = 11.sp)
+            }
+        } else {
+            Text(
+                "Global hotkey is available on macOS only.",
+                color = TextSecondary,
+                fontSize = 11.sp,
+            )
+        }
+        VoiceDefaultPickerRow(
+            label = "Default agent",
+            valueLabel = workspaceState.voiceDefaultAgent
+                ?.let { id -> AgentKind.entries.firstOrNull { it.name == id }?.label ?: id }
+                ?: "not set",
+            options = listOf(null to "not set") + availableAgents.map { it.name to it.label },
+            onSelected = { id -> onUpdateWorkspace { it.copy(voiceDefaultAgent = id) } },
+        )
+        val selectedAgent = AgentKind.entries.firstOrNull { it.name == workspaceState.voiceDefaultAgent }
+        val modelOptions = remember(selectedAgent, providerModels) {
+            if (selectedAgent == null) emptyList()
+            else (providerModels[selectedAgent] ?: AgentModelCatalog.options(selectedAgent))
+                .map { it.id to (it.label.ifBlank { it.id }) }
+        }
+        if (modelOptions.isNotEmpty()) {
+            VoiceDefaultPickerRow(
+                label = "Default model",
+                valueLabel = workspaceState.voiceDefaultModel ?: "not set",
+                options = listOf(null to "not set") + modelOptions,
+                onSelected = { id -> onUpdateWorkspace { it.copy(voiceDefaultModel = id) } },
+            )
+        }
+        VoiceDefaultPickerRow(
+            label = "Default autonomy",
+            valueLabel = workspaceState.voiceDefaultAutonomy,
+            options = AgentAutonomy.entries.map { it.name to it.name },
+            onSelected = { id ->
+                onUpdateWorkspace { it.copy(voiceDefaultAutonomy = id ?: "Standard") }
+            },
+        )
+        VoiceDefaultPickerRow(
+            label = "Default project",
+            valueLabel = actionsConfig.projects
+                .firstOrNull { it.id == workspaceState.voiceDefaultProjectId }
+                ?.name
+                ?: workspaceState.voiceDefaultProjectId
+                ?: "not set",
+            options = listOf(null to "not set") +
+                actionsConfig.projects.map { it.id to it.name },
+            onSelected = { id -> onUpdateWorkspace { it.copy(voiceDefaultProjectId = id) } },
         )
         Row(
             Modifier.fillMaxWidth(),
@@ -1682,7 +1777,12 @@ private fun VoiceDictationPanel(
                                 // Only clear the shortcut after a full wipe; partial deletes leave
                                 // VoiceSetupState.Failed and keep the existing binding.
                                 if (voiceSetup.state.value is VoiceSetupState.NotEnabled) {
-                                    onUpdateWorkspace { it.copy(voiceDictationShortcut = null) }
+                                    onUpdateWorkspace {
+                                        it.copy(
+                                            voiceDictationShortcut = null,
+                                            voiceNewThreadShortcut = null,
+                                        )
+                                    }
                                 }
                             } finally {
                                 deleting = false
@@ -1705,9 +1805,51 @@ private fun VoiceDictationPanel(
 }
 
 @Composable
+private fun VoiceDefaultPickerRow(
+    label: String,
+    valueLabel: String,
+    options: List<Pair<String?, String>>,
+    onSelected: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(label, color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Box {
+            ChoicePill(
+                label = valueLabel,
+                selected = valueLabel != "not set",
+                contentDescription = label,
+                onClick = { expanded = true },
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = AndyColors.Neutral750,
+            ) {
+                options.forEach { (id, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text, color = TextPrimary) },
+                        onClick = {
+                            onSelected(id)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun VoiceDictationShortcutRow(
     shortcut: KeyCombo?,
     onChange: (KeyCombo?) -> Unit,
+    label: String = "Toggle mic shortcut",
+    contentDescription: String = "Voice dictation shortcut",
 ) {
     var capturing by remember { mutableStateOf(false) }
     var heldModifiers by remember { mutableStateOf("") }
@@ -1720,7 +1862,7 @@ fun VoiceDictationShortcutRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Toggle mic shortcut", color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(label, color = TextPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 ChoicePill(
             label = when {
                 capturing && heldModifiers.isNotEmpty() -> "$heldModifiers…"
@@ -1729,7 +1871,7 @@ fun VoiceDictationShortcutRow(
                 else -> "not set"
             },
             selected = shortcut != null || capturing,
-            contentDescription = "Voice dictation shortcut",
+            contentDescription = contentDescription,
             onClick = { capturing = true },
             modifier = Modifier
                 .focusRequester(focusRequester)
@@ -2674,6 +2816,192 @@ private fun McpToolsPanel(toolNames: List<String>) {
                 ) {
                     Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PluginsPanel(services: AndyServices) {
+    val scope = rememberCoroutineScope()
+    val plugins by services.plugins.plugins.collectAsState()
+    val logs by services.plugins.commandLogs.collectAsState()
+    var linkPath by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun reload(message: String? = null) {
+        busy = true
+        scope.launch {
+            status = runCatching {
+                services.plugins.refresh()
+                message ?: "Loaded ${services.plugins.plugins.value.size} plugin(s)"
+            }.getOrElse { "Error: ${it.message}" }
+            busy = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { services.plugins.refresh() }
+    }
+
+    SettingsGroup(
+        title = "Plugins",
+        description = "Out-of-process workflow packages with andy-plugin.toml. " +
+            "Linked plugins are stored in ~/.andy/plugins.json and show up here after Link or Refresh. " +
+            "Use an absolute path (relative paths resolve inside Andy.app).",
+    ) {
+        TextField(
+            linkPath,
+            { linkPath = it },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            colors = fieldColors(),
+            placeholder = {
+                Text(
+                    "/absolute/path/to/plugin (or samples/plugins/… via CLI)",
+                    color = TextSecondary,
+                )
+            },
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                enabled = !busy && linkPath.isNotBlank(),
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        status = runCatching {
+                            val info = services.plugins.link(linkPath.trim())
+                            "Linked ${info.pluginId}" +
+                                if (info.warnings.isEmpty()) "" else " (${info.warnings.joinToString()})"
+                        }.getOrElse { "Error: ${it.message}" }
+                        busy = false
+                    }
+                },
+            ) { Text("Link") }
+            OutlinedButton(
+                enabled = !busy,
+                onClick = { reload() },
+            ) { Text("Refresh") }
+        }
+        status?.let { Text(it, color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont) }
+
+        if (plugins.isEmpty()) {
+            Text(
+                "No plugins installed yet. Link a folder with andy-plugin.toml, e.g.\n" +
+                    "andy plugin link samples/plugins/webhook-notify",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        } else {
+            plugins.forEach { plugin ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = AndySpace.Space2),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                ) {
+                    Text("${plugin.name} (${plugin.pluginId})", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "v${plugin.version} · ${if (plugin.enabled) "enabled" else "disabled"} · ${plugin.source.kind.name.lowercase()}",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        fontFamily = MonoFont,
+                    )
+                    Text(plugin.pluginRoot, color = TextSecondary, fontSize = 11.sp, fontFamily = MonoFont)
+                    plugin.description?.let {
+                        Text(it, color = TextSecondary, fontSize = 12.sp)
+                    }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    services.plugins.setEnabled(plugin.pluginId, !plugin.enabled)
+                                }
+                            },
+                        ) { Text(if (plugin.enabled) "Disable" else "Enable") }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    runCatching {
+                                        val dir = services.plugins.configDir(plugin.pluginId)
+                                        status = "Config: $dir"
+                                    }
+                                }
+                            },
+                        ) { Text("Config dir") }
+                        plugin.actions.firstOrNull()?.let { action ->
+                            OutlinedButton(
+                                enabled = plugin.enabled && !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        status = runCatching {
+                                            val log = services.plugins.invokeAction(action.id, plugin.pluginId)
+                                            "Action ${action.id} exit=${log.exitCode}"
+                                        }.getOrElse { "Error: ${it.message}" }
+                                        busy = false
+                                    }
+                                },
+                            ) { Text("Run ${action.title}") }
+                        }
+                        plugin.panes.firstOrNull()?.let { pane ->
+                            OutlinedButton(
+                                enabled = plugin.enabled && !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        status = runCatching {
+                                            val session = services.plugins.openPane(plugin.pluginId, pane.id)
+                                            "Opened pane ${session.paneId}"
+                                        }.getOrElse { "Error: ${it.message}" }
+                                        busy = false
+                                    }
+                                },
+                            ) { Text("Open ${pane.title}") }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    status = runCatching {
+                                        if (plugin.source.kind == app.andy.model.PluginSourceKind.Local) {
+                                            services.plugins.unlink(plugin.pluginId)
+                                            "Unlinked ${plugin.pluginId}"
+                                        } else {
+                                            services.plugins.uninstall(plugin.pluginId)
+                                            "Uninstalled ${plugin.pluginId}"
+                                        }
+                                    }.getOrElse { "Error: ${it.message}" }
+                                }
+                            },
+                        ) {
+                            Text(
+                                if (plugin.source.kind == app.andy.model.PluginSourceKind.Local) {
+                                    "Unlink"
+                                } else {
+                                    "Uninstall"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (logs.isNotEmpty()) {
+            Text("Recent command logs", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+            logs.take(8).forEach { log ->
+                Text(
+                    "${log.pluginId} ${log.kind} exit=${log.exitCode ?: "?"}",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                )
             }
         }
     }

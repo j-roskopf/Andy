@@ -84,6 +84,7 @@ class DesktopMcpServerService(
     private var agentRuns: AgentRunService? = null
     private var projectWorkflows: ProjectWorkflowService? = null
     private var automations: AutomationService? = null
+    private var plugins: PluginService? = null
     private val hub = McpHubService()
 
     /**
@@ -97,10 +98,12 @@ class DesktopMcpServerService(
         agents: AgentRunService,
         projects: ProjectWorkflowService,
         automations: AutomationService = UnavailableAutomationService,
+        plugins: PluginService = UnavailablePluginService,
     ) {
         agentRuns = agents
         projectWorkflows = projects
         this.automations = automations
+        this.plugins = plugins
         attentionHub.startWatching(agents)
         webPush.startWatching(attentionHub)
     }
@@ -484,6 +487,7 @@ class DesktopMcpServerService(
                 automations = automations ?: UnavailableAutomationService,
             )
         }
+        mcpServer.registerPluginTools(plugins ?: UnavailablePluginService)
         return mcpServer
     }
 

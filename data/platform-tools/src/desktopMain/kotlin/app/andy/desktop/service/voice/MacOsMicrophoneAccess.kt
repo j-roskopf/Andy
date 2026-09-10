@@ -35,6 +35,9 @@ internal object MacOsMicrophoneAccess {
         return decode(runCatching { nativeRequestAccess() }.getOrDefault(-1))
     }
 
+    /** Shared with the Carbon hotkey bridge — both natives live in the same dylib. */
+    internal fun ensureNativeLoaded(): Boolean = ensureLoaded()
+
     private fun ensureLoaded(): Boolean {
         loaded?.let { return it }
         val ok = loadLibrary().isSuccess

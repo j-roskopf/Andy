@@ -1747,7 +1747,21 @@ class AgentStatusTrackerTest {
                 scrapeHint = AgentStatus.Working,
                 scrapeBlocked = false,
                 scrapeWorking = true,
+                scrapeVisibleWorking = true,
             ),
+            "visible on-screen working chrome overrides Done",
+        )
+        assertEquals(
+            AgentStatus.Done,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Done,
+                scrapeHint = AgentStatus.Working,
+                scrapeBlocked = false,
+                scrapeWorking = true,
+                scrapeVisibleWorking = false,
+            ),
+            "stale OSC working title alone must not override authoritative Done",
         )
         assertEquals(
             AgentStatus.Done,
@@ -1770,6 +1784,168 @@ class AgentStatusTrackerTest {
             ),
             "non-agy agents ignore hook status",
         )
+    }
+
+    @Test
+    fun readLatestHookStatusRecoversDoneWhenTrailingTitleWorkingRacedStopHook() {
+        val dir = File.createTempFile("andy-hook-race", null).also { it.delete(); it.mkdirs() }
+        try {
+            File(dir, "status.json").writeText(
+                """
+                {"status":"working","at":100}
+                {"status":"done","at":105}
+                {"status":"working","at":105}
+                """.trimIndent() + "\n",
+            )
+            assertEquals(AgentStatus.Done, readLatestHookStatus(dir))
+
+            File(dir, "status.json").writeText(
+                """
+                {"status":"working","at":100}
+                {"status":"done","at":105}
+                {"status":"working","at":106}
+                """.trimIndent() + "\n",
+            )
+            assertEquals(AgentStatus.Done, readLatestHookStatus(dir))
+
+            File(dir, "status.json").writeText(
+                """
+                {"status":"working","at":100}
+                {"status":"done","at":105}
+                {"status":"working","at":120}
+                """.trimIndent() + "\n",
+            )
+            assertEquals(AgentStatus.Working, readLatestHookStatus(dir), "new turn after delay should stay working")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun titleScriptTicksDoNotClobberStopHookDoneStatus() {
+        val home = File.createTempFile("andy-agy-title-race", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val artifacts = File(project, ".andy/task-race").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            installGenericStatusHookScript(artifacts)
+            AndyAgyTitleInstaller.ensureInstalled(home)
+            val script = AndyAgyTitleInstaller.scriptFile(home)
+            val hookScript = AndyStatusHookInstaller.scriptFile(home)
+            val env = mapOf(
+                AndyStatusHookInstaller.TASK_ID_ENV to "task-race",
+                AndyStatusHookInstaller.PROJECT_ROOT_ENV to project.absolutePath,
+            )
+
+            // 1. Turn finishes: Stop hook records done with fully-idle gate.
+            runStatusHook(
+                hookScript,
+                project,
+                "done",
+                "stop",
+                "fully-idle",
+                stdin = """{"fullyIdle":true,"terminationReason":"model_stop"}""",
+                env = env,
+            )
+            val statusFile = File(artifacts, "status.json")
+            assertTrue(statusFile.readText().contains("\"status\":\"done\""))
+
+            // 2. Trailing title script tick arrives with lagging agent_state="thinking".
+            val (_, workingOut) = runAgyTitleScript(
+                script,
+                project,
+                stdin = """{"agent_state":"thinking","tool_confirmation_pending":false}""",
+                env = env,
+            )
+            // Title marker is emitted, but status.json must NOT have working appended over done.
+            assertEquals("agy andy:working", workingOut)
+            assertEquals(
+                AgentStatus.Done,
+                readLatestHookStatus(artifacts),
+                "title script tick must not clobber Stop hook done",
+            )
+            assertFalse(statusFile.readText().contains("\"status\":\"working\""))
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun titleScriptTicksDeduplicateIdenticalStatuses() {
+        val home = File.createTempFile("andy-agy-title-dedup", null).also { it.delete(); it.mkdirs() }
+        val previousHome = System.getProperty("user.home")
+        val project = File(home, "project").also { it.mkdirs() }
+        val artifacts = File(project, ".andy/task-dedup").also { it.mkdirs() }
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            installGenericStatusHookScript(artifacts)
+            AndyAgyTitleInstaller.ensureInstalled(home)
+            val script = AndyAgyTitleInstaller.scriptFile(home)
+            val env = mapOf(
+                AndyStatusHookInstaller.TASK_ID_ENV to "task-dedup",
+                AndyStatusHookInstaller.PROJECT_ROOT_ENV to project.absolutePath,
+            )
+
+            repeat(5) {
+                runAgyTitleScript(
+                    script,
+                    project,
+                    stdin = """{"agent_state":"thinking","tool_confirmation_pending":false}""",
+                    env = env,
+                )
+            }
+            val lines = File(artifacts, "status.json").readLines().filter { it.isNotBlank() }
+            assertEquals(1, lines.size, "repeated identical status ticks must be deduplicated; saw $lines")
+        } finally {
+            System.setProperty("user.home", previousHome)
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun antigravityScreenManifestDetectsBlockerEvenWhenOscTitleSaysWorking() {
+        val match = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(
+                screen = "Requesting permission for:\ndo you want to proceed?\n",
+                oscTitle = "agy andy:working",
+            ),
+        )
+        assertEquals(ScreenState.Blocked, match.state)
+        assertTrue(match.visibleBlocker)
+    }
+
+    @Test
+    fun antigravityScreenManifestDetectsInteractiveSelectionBlocker() {
+        val screen = """
+            Select an action:
+            ❯ 1. Accept
+              2. Decline
+            enter to select · esc to cancel · ↑/↓ to navigate
+        """.trimIndent()
+        val match = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(
+                screen = screen,
+                oscTitle = "agy andy:working",
+            ),
+        )
+        assertEquals(ScreenState.Blocked, match.state)
+        assertTrue(match.visibleBlocker)
+    }
+
+    @Test
+    fun antigravityScreenManifestPromptIdleBlockedWhileThinking() {
+        val screen = "Thinking...\nesc to cancel\n> "
+        val match = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(screen = screen),
+        )
+        assertEquals(ScreenState.Working, match.state)
+        assertTrue(match.visibleWorking)
+        assertFalse(match.visibleIdle)
     }
 }
 

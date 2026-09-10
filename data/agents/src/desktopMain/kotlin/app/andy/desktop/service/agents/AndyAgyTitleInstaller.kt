@@ -64,7 +64,8 @@ object AndyAgyTitleInstaller {
 
         HOOK="${'$'}{HOME}/.andy/bin/andy-status-hook.sh"
         if [ -x "${'$'}HOOK" ] && [ -n "${'$'}status" ]; then
-          printf '' | "${'$'}HOOK" "${'$'}status" >/dev/null 2>&1 || true
+          # Status is the argv; pass gate 'title' so title ticks do not clobber Stop hook done.
+          printf '' | "${'$'}HOOK" "${'$'}status" none title >/dev/null 2>&1 || true
         fi
 
         if [ -n "${'$'}marker" ]; then

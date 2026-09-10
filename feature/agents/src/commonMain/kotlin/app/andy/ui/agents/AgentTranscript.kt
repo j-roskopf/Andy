@@ -11,7 +11,6 @@ package app.andy.ui.agents
 import androidx.compose.animation.AnimatedVisibility
 import app.andy.ui.components.Lucide
 import app.andy.ui.components.LucideIcon
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -19,6 +18,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +82,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -221,6 +225,11 @@ fun AgentTranscript(
     awaitingPlanConfirmation: Boolean = false,
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
+    /**
+     * Sticky decision/permission UI pinned under the scrollable transcript (not a list row).
+     * Keeping it out of [LazyColumn] avoids stick-to-bottom re-pin fighting streamed text growth,
+     * which reads as flashing when grill-me / permission choices sit on the live edge.
+     */
     pendingContent: (@Composable () -> Unit)? = null,
     /** When set, the matching [AgentEvent.PermissionRequest] row is omitted (shown via [pendingContent]). */
     activePermissionRequestId: String? = null,
@@ -230,7 +239,7 @@ fun AgentTranscript(
     /** Wall time for the launch prompt bubble when it is synthesized (not from [AgentEvent.UserMessage]). */
     originalPromptAtMillis: Long? = null,
     completedContent: (@Composable () -> Unit)? = null,
-    /** Scrolls with the transcript on the live edge, below pending input and above events. */
+    /** Scrolls with the transcript on the live edge, below events and above the thinking orb. */
     trailingContent: (@Composable () -> Unit)? = null,
     /**
      * False while a completed chat's transcript (and trailing UI) is still loading.
@@ -294,8 +303,9 @@ fun AgentTranscript(
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.PlanUpdate
     }
     val taskId = restoreScrollKey
-    // Freeze restore intent for this visit. A bottom-origin list makes index 0 the live edge;
-    // streamed rows can then grow upward without any imperative per-token scrolling.
+    // Forward layout: oldest at top, live edge at the end. Growing a detached row expands
+    // downward from the top-anchored scroll position, so the text you scrolled to stays put
+    // without any per-token scroll compensation (which previously froze the app).
     val restorePlan = remember(taskId) {
         val saved = taskId?.let { scrollMemory?.get(it) }
         when {
@@ -303,13 +313,16 @@ fun AgentTranscript(
             else -> TranscriptRestorePlan.Exact(saved.index, saved.offset, saved.anchorKey)
         }
     }
-    // Always start at the live edge. Exact restoration happens only after async history is
-    // ready, so a prompt-only loading stub cannot clamp a saved index back to zero.
+    // Stick-to-bottom visits start at 0; we jump to the live edge once items exist.
     val listState = remember(taskId) { LazyListState(0, 0) }
     var stickToBottom by remember(taskId) {
         mutableStateOf(restorePlan is TranscriptRestorePlan.StickToBottom)
     }
     var scrollInitialized by remember(taskId) { mutableStateOf(false) }
+    // Programmatic scrolls set isScrollInProgress; [active] must be snapshot-observable so
+    // user-settle logic can ignore those jumps (plain Boolean is invisible to snapshotFlow).
+    val programmaticScroll = remember(taskId) { ProgrammaticScrollFlag() }
+    val liveEdgeRequester = remember(taskId) { BringIntoViewRequester() }
     // One-shot entrance for the bubble matching [pendingSendEntranceText] after send.
     var sendEntranceKey by remember(taskId) { mutableStateOf<String?>(null) }
     val onPendingSendEntranceConsumedLatest = rememberUpdatedState(onPendingSendEntranceConsumed)
@@ -355,22 +368,54 @@ fun AgentTranscript(
         )
     }
     ReportContentScrollBusy(listState = listState, wheelScrollTicks = wheelScrollTicks)
+    val pendingPinned = pendingContent != null
+    // Height of the sticky footer; reserved as LazyColumn bottom padding so the live edge
+    // sits above the card instead of scrolling under it.
+    var pendingHeightPx by remember(taskId, pendingPinned) { mutableStateOf(0) }
+    val density = LocalDensity.current
+    val pendingHeightDp = with(density) { pendingHeightPx.toDp() }
+    // Content revision used to re-pin while following (stream tokens, new rows, thinking orb).
+    val followEpoch = remember(
+        events,
+        displayItems.size,
+        showThinkingIndicator,
+        pendingPinned,
+        pendingHeightPx,
+        trailingContent != null,
+    ) {
+        val streamLen = events.asReversed()
+            .firstOrNull { it is AgentEvent.AssistantText }
+            ?.let { (it as AgentEvent.AssistantText).text.length }
+            ?: 0
+        val thinkingLen = events.asReversed()
+            .firstOrNull { it is AgentEvent.Thinking }
+            ?.let { (it as AgentEvent.Thinking).text.length }
+            ?: 0
+        listOf(
+            streamLen,
+            thinkingLen,
+            displayItems.size,
+            showThinkingIndicator,
+            pendingPinned,
+            pendingHeightPx,
+            trailingContent != null,
+        )
+    }
     val rowKeys = remember(
         displayItems,
         isActive,
         showThinkingIndicator,
         originalPromptVisible,
-        pendingContent != null,
         trailingContent != null,
         headerContent != null,
     ) {
         buildList {
-            if (pendingContent != null) add("pending-task-input")
-            if (showThinkingIndicator) add("agent-thinking")
-            if (trailingContent != null) add("trailing-content")
-            displayItems.asReversed().forEach { add(transcriptDisplayItemKey(it)) }
-            if (originalPromptVisible) add("original-prompt")
             if (headerContent != null) add("task-header")
+            if (originalPromptVisible) add("original-prompt")
+            displayItems.forEach { add(transcriptDisplayItemKey(it)) }
+            if (trailingContent != null) add("trailing-content")
+            if (showThinkingIndicator) add("agent-thinking")
+            add("live-edge-anchor")
         }
     }
 
@@ -381,8 +426,12 @@ fun AgentTranscript(
         if (scrollInitialized || !eventsReady) return@LaunchedEffect
         when (val plan = restorePlan) {
             TranscriptRestorePlan.StickToBottom -> {
-                // Index zero is bottom in reverseLayout. No settling loop or post-layout nudge.
                 stickToBottom = true
+                snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+                listState.runProgrammaticScroll(programmaticScroll) {
+                    liveEdgeRequester.bringIntoView()
+                    scrollToLiveEdge()
+                }
                 scrollInitialized = true
             }
             is TranscriptRestorePlan.Exact -> {
@@ -391,18 +440,20 @@ fun AgentTranscript(
                 val anchoredIndex = plan.anchorKey
                     ?.let(rowKeys::indexOf)
                     ?.takeIf { it >= 0 }
-                listState.scrollToItem(
-                    index = (anchoredIndex ?: plan.index).coerceIn(0, itemCount - 1),
-                    scrollOffset = plan.offset,
-                )
+                listState.runProgrammaticScroll(programmaticScroll) {
+                    scrollToItem(
+                        index = (anchoredIndex ?: plan.index).coerceIn(0, itemCount - 1),
+                        scrollOffset = plan.offset,
+                    )
+                }
                 stickToBottom = false
                 scrollInitialized = true
             }
         }
     }
 
-    // Persist each conversation independently. Streaming does not touch these coordinates
-    // when detached because its changing rows live below the visible reverse-layout anchor.
+    // Persist each conversation independently. While detached, streaming growth is below the
+    // forward-layout anchor so these coordinates stay stable without compensation.
     LaunchedEffect(taskId, listState, scrollInitialized) {
         if (!scrollInitialized) return@LaunchedEffect
         val id = taskId ?: return@LaunchedEffect
@@ -432,48 +483,122 @@ fun AgentTranscript(
         }
     }
 
-    // Detect non-pointer scrolling (keyboard, accessibility, scrollbar). Position changes do
-    // not drive auto-scroll; they only re-arm following once index zero is reached exactly.
+    // User-driven scroll settle only. Programmatic live-edge jumps must not clear follow —
+    // that was leaving stickToBottom false right after "follow live" when layout was one
+    // frame behind the jump.
     LaunchedEffect(taskId, listState, scrollInitialized) {
         if (!scrollInitialized) return@LaunchedEffect
+        // Track a scroll "session" from isScrollInProgress true -> false. Only a session that
+        // never touched the programmatic flag is a real user settle; programmatic jumps must not
+        // re-evaluate the live edge (the flag clears one emission after the scroll ends, which
+        // previously let a lagging layout clear follow right after "jump to latest").
+        var inSession = false
+        var sessionProgrammatic = false
         snapshotFlow {
-            Triple(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset,
-                listState.isScrollInProgress,
-            )
-        }.distinctUntilChanged().collect { (index, offset, inProgress) ->
-            if (transcriptIsAtBottom(index, offset)) {
-                stickToBottom = true
-            } else if (inProgress) {
-                stickToBottom = false
+            listState.isScrollInProgress to programmaticScroll.active
+        }.distinctUntilChanged().collect { (inProgress, programmatic) ->
+            if (inProgress) {
+                if (!inSession) {
+                    inSession = true
+                    sessionProgrammatic = programmatic
+                } else if (programmatic) {
+                    sessionProgrammatic = true
+                }
+                return@collect
+            }
+            if (!inSession) return@collect
+            inSession = false
+            if (sessionProgrammatic) {
+                sessionProgrammatic = false
+                return@collect
+            }
+            stickToBottom = listState.isAtLiveEdge()
+        }
+    }
+    // Wheel settle: only re-arm follow at the live edge. Clearing happens on scroll-away
+    // (dy < 0) so chasing the stream downward does not keep clearing stick every tick.
+    LaunchedEffect(taskId, listState, scrollInitialized, wheelScrollTicks) {
+        if (!scrollInitialized) return@LaunchedEffect
+        wheelScrollTicks.collectLatest {
+            // Let the scroll settle first (frames 1-2 often catch it mid-flight and would
+            // misread the position), then keep checking across more frames so a live edge that
+            // is only reached late is not missed with no retry.
+            withFrameMillis { }
+            withFrameMillis { }
+            var rearmed = false
+            repeat(3) {
+                if (!rearmed && listState.isAtLiveEdge()) {
+                    stickToBottom = true
+                    rearmed = true
+                }
+                withFrameMillis { }
             }
         }
     }
-    LaunchedEffect(taskId, listState, scrollInitialized, wheelScrollTicks) {
-        if (!scrollInitialized) return@LaunchedEffect
-        // collectLatest matches the old LaunchedEffect(userScrollGeneration) restart: a new
-        // tick cancels the in-flight settle instead of queueing two frames per event.
-        wheelScrollTicks.collectLatest {
-            // Let wheel/trackpad input settle. A blocked downward tick at the live edge has no
-            // position change, so explicitly re-arm in that case.
-            withFrameMillis { }
-            withFrameMillis { }
-            if (transcriptIsAtBottom(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)) {
-                stickToBottom = true
+
+    // While following, re-pin on every content revision. Bring the end sentinel into view,
+    // then drain any remaining forward scroll after layout measures the new text.
+    LaunchedEffect(stickToBottom, followEpoch, scrollInitialized, taskId) {
+        if (!stickToBottom || !scrollInitialized) return@LaunchedEffect
+        repeat(3) {
+            listState.runProgrammaticScroll(programmaticScroll) {
+                liveEdgeRequester.bringIntoView()
+                scrollToLiveEdge()
             }
+            withFrameMillis { }
+            if (!stickToBottom) return@LaunchedEffect
+            if (!listState.canScrollForward && listState.isAtLiveEdge()) return@LaunchedEffect
+        }
+    }
+
+    // Pixel-chase: when the visible live edge grows while sticking, scroll by that delta.
+    // Handles the frame where stream text remeasures before canScrollForward flips.
+    LaunchedEffect(taskId, listState, scrollInitialized) {
+        if (!scrollInitialized) return@LaunchedEffect
+        var prevMaxEnd = 0
+        var armed = false
+        snapshotFlow {
+            val maxEnd = listState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.offset + it.size } ?: 0
+            stickToBottom to maxEnd
+        }.distinctUntilChanged().collect { (sticking, maxEnd) ->
+            if (!sticking) {
+                armed = false
+                return@collect
+            }
+            if (!armed) {
+                prevMaxEnd = maxEnd
+                armed = true
+                return@collect
+            }
+            val delta = maxEnd - prevMaxEnd
+            prevMaxEnd = maxEnd
+            if (delta <= 0) return@collect
+            if (programmaticScroll.active) return@collect
+            listState.runProgrammaticScroll(programmaticScroll) {
+                scrollBy(delta.toFloat())
+                if (canScrollForward) scrollToLiveEdge()
+            }
+            prevMaxEnd = listState.layoutInfo.visibleItemsInfo.maxOfOrNull { it.offset + it.size } ?: 0
         }
     }
 
     fun jumpToLatest() {
         stickToBottom = true
-        scope.launch { listState.scrollToItem(0) }
+        scope.launch {
+            listState.runProgrammaticScroll(programmaticScroll) {
+                liveEdgeRequester.bringIntoView()
+                scrollToLiveEdge()
+            }
+        }
     }
 
     LaunchedEffect(scrollToLatestRequest, scrollInitialized) {
         if (scrollToLatestRequest == 0 || !scrollInitialized) return@LaunchedEffect
         stickToBottom = true
-        listState.scrollToItem(0)
+        listState.runProgrammaticScroll(programmaticScroll) {
+            liveEdgeRequester.bringIntoView()
+            scrollToLiveEdge()
+        }
     }
 
     Box(modifier.fillMaxSize()) {
@@ -484,7 +609,7 @@ fun AgentTranscript(
         } else {
             LazyColumn(
                 state = listState,
-                reverseLayout = true,
+                reverseLayout = false,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .widthIn(max = AndyLayout.ChatContentMaxWidth)
@@ -498,42 +623,95 @@ fun AgentTranscript(
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
                                 if (event.type == PointerEventType.Scroll) {
-                                    // Detach before the wheel delta is applied. New streaming
-                                    // content then grows below this viewport without moving it.
-                                    stickToBottom = false
+                                    // Only detach when scrolling away from the live edge.
+                                    // Detaching on scroll-toward-bottom made "scroll down to
+                                    // catch up" lose follow on every tick while tokens arrived.
+                                    val dy = event.changes.sumOf { it.scrollDelta.y.toDouble() }
+                                    if (dy < 0.0) {
+                                        stickToBottom = false
+                                    }
                                     wheelScrollTicks.tryEmit(Unit)
                                 }
                             }
                         }
                     },
-                contentPadding = PaddingValues(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 14.dp),
+                contentPadding = PaddingValues(
+                    start = 18.dp,
+                    top = 16.dp,
+                    end = 18.dp,
+                    // When the sticky decision card is up, reserve its measured height (includes
+                    // its own bottom inset). Otherwise keep the usual list end padding.
+                    bottom = if (pendingPinned) pendingHeightDp.coerceAtLeast(14.dp) else 14.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                // reverseLayout lays index zero at the visual bottom, so declare rows newest
-                // first while preserving the transcript's chronological reading order.
-                if (pendingContent != null) {
-                    item(key = "pending-task-input", contentType = "request") { pendingContent() }
+                // Chronological: oldest at top, live edge (thinking) at the bottom.
+                // Decision/permission UI is pinned outside this list — see overlay below.
+                if (headerContent != null) {
+                    item(key = "task-header", contentType = "header") { headerContent() }
                 }
-                if (showThinkingIndicator) {
-                    item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
-                }
-                if (trailingContent != null) {
-                    item(key = "trailing-content", contentType = "trailing") { trailingContent() }
+                if (originalPromptVisible) {
+                    item(key = "original-prompt", contentType = "message") {
+                        SelectionContainer {
+                            val originalTimestamp = originalPromptAtMillis
+                                ?.takeIf { it > 0L }
+                                ?.let(::formatDisplayTime)
+                            val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
+                            ChatMessageBubble(
+                                sender = ChatBubbleSender.User,
+                                testTag = "user-message-bubble",
+                                metadata = if (originalTimestamp != null || originalCopyText != null) {
+                                    {
+                                        ChatMessageMetadata(
+                                            timestamp = originalTimestamp,
+                                            footer = originalCopyText?.let { prompt ->
+                                                { ChatMessageCopyAction(prompt) }
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                        if (!isSkillOnlyMessage(prompt, originalSkills)) {
+                                            ChatUserText(prompt)
+                                        }
+                                    }
+                                    ChatAttachedImages(originalImagePaths)
+                                    if (originalSkills.isNotEmpty()) {
+                                        DisableSelection {
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                originalSkills.forEach { skill ->
+                                                    Text(
+                                                        "/${skill.name}",
+                                                        color = Cyan,
+                                                        fontFamily = MonoFont,
+                                                        fontSize = 11.sp,
+                                                        textDecoration = TextDecoration.Underline,
+                                                        modifier = Modifier.clickable { onSkillOpen(skill) },
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 items(
                     count = displayItems.size,
-                    key = { reversedIndex ->
-                        transcriptDisplayItemKey(displayItems[displayItems.lastIndex - reversedIndex])
-                    },
-                    contentType = { reversedIndex ->
-                        when (displayItems[displayItems.lastIndex - reversedIndex]) {
+                    key = { index -> transcriptDisplayItemKey(displayItems[index]) },
+                    contentType = { index ->
+                        when (displayItems[index]) {
                             is TranscriptDisplayItem.Event -> "event"
                             is TranscriptDisplayItem.ToolCalls -> "tool-group"
                             is TranscriptDisplayItem.ChildSpawns -> "child-spawns"
                         }
                     },
-                ) { reversedIndex ->
-                    val itemIndex = displayItems.lastIndex - reversedIndex
+                ) { itemIndex ->
                     val item = displayItems[itemIndex]
                     val itemKey = transcriptDisplayItemKey(item)
                     val isUserMessage = item is TranscriptDisplayItem.Event &&
@@ -562,6 +740,9 @@ fun AgentTranscript(
                                 event = item.event,
                                 eventKey = transcriptEventKey(item.index, item.event),
                                 bubbleGroup = bubbleGroup,
+                                streamPlainText = isActive &&
+                                    item.event is AgentEvent.AssistantText &&
+                                    (item.event as AgentEvent.AssistantText).isStreamDelta,
                                 toolExpanded = transcriptActivityExpanded(
                                     transcriptEventKey(item.index, item.event),
                                     expandedToolKeys,
@@ -652,69 +833,46 @@ fun AgentTranscript(
                         }
                     }
                 }
-                if (originalPromptVisible) {
-                    item(key = "original-prompt", contentType = "message") {
-                        SelectionContainer {
-                            val originalTimestamp = originalPromptAtMillis
-                                ?.takeIf { it > 0L }
-                                ?.let(::formatDisplayTime)
-                            val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
-                            ChatMessageBubble(
-                                sender = ChatBubbleSender.User,
-                                testTag = "user-message-bubble",
-                                metadata = if (originalTimestamp != null || originalCopyText != null) {
-                                    {
-                                        ChatMessageMetadata(
-                                            timestamp = originalTimestamp,
-                                            footer = originalCopyText?.let { prompt ->
-                                                { ChatMessageCopyAction(prompt) }
-                                            },
-                                        )
-                                    }
-                                } else {
-                                    null
-                                },
-                            ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                        if (!isSkillOnlyMessage(prompt, originalSkills)) {
-                                            ChatUserText(prompt)
-                                        }
-                                    }
-                                    ChatAttachedImages(originalImagePaths)
-                                    if (originalSkills.isNotEmpty()) {
-                                        DisableSelection {
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                originalSkills.forEach { skill ->
-                                                    Text(
-                                                        "/${skill.name}",
-                                                        color = Cyan,
-                                                        fontFamily = MonoFont,
-                                                        fontSize = 11.sp,
-                                                        textDecoration = TextDecoration.Underline,
-                                                        modifier = Modifier.clickable { onSkillOpen(skill) },
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (trailingContent != null) {
+                    item(key = "trailing-content", contentType = "trailing") { trailingContent() }
                 }
-                if (headerContent != null) {
-                    item(key = "task-header", contentType = "header") { headerContent() }
+                if (showThinkingIndicator) {
+                    item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
+                }
+                // Zero-height isn't reliable for bring-into-view; 1dp sentinel marks the true end.
+                item(key = "live-edge-anchor", contentType = "anchor") {
+                    Spacer(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .bringIntoViewRequester(liveEdgeRequester),
+                    )
+                }
+            }
+            if (pendingContent != null) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .widthIn(max = AndyLayout.ChatContentMaxWidth)
+                        .fillMaxWidth()
+                        .background(AndyColors.ContentBg)
+                        .onSizeChanged { size -> pendingHeightPx = size.height }
+                        .padding(start = 18.dp, end = 26.dp, top = 8.dp, bottom = 14.dp)
+                        .testTag("pending-task-input"),
+                ) {
+                    pendingContent()
                 }
             }
             PlatformLazyListScrollbar(
                 listState = listState,
-                reverseLayout = true,
+                reverseLayout = false,
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
             )
             AnimatedVisibility(
                 visible = scrollInitialized && !stickToBottom,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 14.dp + if (pendingPinned) pendingHeightDp else 0.dp),
             ) {
                 Text(
                     if (isActive) "↓ follow live" else "↓ latest",
@@ -817,15 +975,101 @@ internal fun userMessageDisplayText(event: AgentEvent.UserMessage): String {
     return if (isSkillOnlyMessage(stripped, event.skills)) "" else stripped
 }
 
-/** Bottom is an invariant instead of a layout estimate in the reverse transcript. */
+/** True when the transcript viewport is pinned to the live edge (end of the forward list). */
+fun transcriptIsAtBottom(listState: LazyListState, thresholdPx: Int = 4): Boolean =
+    listState.isAtLiveEdge(thresholdPx)
+
+/**
+ * Legacy reverse-layout helper kept for call sites that only have index/offset.
+ * Prefer [transcriptIsAtBottom] / [LazyListState.isAtLiveEdge] with a live [LazyListState].
+ */
 fun transcriptIsAtBottom(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int): Boolean =
     firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset <= 1
+
+/** Marks scrollToItem/scrollBy calls that must not be treated as user-driven follow re-arm. */
+private class ProgrammaticScrollFlag {
+    var active by mutableStateOf(false)
+}
+
+/**
+ * Run a list scroll while [flag] is armed, and keep it armed until [LazyListState.isScrollInProgress]
+ * clears. Clearing earlier lets the user-scroll effect treat the jump as a detach.
+ */
+private suspend fun LazyListState.runProgrammaticScroll(
+    flag: ProgrammaticScrollFlag,
+    block: suspend LazyListState.() -> Unit,
+) {
+    flag.active = true
+    try {
+        block()
+        if (isScrollInProgress) {
+            snapshotFlow { isScrollInProgress }.first { !it }
+        }
+    } finally {
+        flag.active = false
+    }
+}
+
+/** Forward-list live edge: nothing left to scroll toward newer content. */
+internal fun LazyListState.isAtLiveEdge(thresholdPx: Int = 4): Boolean {
+    val info = layoutInfo
+    if (info.totalItemsCount == 0) return true
+    if (!canScrollForward) return true
+    // Near-end tolerance: last row is on screen and nearly flush with the viewport end.
+    val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return false
+    if (lastVisible.index < info.totalItemsCount - 1) return false
+    val itemEnd = lastVisible.offset + lastVisible.size
+    return itemEnd <= info.viewportEndOffset + thresholdPx
+}
+
+/**
+ * Bring the end of the list flush with the viewport bottom.
+ *
+ * Never use [LazyListState.scrollToItem] on the last index (or last-1): with a short
+ * trailing "Working" row that parks the live edge at the TOP of the viewport, and every
+ * follow nudge while thinking is visible jumps the streaming message back to its top —
+ * racing new tokens so the user is never at the bottom.
+ */
+internal suspend fun LazyListState.scrollToLiveEdge() {
+    if (layoutInfo.totalItemsCount <= 0) return
+    var guard = 0
+    while (guard++ < 128) {
+        val info = layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull()
+        val overflow = if (last != null) {
+            (last.offset + last.size) - info.viewportEndOffset
+        } else {
+            0
+        }
+        when {
+            canScrollForward -> {
+                val beforeIndex = firstVisibleItemIndex
+                val beforeOffset = firstVisibleItemScrollOffset
+                val consumed = scrollBy(50_000f)
+                if (consumed == 0f &&
+                    beforeIndex == firstVisibleItemIndex &&
+                    beforeOffset == firstVisibleItemScrollOffset
+                ) {
+                    break
+                }
+            }
+            overflow > 1 -> {
+                val consumed = scrollBy(overflow.toFloat())
+                if (consumed == 0f) break
+            }
+            last != null && last.index < info.totalItemsCount - 1 -> {
+                // Last composed row isn't the list end — jump forward and keep draining.
+                scrollToItem((last.index + 1).coerceAtMost(info.totalItemsCount - 1), 0)
+            }
+            else -> break
+        }
+    }
+}
 
 private fun LazyListState.firstVisibleAnchorKey(): String? = layoutInfo.visibleItemsInfo
     .firstOrNull { it.index == firstVisibleItemIndex }
     ?.key
     ?.toString()
-
 
 /** Whether this event renders as a user/assistant chat bubble in the transcript. */
 fun AgentEvent.chatBubbleSenderOrNull(): ChatBubbleSender? = when (this) {
@@ -886,6 +1130,12 @@ private fun TranscriptEvent(
     agentLabel: String,
     completedContent: (@Composable () -> Unit)?,
     bubbleGroup: ChatBubbleGroup = ChatBubbleGroup.Single,
+    /**
+     * True only for the in-progress live assistant bubble. ACP often leaves
+     * [AgentEvent.AssistantText.isStreamDelta] set after the turn ends; finished rows must still
+     * render through [ChatMarkdown].
+     */
+    streamPlainText: Boolean = false,
     awaitingPlanConfirmation: Boolean = false,
     activePermissionRequestId: String? = null,
     onToolExpandedChange: (String, Boolean) -> Unit,
@@ -911,7 +1161,19 @@ private fun TranscriptEvent(
                 copyText = visibleText,
                 atMillis = event.atMillis,
             ) {
-                ChatMarkdown(visibleText, lineHeight = 21.sp)
+                // While tokens are still arriving, render plain text. Full GFM reparse on every
+                // delta thrash-measures the row and makes detached scroll compensation flicker.
+                if (streamPlainText) {
+                    Text(
+                        text = visibleText,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                        fontFamily = DisplayFont,
+                    )
+                } else {
+                    ChatMarkdown(visibleText, lineHeight = 21.sp)
+                }
             }
         }
         is AgentEvent.Thinking -> ThinkingStep(
@@ -2261,12 +2523,9 @@ private fun TranscriptExpandableRow(
     headlineContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit = {},
 ) {
-    val columnModifier = if (animateExpansion) {
-        modifier.fillMaxWidth().animateContentSize()
-    } else {
-        modifier.fillMaxWidth()
-    }
-    Column(columnModifier) {
+    // Animate only the expand/collapse transition. animateContentSize on the whole column would
+    // also tween every streamed token while the row is open, which fights LazyColumn anchors.
+    Column(modifier.fillMaxWidth()) {
         DisableSelection {
             Row(Modifier.fillMaxWidth().padding(start = indent)) {
                 TranscriptActivityLine(

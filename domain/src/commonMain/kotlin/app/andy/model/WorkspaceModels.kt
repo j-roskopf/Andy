@@ -156,6 +156,16 @@ data class WorkspaceState(
     val agentIconBadgeEnabled: Boolean = true,
     /** Encoded [app.andy.ui.components.KeyCombo] that toggles voice dictation from any chat composer. */
     val voiceDictationShortcut: String? = null,
+    /**
+     * Encoded global hotkey that opens the voice-new-thread overlay (macOS Carbon).
+     * Separate from [voiceDictationShortcut]; starts null — no default combo ships.
+     */
+    val voiceNewThreadShortcut: String? = null,
+    /** Prefill for the voice-new-thread overlay / Android confirm screen. */
+    val voiceDefaultAgent: String? = null,
+    val voiceDefaultModel: String? = null,
+    val voiceDefaultAutonomy: String = "Standard",
+    val voiceDefaultProjectId: String? = null,
     /** When false (default), quitting Andy kills all `tmux -L andy` agent sessions. */
     val keepAgentSessionsOnShutdown: Boolean = false,
     val agentNotificationTiming: AgentNotificationTiming = AgentNotificationTiming.BackgroundOnly,

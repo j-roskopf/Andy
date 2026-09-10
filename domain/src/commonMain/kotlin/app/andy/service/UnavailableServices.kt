@@ -313,6 +313,38 @@ object UnavailableActionRunService : ActionRunService {
     override fun clear(runId: String) = Unit
 }
 
+object UnavailablePluginService : PluginService {
+    override val plugins = MutableStateFlow(emptyList<InstalledPluginInfo>())
+    override val commandLogs = MutableStateFlow(emptyList<PluginCommandLog>())
+    override val openPanes = MutableStateFlow(emptyList<PluginPaneSession>())
+    override val paneOpenRequests = emptyFlow<PluginPaneOpenRequest>()
+    override suspend fun refresh() = Unit
+    override suspend fun link(path: String, enabled: Boolean): InstalledPluginInfo =
+        error("Plugins require Andy Desktop with andyd running.")
+    override suspend fun unlink(pluginId: String) = Unit
+    override suspend fun installGithub(spec: String, ref: String?, yes: Boolean): InstalledPluginInfo =
+        error("Plugins require Andy Desktop with andyd running.")
+    override suspend fun uninstall(pluginIdOrSpec: String) = Unit
+    override suspend fun setEnabled(pluginId: String, enabled: Boolean) = Unit
+    override fun configDir(pluginId: String) = ""
+    override suspend fun listActions(pluginId: String?) = emptyList<Pair<InstalledPluginInfo, PluginManifestAction>>()
+    override suspend fun invokeAction(
+        actionId: String,
+        pluginId: String?,
+        context: PluginInvocationContext,
+    ): PluginCommandLog = error("Plugins require Andy Desktop with andyd running.")
+    override suspend fun openPane(
+        pluginId: String,
+        entrypoint: String,
+        placement: PluginPanePlacement?,
+        context: PluginInvocationContext,
+    ): PluginPaneSession = error("Plugins require Andy Desktop with andyd running.")
+    override suspend fun focusPane(paneId: String): PluginPaneSession? = null
+    override suspend fun closePane(paneId: String) = Unit
+    override fun emitEvent(event: String, data: Map<String, String>, context: PluginInvocationContext) = Unit
+    override fun runStartupHooks() = Unit
+}
+
 object UnavailableAgentRunService : AgentRunService {
     override val tasks = MutableStateFlow(emptyList<AgentTask>())
     override val cliStatuses = MutableStateFlow(emptyList<AgentCliStatus>())

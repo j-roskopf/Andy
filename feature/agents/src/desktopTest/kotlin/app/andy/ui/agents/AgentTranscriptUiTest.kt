@@ -112,7 +112,8 @@ class AgentTranscriptUiTest {
             val restored = assertNotNull(memory.get("first"))
             assertEquals(saved.anchorKey, restored.anchorKey)
             assertEquals(saved.offset, restored.offset)
-            assertEquals(saved.index + 1, restored.index)
+            // Forward layout appends at the end, so earlier row indices stay stable.
+            assertEquals(saved.index, restored.index)
             assertFalse(restored.stickToBottom)
         }
 
@@ -153,8 +154,6 @@ class AgentTranscriptUiTest {
             waitForIdle()
             val pinned = assertNotNull(memory.get("streaming"))
             assertEquals(true, pinned.stickToBottom)
-            assertEquals(0, pinned.index)
-            assertEquals(0, pinned.offset)
 
             onNodeWithTag("transcript-list").performMouseInput {
                 moveTo(center)
@@ -175,17 +174,30 @@ class AgentTranscriptUiTest {
                 )
             }
             waitForIdle()
-            assertEquals(detached, memory.get("streaming"))
+            // Growth while detached must not re-arm follow.
+            val afterStream = assertNotNull(memory.get("streaming"))
+            assertFalse(afterStream.stickToBottom)
+            assertEquals(detached.anchorKey, afterStream.anchorKey)
 
             onNodeWithTag("transcript-list").performMouseInput {
                 moveTo(center)
-                scroll(100f)
+                scroll(1_000_000f)
             }
             waitForIdle()
-            val relocked = assertNotNull(memory.get("streaming"))
-            assertEquals(true, relocked.stickToBottom)
-            assertEquals(0, relocked.index)
-            assertEquals(0, relocked.offset)
+            // Lazy composition may not reach the live edge after a single jump; keep nudging so
+            // the final row is composed, then wait for the wheel/scroll settle to re-arm follow.
+            repeat(20) {
+                if (memory.get("streaming")?.stickToBottom == true) return@repeat
+                onNodeWithTag("transcript-list").performMouseInput {
+                    moveTo(center)
+                    scroll(200_000f)
+                }
+                waitForIdle()
+            }
+            waitUntil(timeoutMillis = 5_000) {
+                memory.get("streaming")?.stickToBottom == true
+            }
+            assertEquals(true, assertNotNull(memory.get("streaming")).stickToBottom)
 
             onNodeWithTag("transcript-list").performMouseInput {
                 moveTo(center)
@@ -196,10 +208,226 @@ class AgentTranscriptUiTest {
 
             onNodeWithText("↓ latest").performClick()
             waitForIdle()
-            val followed = assertNotNull(memory.get("streaming"))
-            assertEquals(true, followed.stickToBottom)
-            assertEquals(0, followed.index)
-            assertEquals(0, followed.offset)
+            assertEquals(true, assertNotNull(memory.get("streaming")).stickToBottom)
+
+            // More stream tokens while following must keep stick armed and newest text visible.
+            runOnUiThread {
+                events = events.dropLast(1) + AgentEvent.AssistantText(
+                    atMillis = 41,
+                    text = buildString {
+                        appendLine("stream start")
+                        repeat(200) { appendLine("post-follow streamed line $it") }
+                    },
+                    isStreamDelta = true,
+                )
+            }
+            waitForIdle()
+            waitUntil(timeoutMillis = 5_000) {
+                onAllNodesWithText("post-follow streamed line 199", substring = true)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+            assertEquals(true, assertNotNull(memory.get("streaming")).stickToBottom)
+            onNodeWithText("post-follow streamed line 199", substring = true).assertIsDisplayed()
+        }
+
+    @Test
+    fun followLiveWithThinkingIndicatorKeepsNewestTokensVisible() =
+        runTranscriptUiTest {
+            val memory = TranscriptScrollMemory()
+            var events by mutableStateOf(
+                listOf(
+                    AgentEvent.UserMessage(atMillis = 1, text = "write a long answer"),
+                    AgentEvent.AssistantText(
+                        atMillis = 2,
+                        text = buildString {
+                            repeat(60) { appendLine("early body line $it") }
+                        },
+                        isStreamDelta = true,
+                    ),
+                ),
+            )
+
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = events,
+                        isActive = true,
+                        showThinkingIndicator = true,
+                        restoreScrollKey = "follow-thinking",
+                        scrollMemory = memory,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithTag("transcript-list").performMouseInput {
+                moveTo(center)
+                repeat(20) { scroll(-80f) }
+            }
+            waitForIdle()
+            assertFalse(assertNotNull(memory.get("follow-thinking")).stickToBottom)
+
+            onNodeWithText("↓ follow live").performClick()
+            waitForIdle()
+            repeat(3) {
+                mainClock.advanceTimeByFrame()
+                waitForIdle()
+            }
+            assertEquals(true, assertNotNull(memory.get("follow-thinking")).stickToBottom)
+
+            runOnUiThread {
+                events = events.dropLast(1) + AgentEvent.AssistantText(
+                    atMillis = 2,
+                    text = buildString {
+                        repeat(60) { appendLine("early body line $it") }
+                        repeat(120) { appendLine("live token $it") }
+                    },
+                    isStreamDelta = true,
+                )
+            }
+            waitForIdle()
+            repeat(5) {
+                mainClock.advanceTimeByFrame()
+                waitForIdle()
+            }
+            assertEquals(true, assertNotNull(memory.get("follow-thinking")).stickToBottom)
+            onNodeWithText("live token 119", substring = true).assertIsDisplayed()
+        }
+
+    @Test
+    fun growingStreamWhileDetachedKeepsScrolledTextPinned() =
+        runTranscriptUiTest {
+            val memory = TranscriptScrollMemory()
+            val startMarker = "STREAM_START_MARKER_UNIQUE"
+            var events by mutableStateOf(
+                listOf(
+                    AgentEvent.UserMessage(atMillis = 1, text = "write a long answer"),
+                    AgentEvent.AssistantText(
+                        atMillis = 2,
+                        text = buildString {
+                            appendLine(startMarker)
+                            repeat(80) { appendLine("early body line $it with enough width to wrap in the chat column") }
+                        },
+                        isStreamDelta = true,
+                    ),
+                ),
+            )
+
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = events,
+                        isActive = true,
+                        showThinkingIndicator = true,
+                        restoreScrollKey = "growing-message",
+                        scrollMemory = memory,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            repeat(30) {
+                onNodeWithTag("transcript-list").performMouseInput {
+                    moveTo(center)
+                    scroll(-80f)
+                }
+                waitForIdle()
+            }
+            onNodeWithText(startMarker, substring = true).assertIsDisplayed()
+            val detached = assertNotNull(memory.get("growing-message"))
+            assertFalse(detached.stickToBottom)
+
+            repeat(10) { chunk ->
+                runOnUiThread {
+                    events = events.dropLast(1) + AgentEvent.AssistantText(
+                        atMillis = 2,
+                        text = buildString {
+                            appendLine(startMarker)
+                            repeat(80) {
+                                appendLine("early body line $it with enough width to wrap in the chat column")
+                            }
+                            repeat((chunk + 1) * 20) {
+                                appendLine("late streamed continuation $it that must not yank the viewport")
+                            }
+                        },
+                        isStreamDelta = true,
+                    )
+                }
+                waitForIdle()
+            }
+            waitUntil(timeoutMillis = 5_000) {
+                onAllNodesWithText("late streamed continuation 199", substring = true)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
+            waitForIdle()
+
+            val afterStream = assertNotNull(memory.get("growing-message"))
+            assertFalse(afterStream.stickToBottom)
+            assertEquals(detached.anchorKey, afterStream.anchorKey)
+            // Forward layout grows the streaming row downward from the top anchor — the start
+            // of the message you scrolled to must remain on screen without compensation loops.
+            onNodeWithText(startMarker, substring = true).assertIsDisplayed()
+        }
+
+    @Test
+    fun contentDrivenJumpToLiveEdgeDoesNotRearmFollowWhileDetached() =
+        runTranscriptUiTest {
+            val memory = TranscriptScrollMemory()
+            var events by mutableStateOf(
+                (0..40).map { index ->
+                    AgentEvent.UserMessage(atMillis = index.toLong(), text = "history row $index")
+                } + AgentEvent.AssistantText(
+                    atMillis = 41,
+                    text = buildString {
+                        appendLine("stream start")
+                        repeat(40) { appendLine("body line $it") }
+                    },
+                    isStreamDelta = true,
+                ),
+            )
+
+            setContent {
+                AndyTheme {
+                    AgentTranscript(
+                        events = events,
+                        isActive = true,
+                        restoreScrollKey = "no-rearm",
+                        scrollMemory = memory,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            waitForIdle()
+
+            onNodeWithTag("transcript-list").performMouseInput {
+                moveTo(center)
+                scroll(-20f)
+            }
+            waitForIdle()
+            val detached = assertNotNull(memory.get("no-rearm"))
+            assertFalse(detached.stickToBottom)
+
+            // Grow the live message a lot; follow must stay off even if layout fidgets.
+            repeat(8) { step ->
+                runOnUiThread {
+                    events = events.dropLast(1) + AgentEvent.AssistantText(
+                        atMillis = 41,
+                        text = buildString {
+                            appendLine("stream start")
+                            repeat(40 + step * 30) { appendLine("body line $it") }
+                        },
+                        isStreamDelta = true,
+                    )
+                }
+                waitForIdle()
+            }
+
+            val after = assertNotNull(memory.get("no-rearm"))
+            assertFalse(after.stickToBottom)
         }
 
     @Test
@@ -242,8 +470,6 @@ class AgentTranscriptUiTest {
 
             val restored = assertNotNull(memory.get("follow-up"))
             assertEquals(true, restored.stickToBottom)
-            assertEquals(0, restored.index)
-            assertEquals(0, restored.offset)
             onNodeWithTag("transcript-row-UserMessage-41-41").assertIsDisplayed()
         }
 
@@ -325,11 +551,17 @@ class AgentTranscriptUiTest {
             }
             waitForIdle()
 
-            onAllNodesWithText("println(\"new output\")", substring = true)
-                .fetchSemanticsNodes()
-                .let { assertTrue(it.isNotEmpty(), "diff body was not rendered") }
+            waitUntil(timeoutMillis = 5_000) {
+                onAllNodesWithText("println(\"new output\")", substring = true)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
             assertTrue(onAllNodesWithText("\"stdout\"", substring = true).fetchSemanticsNodes().isEmpty())
-            onNodeWithText("warning before patch", substring = true).assertExists()
+            waitUntil(timeoutMillis = 5_000) {
+                onAllNodesWithText("warning before patch", substring = true)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
+            }
             onNodeWithText("warning after patch", substring = true).assertExists()
             onNodeWithText("formatter warning", substring = true).assertExists()
             onNodeWithText("exitCode:", substring = true).assertExists()
@@ -343,7 +575,7 @@ class AgentTranscriptUiTest {
         }
 
     @Test
-    fun pendingInputRendersOnLiveEdge() =
+    fun pendingInputRendersPinnedBelowTranscript() =
         runTranscriptUiTest {
             setContent {
                 AndyTheme {
@@ -364,6 +596,7 @@ class AgentTranscriptUiTest {
                 }
             }
             waitForIdle()
+            onNodeWithTag("pending-task-input").assertIsDisplayed()
             onNodeWithTag("pending-input").assertIsDisplayed()
         }
 

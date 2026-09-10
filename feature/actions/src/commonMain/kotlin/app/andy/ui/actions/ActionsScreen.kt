@@ -236,6 +236,22 @@ private fun ProjectCockpit(
                 ?: ProjectCanvas.Chat,
         )
     }
+    LaunchedEffect(canvas, selectedProjectId) {
+        val projectId = selectedProjectId ?: return@LaunchedEffect
+        services.plugins.emitEvent(
+            event = "tab.focused",
+            data = mapOf(
+                "tab_id" to canvas.name.lowercase(),
+                "tab_label" to canvas.label,
+                "workspace_id" to projectId,
+            ),
+            context = app.andy.model.PluginInvocationContext(
+                workspaceId = projectId,
+                tabId = canvas.name.lowercase(),
+                tabLabel = canvas.label,
+            ),
+        )
+    }
     var selectedArtifactId by remember { mutableStateOf<String?>(null) }
     var commandPaletteOpen by remember { mutableStateOf(false) }
     var editingProject by remember { mutableStateOf<EditingProject?>(null) }
@@ -946,21 +962,76 @@ private fun ProjectCockpit(
                                 selectedTaskId = null
                             }
                             onConfigChange(config.copy(projects = config.projects.filterNot { it.id == project.id }))
+                            services.plugins.emitEvent(
+                                event = "workspace.closed",
+                                data = mapOf(
+                                    "workspace_id" to project.id,
+                                    "workspace_label" to project.name,
+                                ),
+                                context = app.andy.model.PluginInvocationContext(
+                                    workspaceId = project.id,
+                                    workspaceLabel = project.name,
+                                    workspaceCwd = project.contextDir,
+                                ),
+                            )
                         }
                     }
                 }
             },
         ) { updated ->
+            val previous = edit.project
             editingProject = null
             onConfigChange(
                 config.copy(
-                    projects = if (edit.project == null) {
+                    projects = if (previous == null) {
                         config.projects + updated
                     } else {
                         config.projects.map { if (it.id == updated.id) updated else it }
                     },
                 ),
             )
+            val ctx = app.andy.model.PluginInvocationContext(
+                workspaceId = updated.id,
+                workspaceLabel = updated.name,
+                workspaceCwd = updated.contextDir,
+            )
+            when {
+                previous == null -> services.plugins.emitEvent(
+                    event = "workspace.created",
+                    data = mapOf(
+                        "workspace_id" to updated.id,
+                        "workspace_label" to updated.name,
+                    ),
+                    context = ctx,
+                )
+                previous.name != updated.name -> {
+                    services.plugins.emitEvent(
+                        event = "workspace.renamed",
+                        data = mapOf(
+                            "workspace_id" to updated.id,
+                            "workspace_label" to updated.name,
+                            "previous_label" to previous.name,
+                        ),
+                        context = ctx,
+                    )
+                    services.plugins.emitEvent(
+                        event = "workspace.updated",
+                        data = mapOf(
+                            "workspace_id" to updated.id,
+                            "workspace_label" to updated.name,
+                        ),
+                        context = ctx,
+                    )
+                }
+                else -> services.plugins.emitEvent(
+                    event = "workspace.updated",
+                    data = mapOf(
+                        "workspace_id" to updated.id,
+                        "workspace_label" to updated.name,
+                    ),
+                    context = ctx,
+                )
+            }
         }
     }
     editingAction?.let { edit -> ActionDialog(config.projects, edit.projectId, edit.action, { editingAction = null }) { projectId, action -> editingAction = null; onConfigChange(config.copy(projects = config.projects.map { project -> if (project.id == projectId) project.copy(actions = project.actions.filterNot { it.id == action.id } + action) else project })) } }

@@ -80,11 +80,15 @@ fun AndyMobileApp(
     graph: AndyMobileGraph,
     pendingOpenChatId: String? = null,
     onPendingOpenChatConsumed: () -> Unit = {},
+    pendingVoiceNewThread: com.joetr.andy.PendingVoiceNewThread? = null,
+    onPendingVoiceConsumed: () -> Unit = {},
+    onRequestSpeechRecognition: () -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
     val repository = graph.hostRepository
+    val voiceDefaultsStore = graph.voiceDefaultsStore
     val sessionManager = graph.sessionManager
     val updateService = graph.updateService
     val notifications = graph.notificationService
@@ -159,6 +163,27 @@ fun AndyMobileApp(
         }
         openChat(chatId)
         onPendingOpenChatConsumed()
+    }
+
+    LaunchedEffect(pendingVoiceNewThread) {
+        val pending = pendingVoiceNewThread ?: return@LaunchedEffect
+        if (pending.prompt == null) {
+            // Consume the marker first so recognition result can set a new pending.
+            onPendingVoiceConsumed()
+            onRequestSpeechRecognition()
+            return@LaunchedEffect
+        }
+        if (sessionManager.client?.sessionToken.isNullOrBlank()) {
+            sessionManager.restoreFromStoredSession()
+            // Still open NewChat even without a host — screen redirects to Hosts/Projects.
+        }
+        navigateReplaceSession(
+            MobileNavKey.NewChat(
+                initialPrompt = pending.prompt,
+                fromVoice = true,
+            ),
+        )
+        onPendingVoiceConsumed()
     }
 
     DisposableEffect(Unit) {
@@ -337,7 +362,7 @@ fun AndyMobileApp(
                                         onOpenChat = { openChat(it) },
                                         onNewChat = {
                                             ensureTabs(MobileTab.Projects)
-                                            navigateReplaceSession(MobileNavKey.NewChat)
+                                            navigateReplaceSession(MobileNavKey.NewChat())
                                         },
                                         onNeedHost = { ensureTabs(MobileTab.Hosts) },
                                     )
@@ -347,7 +372,9 @@ fun AndyMobileApp(
                                     SettingsScreen(
                                         modifier = contentModifier,
                                         updates = vm.updates,
+                                        voiceDefaultsStore = vm.voiceDefaultsStore,
                                         networkClient = sessionClient,
+                                        hostDisplayName = selectedHost?.displayName,
                                     )
                                 }
                             }
@@ -388,17 +415,60 @@ fun AndyMobileApp(
                             )
                         }
                     }
-                    MobileNavKey.NewChat -> NavEntry(key) {
+                    is MobileNavKey.NewChat -> NavEntry(key) {
                         val vm: NewChatViewModel = viewModel(factory = graph.factory<NewChatViewModel>())
                         val client = vm.client
+                        val voiceDefaults by voiceDefaultsStore.defaults.collectAsStateWithLifecycle()
                         if (client == null || selectedHost == null) {
-                            LaunchedEffect(Unit) {
-                                popSessionRoutes()
-                                ensureTabs(MobileTab.Projects)
+                            if (route.fromVoice || !route.initialPrompt.isNullOrBlank()) {
+                                // Keep the transcript when no host is paired / reachable.
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                                        .padding(24.dp),
+                                ) {
+                                    Text(
+                                        "No host connected",
+                                        color = tokens.palette.textPrimary,
+                                        fontFamily = DisplayFont,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        "Pair a host on the Hosts tab, then start this thread. Your prompt is kept below.",
+                                        color = tokens.palette.textSecondary,
+                                        modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+                                    )
+                                    Text(
+                                        route.initialPrompt.orEmpty().ifBlank { "(empty prompt)" },
+                                        color = tokens.palette.textPrimary,
+                                    )
+                                    androidx.compose.material3.TextButton(
+                                        onClick = {
+                                            backStack.removeLastOrNull()
+                                            ensureTabs(MobileTab.Hosts)
+                                        },
+                                        modifier = Modifier.padding(top = 16.dp),
+                                    ) {
+                                        Text("Choose host")
+                                    }
+                                }
+                            } else {
+                                LaunchedEffect(Unit) {
+                                    popSessionRoutes()
+                                    ensureTabs(MobileTab.Projects)
+                                }
                             }
                         } else {
                             NewChatScreen(
                                 client = client,
+                                hostDisplayName = selectedHost.displayName,
+                                initialPrompt = route.initialPrompt,
+                                initialAgent = voiceDefaults.agent.takeIf { route.fromVoice },
+                                initialModel = voiceDefaults.model.takeIf { route.fromVoice },
+                                initialAutonomy = voiceDefaults.autonomy.takeIf { route.fromVoice },
+                                initialProjectId = voiceDefaults.projectId.takeIf { route.fromVoice },
+                                matchProjectFromPrompt = route.fromVoice,
                                 onBack = { backStack.removeLastOrNull() },
                                 onStarted = { id ->
                                     AttentionPushService.ensureRunning(context)
@@ -425,7 +495,7 @@ private inline fun <reified VM : ViewModel> AndyMobileGraph.factory(): ViewModel
             val created: ViewModel = when (VM::class) {
                 HostsViewModel::class -> HostsViewModel(hostRepository)
                 ProjectsViewModel::class -> ProjectsViewModel(hostRepository, sessionManager)
-                SettingsViewModel::class -> SettingsViewModel(updateService)
+                SettingsViewModel::class -> SettingsViewModel(updateService, voiceDefaultsStore)
                 ScreenViewModel::class -> ScreenViewModel(hostRepository)
                 HostEditorViewModel::class -> HostEditorViewModel(hostRepository)
                 NewChatViewModel::class -> NewChatViewModel(sessionManager)

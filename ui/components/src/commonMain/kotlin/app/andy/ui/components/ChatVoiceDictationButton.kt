@@ -88,6 +88,9 @@ object ActiveVoiceDictationShortcut {
         if (bound === controller) bound = null
     }
 
+    /** True when the visible chat composer owns a live capture. */
+    fun isComposerRecording(): Boolean = bound?.recording == true
+
     /** @return true when a composer handled the shortcut. */
     fun handle(event: KeyEvent, shortcut: KeyCombo?): Boolean {
         if (shortcut == null) return false

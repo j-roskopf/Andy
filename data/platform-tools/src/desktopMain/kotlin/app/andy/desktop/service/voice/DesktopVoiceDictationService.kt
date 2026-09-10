@@ -33,13 +33,21 @@ class DesktopVoiceDictationService(
     override val audioLevel: StateFlow<Float>
         get() = recorder.level
 
+    override val isBusy: Boolean
+        get() = busy.get()
+
     override suspend fun startRecording(): Boolean {
         _lastError.value = null
         if (!isReady) {
             _lastError.value = "Enable voice dictation in Settings"
             return false
         }
-        if (!busy.compareAndSet(false, true)) return false
+        if (!busy.compareAndSet(false, true)) {
+            // Composer and the global new-thread overlay share this service; refuse rather than
+            // preempt so the overlay can explain why capture didn't start.
+            _lastError.value = "Already recording in a chat"
+            return false
+        }
         return try {
             val ok = recorder.startRecording()
             voiceDebugLog("startRecording: recorder.startRecording() -> $ok")

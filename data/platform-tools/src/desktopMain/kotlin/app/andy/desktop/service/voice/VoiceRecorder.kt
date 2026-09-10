@@ -66,23 +66,26 @@ class JavaxSoundVoiceRecorder(
         private set
 
     override suspend fun startRecording(): Boolean = withContext(Dispatchers.IO) {
+        // Mic TCC must not run while holding [lock]. requestAccess may dispatch_sync onto
+        // AppKit/AWT main; the EDT also takes [lock] in abandonRecording (composer unbind
+        // when the overlay steals focus) — that pairing deadlocks the whole UI.
+        when (val permission = ensureMicPermission()) {
+            null -> Unit // non-macOS / bridge unavailable — fall through to Java Sound
+            MacOsMicPermission.Granted -> voiceDebugLog("startRecording: macOS mic permission granted")
+            MacOsMicPermission.Denied, MacOsMicPermission.Restricted -> {
+                voiceDebugLog("startRecording: macOS mic permission=$permission")
+                return@withContext false
+            }
+            MacOsMicPermission.NotDetermined, MacOsMicPermission.Unavailable -> {
+                voiceDebugLog("startRecording: macOS mic permission unresolved ($permission); attempting capture anyway")
+            }
+        }
+
         synchronized(lock) {
             if (line != null) return@withContext false
             pcmBuffer.reset()
             lastStopWasSilent = false
             _level.value = 0f
-
-            when (val permission = ensureMicPermission()) {
-                null -> Unit // non-macOS / bridge unavailable — fall through to Java Sound
-                MacOsMicPermission.Granted -> voiceDebugLog("startRecording: macOS mic permission granted")
-                MacOsMicPermission.Denied, MacOsMicPermission.Restricted -> {
-                    voiceDebugLog("startRecording: macOS mic permission=$permission")
-                    return@withContext false
-                }
-                MacOsMicPermission.NotDetermined, MacOsMicPermission.Unavailable -> {
-                    voiceDebugLog("startRecording: macOS mic permission unresolved ($permission); attempting capture anyway")
-                }
-            }
 
             val format = AudioFormat(
                 /* sampleRate = */ SAMPLE_RATE,

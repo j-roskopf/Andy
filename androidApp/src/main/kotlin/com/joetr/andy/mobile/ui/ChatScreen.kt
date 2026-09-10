@@ -230,7 +230,7 @@ fun ChatScreen(
                                 is WireDisplayItem.Event ->
                                     "e-${item.index}-${item.event.type}-${item.event.atMillis}"
                                 is WireDisplayItem.ToolGroup ->
-                                    "g-${item.startIndex}-${item.events.size}"
+                                    "g-${item.startIndex}-${item.events.firstOrNull()?.atMillis ?: 0}"
                             }
                         },
                         contentType = { reversedIndex ->

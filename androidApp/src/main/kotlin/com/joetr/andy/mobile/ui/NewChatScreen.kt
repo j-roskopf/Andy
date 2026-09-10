@@ -57,17 +57,24 @@ fun NewChatScreen(
     onBack: () -> Unit,
     onStarted: (String) -> Unit,
     modifier: Modifier = Modifier,
+    hostDisplayName: String? = null,
+    initialPrompt: String? = null,
+    initialAgent: String? = null,
+    initialModel: String? = null,
+    initialAutonomy: String? = null,
+    initialProjectId: String? = null,
+    matchProjectFromPrompt: Boolean = false,
 ) {
     val tokens = andyTokens()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var agents by remember { mutableStateOf<List<AgentDto>>(emptyList()) }
     var projects by remember { mutableStateOf<List<ProjectDto>>(emptyList()) }
-    var prompt by remember { mutableStateOf("") }
-    var agentId by remember { mutableStateOf("") }
-    var projectId by remember { mutableStateOf("") }
-    var autonomy by remember { mutableStateOf("Standard") }
-    var model by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf(initialPrompt.orEmpty()) }
+    var agentId by remember { mutableStateOf(initialAgent.orEmpty()) }
+    var projectId by remember { mutableStateOf(initialProjectId.orEmpty()) }
+    var autonomy by remember { mutableStateOf(initialAutonomy ?: "Standard") }
+    var model by remember { mutableStateOf(initialModel.orEmpty()) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var requiresModel by remember { mutableStateOf(false) }
     var runtime by remember { mutableStateOf<String?>(null) }
@@ -80,7 +87,20 @@ fun NewChatScreen(
         runCatching {
             agents = client.listAgents().filter { it.webChat }
             projects = client.listProjects()
-            agentId = agents.firstOrNull()?.id.orEmpty()
+            // Stale phone-local defaults the current host doesn't recognize land as unselected.
+            if (agentId.isBlank() || agents.none { it.id == agentId }) {
+                agentId = agents.firstOrNull()?.id.orEmpty()
+            }
+            if (projectId.isNotBlank() && projects.none { it.id == projectId }) {
+                projectId = ""
+            }
+            if (matchProjectFromPrompt && prompt.isNotBlank()) {
+                val matched = app.andy.model.matchProject(
+                    prompt,
+                    projects.map { it.id to it.name },
+                )
+                if (matched != null) projectId = matched
+            }
         }.onFailure { error = it.message }
     }
 
@@ -89,7 +109,9 @@ fun NewChatScreen(
         runCatching {
             val response = client.listModels(agentId)
             models = response.models.map { it.id }
-            model = response.defaultModel.orEmpty()
+            if (model.isBlank() || model !in models) {
+                model = response.defaultModel.orEmpty()
+            }
             requiresModel = response.requiresModel || response.models.isNotEmpty() && response.defaultModel == null
             runtime = response.defaultRuntime
         }
@@ -118,13 +140,22 @@ fun NewChatScreen(
                     tint = tokens.palette.textPrimary,
                 )
             }
-            Text(
-                "New chat",
-                style = MaterialTheme.typography.headlineLarge,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.SemiBold,
-                color = tokens.palette.textPrimary,
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "New chat",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.SemiBold,
+                    color = tokens.palette.textPrimary,
+                )
+                if (!hostDisplayName.isNullOrBlank()) {
+                    Text(
+                        "Host: $hostDisplayName",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = tokens.palette.textSecondary,
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(AndySpace.Space3))
         Column(
@@ -229,7 +260,7 @@ fun NewChatScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SimpleDropdown(
+internal fun SimpleDropdown(
     label: String,
     value: String,
     options: List<Pair<String, String>>,

@@ -1,0 +1,15 @@
+id = "examples.workspace-hello"
+name = "Workspace Hello"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "Minimal action + startup sample"
+platforms = ["macos", "linux"]
+
+[[startup]]
+command = ["node", "hello.mjs", "--startup"]
+
+[[actions]]
+id = "print-context"
+title = "Print context"
+contexts = ["global", "workspace", "pane"]
+command = ["node", "hello.mjs"]

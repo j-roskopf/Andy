@@ -7,7 +7,7 @@ import org.junit.Test
 class MobileNavKeyTest {
     @Test
     fun sessionDependentRoutes() {
-        assertTrue(MobileNavKey.NewChat.isSessionDependent())
+        assertTrue(MobileNavKey.NewChat().isSessionDependent())
         assertTrue(MobileNavKey.Chat("abc").isSessionDependent())
         assertFalse(MobileNavKey.Tabs().isSessionDependent())
         assertFalse(MobileNavKey.EditHost(null).isSessionDependent())
@@ -19,7 +19,7 @@ class MobileNavKeyTest {
         val stack = mutableListOf<MobileNavKey>(
             MobileNavKey.Tabs(MobileTab.Projects),
             MobileNavKey.EditHost("h1"),
-            MobileNavKey.NewChat,
+            MobileNavKey.NewChat(),
             MobileNavKey.Chat("c1"),
         )
         while (stack.lastOrNull()?.isSessionDependent() == true) {
@@ -33,7 +33,7 @@ class MobileNavKeyTest {
     fun replaceNewChatWithChat() {
         val stack = mutableListOf<MobileNavKey>(
             MobileNavKey.Tabs(MobileTab.Projects),
-            MobileNavKey.NewChat,
+            MobileNavKey.NewChat(),
         )
         stack.removeLast()
         stack.add(MobileNavKey.Chat("started"))

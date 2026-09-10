@@ -1,0 +1,26 @@
+id = "examples.agent-status-log"
+name = "Agent Status Log"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "Logs pane.agent_status_changed wire statuses (working/blocked/done/idle)"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "dump"
+title = "Dump status.log"
+contexts = ["global"]
+command = ["node", "dump.mjs"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "status.mjs"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "status.mjs"]
+
+[[panes]]
+id = "tail"
+title = "Agent status"
+placement = "tab"
+command = ["node", "tail.mjs"]

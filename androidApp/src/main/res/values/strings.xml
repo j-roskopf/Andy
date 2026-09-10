@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_voice_new_thread_short">Voice thread</string>
+    <string name="shortcut_voice_new_thread_long">New thread from voice</string>
+    <string name="widget_voice_new_thread_label">Voice thread</string>
+    <string name="widget_voice_new_thread_description">Dictate a new Andy agent thread</string>
+</resources>
