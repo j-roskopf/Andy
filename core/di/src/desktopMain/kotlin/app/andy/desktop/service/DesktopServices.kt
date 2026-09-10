@@ -593,7 +593,9 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     // local tool MCP). Bind the daemon-client agent mirror so /api/chats and /ws/attention
     // are not empty / silent on an unbound DesktopMcpServerService.
     mcp.bindAgentServices(swappableAgents, swappableAgents, swappableAutomations, plugins)
-    plugins.runStartupHooks()
+    // Startup hooks belong to the process that owns andyd. In daemon-client mode the
+    // standalone andyd already ran them (createDaemonRuntime); running them again here
+    // would double every non-idempotent [[startup]] command.
 
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
     // Do not open a second writer here — use UnavailableKanbanService until the daemon

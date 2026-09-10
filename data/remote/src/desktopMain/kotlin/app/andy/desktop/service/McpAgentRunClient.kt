@@ -136,6 +136,8 @@ class McpAgentRunClient(
     /** Ids whose `chat.mark_read` RPC the daemon has acknowledged; see [dropSettledClientReads]. */
     private val daemonAckedReadTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val clientViewingTaskId = java.util.concurrent.atomic.AtomicReference<String?>(null)
+    private val _viewingTaskId = MutableStateFlow<String?>(null)
+    override val viewingTaskId: StateFlow<String?> = _viewingTaskId
 
     /** Window visibility/focus. An open chat only counts as watched while the window is up. */
     @Volatile
@@ -1007,9 +1009,18 @@ class McpAgentRunClient(
 
     override fun setChatViewing(taskId: String?, viewing: Boolean) {
         when {
-            taskId == null -> clientViewingTaskId.set(null)
-            viewing -> clientViewingTaskId.set(taskId)
-            clientViewingTaskId.get() == taskId -> clientViewingTaskId.set(null)
+            taskId == null -> {
+                clientViewingTaskId.set(null)
+                _viewingTaskId.value = null
+            }
+            viewing -> {
+                clientViewingTaskId.set(taskId)
+                _viewingTaskId.value = taskId
+            }
+            clientViewingTaskId.get() == taskId -> {
+                clientViewingTaskId.set(null)
+                _viewingTaskId.value = null
+            }
         }
         localBridge?.setChatViewing(taskId, viewing)
         // Persist read on the daemon. Local acknowledge alone is wiped on GUI restart;

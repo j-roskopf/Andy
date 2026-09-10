@@ -182,7 +182,12 @@ class DesktopPluginService(
                 val pluginDir = locatePluginDir(temp, normalized)
                 val manifest = PluginManifestLoader.load(pluginDir, andyVersion())
                 if (!yes) {
-                    // Non-interactive installs require --yes; interactive preview is CLI-side.
+                    // Build commands execute arbitrary repository code as the user. Interactive
+                    // preview/confirmation is CLI-side; without --yes we must not run them.
+                    error(
+                        "plugin_confirmation_required: " +
+                            "installing $normalized runs its [[build]] commands; re-run with --yes to confirm",
+                    )
                 }
                 runBuildCommands(manifest, pluginDir)
                 val dest = store.managedCheckout(manifest.id)
@@ -223,6 +228,12 @@ class DesktopPluginService(
         if (record.source.kind == PluginSourceKind.Github) {
             File(record.pluginRoot).deleteRecursively()
         }
+        _openPanes.value
+            .filter { it.pluginId == record.pluginId }
+            .forEach { pane ->
+                actionRuns.stop(pane.runId)
+                actionRuns.clear(pane.runId)
+            }
         _plugins.update { it.filterNot { p -> p.pluginId == record.pluginId } }
         _openPanes.update { panes -> panes.filterNot { it.pluginId == record.pluginId } }
         registryMtime = store.registryFile.lastModified()
@@ -384,6 +395,27 @@ class DesktopPluginService(
 
     /** Watch agent chat lifecycle and emit pane.* / worktree.* plugin events. */
     fun attachAgentEvents(agentRuns: AgentRunService) {
+        // Focus is observed independently of task updates: focusing an already-read chat
+        // mutates viewing without re-emitting a task value, so the tasks collector below
+        // would otherwise never see the change and never fire pane.focused.
+        var previousFocused: String? = agentRuns.viewingTaskId.value
+        scope.launch {
+            agentRuns.viewingTaskId.collect { focused ->
+                if (focused != null && focused != previousFocused) {
+                    emitEvent(
+                        "pane.focused",
+                        mapOf(
+                            "pane_id" to focused,
+                            "workspace_id" to (agentTaskSnapshots(agentRuns.tasks.value, agentRuns)[focused]?.projectId ?: ""),
+                        ),
+                        PluginInvocationContext(
+                            focusedPaneId = focused,
+                        ),
+                    )
+                }
+                previousFocused = focused
+            }
+        }
         scope.launch {
             // Wait for store hydration, then seed [previous] from the loaded snapshot so
             // existing chats do not fan out pane.created / worktree.* on every boot.
@@ -445,16 +477,6 @@ class DesktopPluginService(
                                 "type" to "pane_agent_status_changed",
                             ),
                             ctx.copy(focusedPaneStatus = wire),
-                        )
-                    }
-                    if (old != null && !old.viewing && snap.viewing) {
-                        emitEvent(
-                            "pane.focused",
-                            mapOf(
-                                "pane_id" to id,
-                                "workspace_id" to (snap.projectId ?: ""),
-                            ),
-                            ctx,
                         )
                     }
                     if (old != null && old.worktreePath != snap.worktreePath) {
@@ -624,12 +646,22 @@ class DesktopPluginService(
             appendLog(log)
             return log
         }
-        val stdout = process.inputStream.bufferedReader().readText()
-        val stderr = process.errorStream.bufferedReader().readText()
+        val stdoutSink = StringBuffer()
+        val stderrSink = StringBuffer()
+        val outReader = Thread { process.inputStream.bufferedReader().use { stdoutSink.append(it.readText()) } }
+        val errReader = Thread { process.errorStream.bufferedReader().use { stderrSink.append(it.readText()) } }
+        outReader.start()
+        errReader.start()
+        // Apply the timeout before blocking on output: a plugin command that never exits must
+        // be destroyed after the wait window regardless of what its pipes emit.
         val exited = process.waitFor(5, TimeUnit.MINUTES)
         if (!exited) {
             process.destroyForcibly()
         }
+        outReader.join(10_000)
+        errReader.join(10_000)
+        val stdout = stdoutSink.toString()
+        val stderr = stderrSink.toString()
         val log = PluginCommandLog(
             id = id,
             pluginId = plugin.pluginId,

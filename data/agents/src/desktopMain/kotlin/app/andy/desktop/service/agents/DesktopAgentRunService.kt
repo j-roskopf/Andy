@@ -229,6 +229,8 @@ class DesktopAgentRunService(
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val _viewingTaskId = MutableStateFlow<String?>(null)
+    override val viewingTaskId: StateFlow<String?> = _viewingTaskId
     private val queuedAcpPermissions = ConcurrentHashMap<String, ArrayDeque<PendingAcpPermission>>()
     /** While reconnecting an ACP session, drop provider history replay into the transcript. */
     private val acpSuppressProviderReplay = ConcurrentHashMap.newKeySet<String>()
@@ -6037,11 +6039,13 @@ class DesktopAgentRunService(
         when {
             taskId == null -> {
                 viewingTaskIds.clear()
+                _viewingTaskId.value = null
                 terminals.clearForeground()
             }
             viewing -> {
                 val alreadyViewing = taskId in viewingTaskIds
                 viewingTaskIds.add(taskId)
+                _viewingTaskId.value = taskId
                 terminals.setOnlyForeground(taskId)
                 markRead(taskId)
                 if (!alreadyViewing) {
@@ -6062,6 +6066,7 @@ class DesktopAgentRunService(
             }
             else -> {
                 viewingTaskIds.remove(taskId)
+                _viewingTaskId.value = if (taskId == _viewingTaskId.value) null else _viewingTaskId.value
                 terminals.setForeground(taskId, false)
             }
         }

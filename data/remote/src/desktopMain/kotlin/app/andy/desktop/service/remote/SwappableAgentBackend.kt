@@ -179,6 +179,7 @@ class SwappableAgentBackend(
     override fun isLaneLive(taskId: String): Boolean = runs().isLaneLive(taskId)
     override fun sessionRootPid(taskId: String): Long? = runs().sessionRootPid(taskId)
     override fun isViewing(taskId: String): Boolean = runs().isViewing(taskId)
+    override val viewingTaskId: StateFlow<String?> get() = runs().viewingTaskId
     override fun setAppForeground(foreground: Boolean) = runs().setAppForeground(foreground)
     override fun respondToUserInput(taskId: String, requestId: String, answers: Map<String, String>) =
         runs().respondToUserInput(taskId, requestId, answers)

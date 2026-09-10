@@ -1757,6 +1757,11 @@ fun coalesceAgentStreamDeltas(
             mergeStreamDelta(transcript, event)
         event is AgentEvent.PlanUpdate ->
             mergePlanUpdate(sealOpenStreamDeltas(transcript), event)
+        event.isStreamCoalesceTransparent() ->
+            // Transparent events (whitespace ACP chunks, command/session bookkeeping) must not
+            // split a live provider response — leave open deltas unsealed so the next delta
+            // still merges into the same bubble.
+            transcript + event
         else -> sealOpenStreamDeltas(transcript) + event
     }
 }

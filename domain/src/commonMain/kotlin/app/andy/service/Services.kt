@@ -629,6 +629,7 @@ interface PluginService {
 
 /** Shared empty backing for [AgentRunService.interactiveTerminalTaskIds] on hosts without terminals. */
 private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+private val NoViewingTask: StateFlow<String?> = MutableStateFlow(null)
 private val NoLocalModelBackends: StateFlow<Map<AgentKind, Boolean>> = MutableStateFlow(emptyMap())
 private val DefaultTerminalSessionsRevision: StateFlow<Long> = MutableStateFlow(0L)
 
@@ -720,6 +721,13 @@ interface AgentRunService {
      * earns an unread badge and an OS banner when its turn ends.
      */
     fun isViewing(taskId: String): Boolean = false
+
+    /**
+     * The id of the chat currently focused on screen, published independently of [tasks]
+     * so focus changes are observable even when focusing an already-read chat (which does
+     * not re-emit a task value). null when nothing is focused.
+     */
+    val viewingTaskId: StateFlow<String?> get() = NoViewingTask
 
     /**
      * Suspends until the persisted chat list has been loaded into [tasks] once.

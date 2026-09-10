@@ -219,6 +219,122 @@ class DesktopPluginServiceTest {
         }
     }
 
+    @Test
+    fun attachAgentEventsEmitsPaneFocusedOnFocusChangeWithoutTaskUpdate() = runBlocking {
+        val home = File.createTempFile("andy-plugins-home", null).apply {
+            delete()
+            mkdirs()
+        }
+        val pluginRoot = File.createTempFile("andy-plugin-root", null).apply {
+            delete()
+            mkdirs()
+        }
+        File(pluginRoot, "andy-plugin.toml").writeText(
+            """
+            id = "examples.pane-focus"
+            name = "Pane Focus"
+            version = "0.1.0"
+            min_andy_version = "0.1.0"
+            platforms = ["macos", "linux", "windows"]
+
+[[events]]
+            on = "pane.focused"
+            command = ["sh", "-c", "printf '%s\n' \"${'$'}ANDY_PLUGIN_EVENT\" >> \"${'$'}ANDY_PLUGIN_STATE_DIR/events\""]
+            """.trimIndent(),
+        )
+
+        val tasks = listOf(sampleTask("task-focus", "Focused chat"))
+        val tasksFlow = MutableStateFlow(tasks)
+        val loaded = CompletableDeferred<Unit>()
+        val viewingFlow = MutableStateFlow<String?>(null)
+        val agents = object : AgentRunService by UnavailableAgentRunService {
+            override val tasks: StateFlow<List<AgentTask>> = tasksFlow
+            override val viewingTaskId: StateFlow<String?> = viewingFlow
+            override suspend fun awaitTasksLoaded() = loaded.await()
+        }
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val service = DesktopPluginService(
+                scope = scope,
+                actionRuns = RecordingActionRuns(),
+                store = PluginRegistryStore(andyHome = home),
+                andyVersion = { "2026.0909.2356" },
+                andyBinPath = { "/tmp/andy" },
+                andySocketPath = { "/tmp/andyd.sock" },
+            )
+            val linked = service.link(pluginRoot.absolutePath)
+            service.attachAgentEvents(agents)
+            loaded.complete(Unit)
+            delay(100)
+
+            val eventsFile = File(linked.stateDir, "events")
+            // Focusing an already-read chat mutates viewing only — no task value is re-emitted.
+            viewingFlow.value = "task-focus"
+            waitForFile(eventsFile, timeoutMs = 5_000)
+            val lines = eventsFile.readText().trim().lines().filter { it.isNotBlank() }
+            assertEquals(listOf("pane.focused"), lines)
+
+            service.unlink(linked.pluginId)
+        } finally {
+            scope.cancel()
+            home.deleteRecursively()
+            pluginRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun uninstallStopsRunningPluginPanes() = runBlocking {
+        val home = File.createTempFile("andy-plugins-home", null).apply {
+            delete()
+            mkdirs()
+        }
+        val pluginRoot = File.createTempFile("andy-plugin-root", null).apply {
+            delete()
+            mkdirs()
+        }
+        File(pluginRoot, "andy-plugin.toml").writeText(
+            """
+            id = "examples.pane-stop"
+            name = "Pane Stop"
+            version = "0.1.0"
+            min_andy_version = "0.1.0"
+            platforms = ["macos", "linux", "windows"]
+
+            [[panes]]
+            id = "watch"
+            title = "Watch"
+            placement = "split"
+            command = ["sh", "-c", "sleep 1000"]
+            """.trimIndent(),
+        )
+
+        val actionRuns = RecordingActionRuns()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val service = DesktopPluginService(
+                scope = scope,
+                actionRuns = actionRuns,
+                store = PluginRegistryStore(andyHome = home),
+                andyVersion = { "2026.0909.2356" },
+                andyBinPath = { "/tmp/andy" },
+                andySocketPath = { "/tmp/andyd.sock" },
+            )
+            val linked = service.link(pluginRoot.absolutePath)
+            val session = service.openPane(linked.pluginId, "watch")
+            assertTrue(actionRuns.stopped.isEmpty())
+
+            service.uninstall(linked.pluginId)
+            assertEquals(listOf(session.runId), actionRuns.stopped)
+            assertTrue(service.plugins.value.none { it.pluginId == linked.pluginId })
+            assertTrue(service.openPanes.value.none { it.pluginId == linked.pluginId })
+        } finally {
+            scope.cancel()
+            home.deleteRecursively()
+            pluginRoot.deleteRecursively()
+        }
+    }
+
     private fun sampleTask(id: String, title: String): AgentTask = AgentTask(
         id = id,
         title = title,
@@ -247,6 +363,7 @@ class DesktopPluginServiceTest {
         )
 
         val started = mutableListOf<Started>()
+        val stopped = mutableListOf<String>()
         private val _running = MutableStateFlow<List<RunningAction>>(emptyList())
         override val running: StateFlow<List<RunningAction>> = _running
 
@@ -276,7 +393,10 @@ class DesktopPluginServiceTest {
             return runId
         }
 
-        override fun stop(runId: String) = Unit
+        override fun stop(runId: String) {
+            stopped += runId
+        }
+
         override fun clear(runId: String) = Unit
     }
 }
