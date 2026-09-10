@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icon-first layout so a 1×1 cell stays readable; label is for larger resizes. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/voice_thread_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_voice_thread_widget"
+    android:padding="8dp">
+
+    <ImageView
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_gravity="center"
+        android:contentDescription="@string/widget_voice_new_thread_description"
+        android:src="@drawable/ic_mic" />
+</FrameLayout>

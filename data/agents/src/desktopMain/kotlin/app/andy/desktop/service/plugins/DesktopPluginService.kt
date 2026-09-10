@@ -3,6 +3,7 @@ package app.andy.desktop.service.plugins
 import app.andy.model.InstalledPluginInfo
 import app.andy.model.InstalledPluginRecord
 import app.andy.model.AgentStatus
+import app.andy.model.AgentTask
 import app.andy.model.PluginCommandLog
 import app.andy.model.PluginInvocationContext
 import app.andy.model.PluginManifest
@@ -384,20 +385,12 @@ class DesktopPluginService(
     /** Watch agent chat lifecycle and emit pane.* / worktree.* plugin events. */
     fun attachAgentEvents(agentRuns: AgentRunService) {
         scope.launch {
-            var previous = emptyMap<String, AgentTaskSnapshot>()
+            // Wait for store hydration, then seed [previous] from the loaded snapshot so
+            // existing chats do not fan out pane.created / worktree.* on every boot.
+            agentRuns.awaitTasksLoaded()
+            var previous = agentTaskSnapshots(agentRuns.tasks.value, agentRuns)
             agentRuns.tasks.collect { tasks ->
-                val next = tasks.associate { task ->
-                    task.id to AgentTaskSnapshot(
-                        status = task.status,
-                        projectId = task.projectId,
-                        title = task.title,
-                        agent = task.agent.name,
-                        cwd = task.cwd,
-                        viewing = agentRuns.isViewing(task.id),
-                        worktreePath = task.worktreePath,
-                        ownsWorktree = task.ownsWorktree,
-                    )
-                }
+                val next = agentTaskSnapshots(tasks, agentRuns)
                 next.forEach { (id, snap) ->
                     val old = previous[id]
                     val wireStatus = snap.status?.toPluginWireStatus(seen = snap.viewing)
@@ -556,6 +549,22 @@ class DesktopPluginService(
         val worktreePath: String?,
         val ownsWorktree: Boolean,
     )
+
+    private fun agentTaskSnapshots(
+        tasks: List<AgentTask>,
+        agentRuns: AgentRunService,
+    ): Map<String, AgentTaskSnapshot> = tasks.associate { task ->
+        task.id to AgentTaskSnapshot(
+            status = task.status,
+            projectId = task.projectId,
+            title = task.title,
+            agent = task.agent.name,
+            cwd = task.cwd,
+            viewing = agentRuns.isViewing(task.id),
+            worktreePath = task.worktreePath,
+            ownsWorktree = task.ownsWorktree,
+        )
+    }
 
     private fun resolveAction(
         actionId: String,

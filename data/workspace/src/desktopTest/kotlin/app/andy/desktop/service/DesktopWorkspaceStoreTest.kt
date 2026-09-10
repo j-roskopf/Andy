@@ -40,6 +40,21 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(withVoiceShortcut.copy(voiceDictationShortcut = null))
         assertEquals(null, DesktopWorkspaceStore(file).load().voiceDictationShortcut)
 
+        val withNewThreadVoice = saved.copy(
+            voiceNewThreadShortcut = "89|0|1|0|1",
+            voiceDefaultAgent = "ClaudeCode",
+            voiceDefaultModel = "opus",
+            voiceDefaultAutonomy = "Full",
+            voiceDefaultProjectId = "proj-1",
+        )
+        DesktopWorkspaceStore(file).save(withNewThreadVoice)
+        val loadedNewThread = DesktopWorkspaceStore(file).load()
+        assertEquals("89|0|1|0|1", loadedNewThread.voiceNewThreadShortcut)
+        assertEquals("ClaudeCode", loadedNewThread.voiceDefaultAgent)
+        assertEquals("opus", loadedNewThread.voiceDefaultModel)
+        assertEquals("Full", loadedNewThread.voiceDefaultAutonomy)
+        assertEquals("proj-1", loadedNewThread.voiceDefaultProjectId)
+
         DesktopWorkspaceStore(file).save(saved.copy(keepAgentSessionsOnShutdown = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().keepAgentSessionsOnShutdown)
 

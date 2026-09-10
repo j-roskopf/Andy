@@ -57,6 +57,7 @@ import app.andy.service.AutomationService
 import app.andy.service.CommandResult
 import app.andy.service.ProjectWorkflowService
 import app.andy.terminal.TmuxAndy
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -120,6 +121,7 @@ class McpAgentRunClient(
 
     private val _tasks = MutableStateFlow<List<AgentTask>>(emptyList())
     override val tasks: StateFlow<List<AgentTask>> = _tasks.asStateFlow()
+    private val tasksLoaded = CompletableDeferred<Unit>()
     /**
      * Keep a successful delete reflected in the UI while an in-flight or periodic daemon
      * refresh may still be returning the previous list.
@@ -271,6 +273,11 @@ class McpAgentRunClient(
             viewingTaskIds = viewingTaskIdsForMerge(),
         ).filterNot { it.id in locallyDeletedTaskIds }
         locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
+        if (!tasksLoaded.isCompleted) tasksLoaded.complete(Unit)
+    }
+
+    override suspend fun awaitTasksLoaded() {
+        tasksLoaded.await()
     }
 
     private suspend fun refreshAutomations() {

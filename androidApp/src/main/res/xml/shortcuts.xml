@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="voice_new_thread"
+        android:enabled="true"
+        android:icon="@mipmap/ic_shortcut_voice_thread"
+        android:shortcutShortLabel="@string/shortcut_voice_new_thread_short"
+        android:shortcutLongLabel="@string/shortcut_voice_new_thread_long">
+        <intent
+            android:action="com.joetr.andy.action.VOICE_NEW_THREAD"
+            android:targetPackage="com.joetr.andy"
+            android:targetClass="com.joetr.andy.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

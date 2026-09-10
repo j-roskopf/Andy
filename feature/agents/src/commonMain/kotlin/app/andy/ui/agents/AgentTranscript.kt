@@ -82,6 +82,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -224,6 +225,11 @@ fun AgentTranscript(
     awaitingPlanConfirmation: Boolean = false,
     agentLabel: String = "agent",
     headerContent: (@Composable () -> Unit)? = null,
+    /**
+     * Sticky decision/permission UI pinned under the scrollable transcript (not a list row).
+     * Keeping it out of [LazyColumn] avoids stick-to-bottom re-pin fighting streamed text growth,
+     * which reads as flashing when grill-me / permission choices sit on the live edge.
+     */
     pendingContent: (@Composable () -> Unit)? = null,
     /** When set, the matching [AgentEvent.PermissionRequest] row is omitted (shown via [pendingContent]). */
     activePermissionRequestId: String? = null,
@@ -233,7 +239,7 @@ fun AgentTranscript(
     /** Wall time for the launch prompt bubble when it is synthesized (not from [AgentEvent.UserMessage]). */
     originalPromptAtMillis: Long? = null,
     completedContent: (@Composable () -> Unit)? = null,
-    /** Scrolls with the transcript on the live edge, below pending input and above events. */
+    /** Scrolls with the transcript on the live edge, below events and above the thinking orb. */
     trailingContent: (@Composable () -> Unit)? = null,
     /**
      * False while a completed chat's transcript (and trailing UI) is still loading.
@@ -362,12 +368,19 @@ fun AgentTranscript(
         )
     }
     ReportContentScrollBusy(listState = listState, wheelScrollTicks = wheelScrollTicks)
+    val pendingPinned = pendingContent != null
+    // Height of the sticky footer; reserved as LazyColumn bottom padding so the live edge
+    // sits above the card instead of scrolling under it.
+    var pendingHeightPx by remember(taskId, pendingPinned) { mutableStateOf(0) }
+    val density = LocalDensity.current
+    val pendingHeightDp = with(density) { pendingHeightPx.toDp() }
     // Content revision used to re-pin while following (stream tokens, new rows, thinking orb).
     val followEpoch = remember(
         events,
         displayItems.size,
         showThinkingIndicator,
-        pendingContent != null,
+        pendingPinned,
+        pendingHeightPx,
         trailingContent != null,
     ) {
         val streamLen = events.asReversed()
@@ -383,7 +396,8 @@ fun AgentTranscript(
             thinkingLen,
             displayItems.size,
             showThinkingIndicator,
-            pendingContent != null,
+            pendingPinned,
+            pendingHeightPx,
             trailingContent != null,
         )
     }
@@ -392,7 +406,6 @@ fun AgentTranscript(
         isActive,
         showThinkingIndicator,
         originalPromptVisible,
-        pendingContent != null,
         trailingContent != null,
         headerContent != null,
     ) {
@@ -402,7 +415,6 @@ fun AgentTranscript(
             displayItems.forEach { add(transcriptDisplayItemKey(it)) }
             if (trailingContent != null) add("trailing-content")
             if (showThinkingIndicator) add("agent-thinking")
-            if (pendingContent != null) add("pending-task-input")
             add("live-edge-anchor")
         }
     }
@@ -623,10 +635,18 @@ fun AgentTranscript(
                             }
                         }
                     },
-                contentPadding = PaddingValues(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 14.dp),
+                contentPadding = PaddingValues(
+                    start = 18.dp,
+                    top = 16.dp,
+                    end = 18.dp,
+                    // When the sticky decision card is up, reserve its measured height (includes
+                    // its own bottom inset). Otherwise keep the usual list end padding.
+                    bottom = if (pendingPinned) pendingHeightDp.coerceAtLeast(14.dp) else 14.dp,
+                ),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                // Chronological: oldest at top, live edge (thinking / pending) at the bottom.
+                // Chronological: oldest at top, live edge (thinking) at the bottom.
+                // Decision/permission UI is pinned outside this list — see overlay below.
                 if (headerContent != null) {
                     item(key = "task-header", contentType = "header") { headerContent() }
                 }
@@ -819,9 +839,6 @@ fun AgentTranscript(
                 if (showThinkingIndicator) {
                     item(key = "agent-thinking", contentType = "presence") { AgentThinkingIndicator() }
                 }
-                if (pendingContent != null) {
-                    item(key = "pending-task-input", contentType = "request") { pendingContent() }
-                }
                 // Zero-height isn't reliable for bring-into-view; 1dp sentinel marks the true end.
                 item(key = "live-edge-anchor", contentType = "anchor") {
                     Spacer(
@@ -832,6 +849,20 @@ fun AgentTranscript(
                     )
                 }
             }
+            if (pendingContent != null) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .widthIn(max = AndyLayout.ChatContentMaxWidth)
+                        .fillMaxWidth()
+                        .background(AndyColors.ContentBg)
+                        .onSizeChanged { size -> pendingHeightPx = size.height }
+                        .padding(start = 18.dp, end = 26.dp, top = 8.dp, bottom = 14.dp)
+                        .testTag("pending-task-input"),
+                ) {
+                    pendingContent()
+                }
+            }
             PlatformLazyListScrollbar(
                 listState = listState,
                 reverseLayout = false,
@@ -839,7 +870,9 @@ fun AgentTranscript(
             )
             AnimatedVisibility(
                 visible = scrollInitialized && !stickToBottom,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 14.dp + if (pendingPinned) pendingHeightDp else 0.dp),
             ) {
                 Text(
                     if (isActive) "↓ follow live" else "↓ latest",

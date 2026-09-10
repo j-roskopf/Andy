@@ -56,6 +56,7 @@ import app.andy.desktop.service.tracing.DesktopTraceViewerService
 import app.andy.desktop.service.tracing.DesktopTracingService
 import app.andy.desktop.service.voice.DesktopVoiceDictationService
 import app.andy.desktop.service.voice.DesktopVoiceSetupService
+import app.andy.desktop.service.voice.desktopGlobalHotKeyRegistrar
 import app.andy.desktop.service.webchat.NetworkAccessHttpReconciler
 import app.andy.desktop.service.webchat.resolveHost
 import app.andy.desktop.service.webchat.toNetworkAccessBindConfig
@@ -313,6 +314,8 @@ fun createDaemonRuntime(
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        supportsGlobalVoiceHotKey = desktopGlobalHotKeyRegistrar.isSupported,
+        globalVoiceHotKeyError = desktopGlobalHotKeyRegistrar.lastError,
         orchestrationPreferences = orchestrationPreferences,
         localServers = localServers,
         capabilities = PlatformCapabilities.Desktop.copy(
@@ -658,6 +661,8 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        supportsGlobalVoiceHotKey = desktopGlobalHotKeyRegistrar.isSupported,
+        globalVoiceHotKeyError = desktopGlobalHotKeyRegistrar.lastError,
         orchestrationPreferences = orchestrationPreferences,
         localServers = localServers,
         remoteSession = remoteSession,
@@ -966,6 +971,8 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
+        supportsGlobalVoiceHotKey = desktopGlobalHotKeyRegistrar.isSupported,
+        globalVoiceHotKeyError = desktopGlobalHotKeyRegistrar.lastError,
         orchestrationPreferences = orchestrationPreferences,
         localServers = localServers,
         remoteSession = remoteSession,

@@ -2,22 +2,28 @@ package app.andy.desktop.service.plugins
 
 import app.andy.model.ActionProject
 import app.andy.model.ActionRunStatus
+import app.andy.model.AgentKind
+import app.andy.model.AgentStatus
+import app.andy.model.AgentTask
 import app.andy.model.PluginInvocationContext
 import app.andy.model.PluginPanePlacement
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
 import app.andy.model.toPluginWireStatus
-import app.andy.model.AgentStatus
 import app.andy.service.ActionRunService
+import app.andy.service.AgentRunService
+import app.andy.service.UnavailableAgentRunService
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
@@ -137,6 +143,91 @@ class DesktopPluginServiceTest {
             home.deleteRecursively()
         }
     }
+
+    @Test
+    fun attachAgentEventsSkipsHydratedChatsButEmitsNewOnes() = runBlocking {
+        val home = File.createTempFile("andy-plugins-home", null).apply {
+            delete()
+            mkdirs()
+        }
+        val pluginRoot = File.createTempFile("andy-plugin-root", null).apply {
+            delete()
+            mkdirs()
+        }
+        File(pluginRoot, "andy-plugin.toml").writeText(
+            """
+            id = "examples.pane-events"
+            name = "Pane Events"
+            version = "0.1.0"
+            min_andy_version = "0.1.0"
+            platforms = ["macos", "linux", "windows"]
+
+            [[events]]
+            on = "pane.created"
+            command = ["sh", "-c", "printf '%s\n' \"${'$'}ANDY_PLUGIN_EVENT\" >> \"${'$'}ANDY_PLUGIN_STATE_DIR/events\""]
+            """.trimIndent(),
+        )
+
+        val hydrated = listOf(
+            sampleTask("task-a", "Already open A"),
+            sampleTask("task-b", "Already open B"),
+            sampleTask("task-c", "Already open C"),
+        )
+        val tasksFlow = MutableStateFlow(emptyList<AgentTask>())
+        val loaded = CompletableDeferred<Unit>()
+        val agents = object : AgentRunService by UnavailableAgentRunService {
+            override val tasks: StateFlow<List<AgentTask>> = tasksFlow
+            override suspend fun awaitTasksLoaded() = loaded.await()
+        }
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val service = DesktopPluginService(
+                scope = scope,
+                actionRuns = RecordingActionRuns(),
+                store = PluginRegistryStore(andyHome = home),
+                andyVersion = { "2026.0909.2356" },
+                andyBinPath = { "/tmp/andy" },
+                andySocketPath = { "/tmp/andyd.sock" },
+            )
+            val linked = service.link(pluginRoot.absolutePath)
+            assertEquals(1, linked.events.size)
+            assertEquals("pane.created", linked.events.single().on)
+            service.attachAgentEvents(agents)
+
+            // Hydration: many existing chats appear at once after awaitTasksLoaded.
+            tasksFlow.value = hydrated
+            loaded.complete(Unit)
+            delay(300)
+            val eventsFile = File(linked.stateDir, "events")
+            assertTrue(
+                !eventsFile.exists() || eventsFile.readText().isBlank(),
+                "hydration must not emit pane.created; got ${eventsFile.takeIf { it.exists() }?.readText()}",
+            )
+
+            // A genuinely new chat after baseline should emit once.
+            tasksFlow.value = hydrated + sampleTask("task-d", "Brand new")
+            waitForFile(eventsFile, timeoutMs = 5_000)
+            val lines = eventsFile.readText().trim().lines().filter { it.isNotBlank() }
+            assertEquals(listOf("pane.created"), lines)
+
+            service.unlink(linked.pluginId)
+        } finally {
+            scope.cancel()
+            home.deleteRecursively()
+            pluginRoot.deleteRecursively()
+        }
+    }
+
+    private fun sampleTask(id: String, title: String): AgentTask = AgentTask(
+        id = id,
+        title = title,
+        prompt = "prompt",
+        agent = AgentKind.Cursor,
+        status = AgentStatus.Done,
+        statusConfident = true,
+        createdAtMillis = 1L,
+    )
 
     private fun waitForFile(file: File, timeoutMs: Long) {
         val deadline = System.currentTimeMillis() + timeoutMs

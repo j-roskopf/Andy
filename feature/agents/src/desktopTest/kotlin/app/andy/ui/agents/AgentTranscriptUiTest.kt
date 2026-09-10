@@ -575,7 +575,7 @@ class AgentTranscriptUiTest {
         }
 
     @Test
-    fun pendingInputRendersOnLiveEdge() =
+    fun pendingInputRendersPinnedBelowTranscript() =
         runTranscriptUiTest {
             setContent {
                 AndyTheme {
@@ -596,6 +596,7 @@ class AgentTranscriptUiTest {
                 }
             }
             waitForIdle()
+            onNodeWithTag("pending-task-input").assertIsDisplayed()
             onNodeWithTag("pending-input").assertIsDisplayed()
         }
 

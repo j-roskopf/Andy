@@ -45,6 +45,11 @@ interface VoiceDictationService {
     fun cancelRecording()
     /** Soft error message from the last failed start/finish, if any. */
     val lastError: StateFlow<String?>
+    /**
+     * True while a capture or transcription is in flight. Used by the global new-thread
+     * hotkey to refuse without preempting an in-composer session.
+     */
+    val isBusy: Boolean get() = false
 }
 
 object UnavailableVoiceSetupService : VoiceSetupService {

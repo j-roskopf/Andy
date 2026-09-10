@@ -54,9 +54,12 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.andyTokens
 import app.andy.updates.AndyBuildInfo
+import com.joetr.andy.mobile.data.VoiceDefaultsStore
 import com.joetr.andy.mobile.data.attention.AttentionListenerPreferences
 import com.joetr.andy.mobile.data.attention.AttentionPushService
+import com.joetr.andy.mobile.data.networkaccess.AgentDto
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
+import com.joetr.andy.mobile.data.networkaccess.ProjectDto
 import com.joetr.andy.mobile.data.networkaccess.TranscriptSettingsDto
 import kotlinx.coroutines.launch
 
@@ -69,22 +72,34 @@ private val SettingsControlShape = RoundedCornerShape(12.dp)
 @Composable
 fun SettingsScreen(
     updates: AppUpdateService,
+    voiceDefaultsStore: VoiceDefaultsStore,
     networkClient: NetworkAccessClient? = null,
+    hostDisplayName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val tokens = andyTokens()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val updateState by updates.state.collectAsStateWithLifecycle()
+    val voiceDefaults by voiceDefaultsStore.defaults.collectAsStateWithLifecycle()
     var transcriptPrefs by remember { mutableStateOf(TranscriptSettingsDto()) }
     var transcriptError by remember { mutableStateOf<String?>(null) }
     var transcriptLoaded by remember { mutableStateOf(false) }
     val listenerPrefs = remember(context) { AttentionListenerPreferences(context) }
     var alwaysListen by remember { mutableStateOf(listenerPrefs.alwaysListen) }
 
+    var agents by remember { mutableStateOf<List<AgentDto>>(emptyList()) }
+    var projects by remember { mutableStateOf<List<ProjectDto>>(emptyList()) }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var voiceCatalogError by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(networkClient) {
         transcriptLoaded = false
         transcriptError = null
+        agents = emptyList()
+        projects = emptyList()
+        models = emptyList()
+        voiceCatalogError = null
         if (networkClient == null) return@LaunchedEffect
         runCatching { networkClient.getTranscriptSettings() }
             .onSuccess {
@@ -92,12 +107,27 @@ fun SettingsScreen(
                 transcriptLoaded = true
             }
             .onFailure { transcriptError = friendlyTranscriptError(it) }
+        runCatching {
+            agents = networkClient.listAgents().filter { it.webChat }
+            projects = networkClient.listProjects()
+        }.onFailure { voiceCatalogError = it.message }
+    }
+
+    LaunchedEffect(networkClient, voiceDefaults.agent, agents) {
+        val client = networkClient ?: return@LaunchedEffect
+        val agentId = voiceDefaults.agent?.takeIf { id -> agents.any { it.id == id } }
+            ?: return@LaunchedEffect
+        runCatching {
+            models = client.listModels(agentId).models.map { it.id }
+        }.onFailure {
+            models = emptyList()
+        }
     }
 
     Column(modifier.background(tokens.palette.windowBg)) {
         MobileHeader(
             title = "Settings",
-            subtitle = "Notifications, transcript options, about, and updates",
+            subtitle = "Notifications, voice defaults, transcript options, about, and updates",
         )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -146,6 +176,107 @@ fun SettingsScreen(
                             listenerPrefs.alwaysListen = value
                             alwaysListen = value
                             if (value) AttentionPushService.ensureRunning(context)
+                        },
+                    )
+                }
+            }
+            item(key = "voice") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    variant = CardVariant.Default,
+                    shape = AndyShape.Sheet,
+                    backgroundColor = tokens.palette.surfaceRaised,
+                    borderColor = tokens.palette.borderMedium,
+                    contentPadding = PaddingValues(AndySpace.Space4),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+                ) {
+                    Text(
+                        "New thread from voice",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = DisplayFont,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tokens.palette.textPrimary,
+                    )
+                    Text(
+                        "Defaults for the launcher shortcut and voice-assistant action. " +
+                            "Stored on this phone only — they do not sync with Andy Desktop." +
+                            (hostDisplayName?.let { " Pickers use agents and projects from $it." } ?: ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.palette.textSecondary,
+                    )
+                    if (networkClient == null) {
+                        Text(
+                            "Connect a host to choose agent, model, and project. Autonomy can still be set.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = tokens.palette.textSecondary,
+                        )
+                    }
+                    voiceCatalogError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = tokens.error)
+                    }
+                    if (networkClient != null && agents.isNotEmpty()) {
+                        val agentOptions = listOf("" to "Not set") +
+                            agents.map { it.id to it.label.ifBlank { it.id } }
+                        // Stale id the current host doesn't know: show as unselected, keep until changed.
+                        val agentValue = voiceDefaults.agent
+                            ?.takeIf { id -> agents.any { it.id == id } }
+                            .orEmpty()
+                        SimpleDropdown(
+                            label = "Default agent",
+                            value = agentValue,
+                            options = agentOptions,
+                            onSelected = { id ->
+                                scope.launch {
+                                    voiceDefaultsStore.update {
+                                        it.copy(
+                                            agent = id.takeIf { v -> v.isNotBlank() },
+                                            // Model ids are agent-scoped; clear when the agent changes.
+                                            model = if (id == it.agent) it.model else null,
+                                        )
+                                    }
+                                }
+                            },
+                        )
+                        if (models.isNotEmpty()) {
+                            val modelValue = voiceDefaults.model
+                                ?.takeIf { it in models }
+                                .orEmpty()
+                            SimpleDropdown(
+                                label = "Default model",
+                                value = modelValue,
+                                options = listOf("" to "Not set") + models.map { it to it },
+                                onSelected = { id ->
+                                    scope.launch {
+                                        voiceDefaultsStore.update {
+                                            it.copy(model = id.takeIf { v -> v.isNotBlank() })
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                        SimpleDropdown(
+                            label = "Default project",
+                            value = voiceDefaults.projectId
+                                ?.takeIf { id -> projects.any { it.id == id } }
+                                .orEmpty(),
+                            options = listOf("" to "Not set") + projects.map { it.id to it.name },
+                            onSelected = { id ->
+                                scope.launch {
+                                    voiceDefaultsStore.update {
+                                        it.copy(projectId = id.takeIf { v -> v.isNotBlank() })
+                                    }
+                                }
+                            },
+                        )
+                    }
+                    SimpleDropdown(
+                        label = "Default autonomy",
+                        value = voiceDefaults.autonomy,
+                        options = listOf("ReadOnly", "Standard", "Full").map { it to it },
+                        onSelected = { id ->
+                            scope.launch {
+                                voiceDefaultsStore.update { it.copy(autonomy = id) }
+                            }
                         },
                     )
                 }

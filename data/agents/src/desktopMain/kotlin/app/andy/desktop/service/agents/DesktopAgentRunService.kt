@@ -399,6 +399,10 @@ class DesktopAgentRunService(
         ready.await()
     }
 
+    override suspend fun awaitTasksLoaded() {
+        ready.await()
+    }
+
     /**
      * Copies [bundleIds] from the managed evidence root into this task's local evidence
      * directory (so they survive even if the shared managed bundle is later removed) and

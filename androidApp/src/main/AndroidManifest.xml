@@ -28,12 +28,31 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.joetr.andy.action.VOICE_NEW_THREAD" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <service
             android:name=".mobile.data.attention.AttentionPushService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".mobile.widget.VoiceThreadWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_voice_new_thread_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_voice_thread_info" />
+        </receiver>
 
         <receiver
             android:name=".mobile.data.updates.AndroidUpdateInstallReceiver"

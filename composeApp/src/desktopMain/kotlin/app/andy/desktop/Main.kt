@@ -9,7 +9,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.KeyShortcut
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
@@ -38,15 +40,25 @@ import app.andy.model.IosTargetKind
 import app.andy.service.IosTargetRegistry
 import app.andy.service.MirrorEngine
 import app.andy.service.OpenAgentTaskRequest
+import app.andy.desktop.service.voice.GlobalHotKeySpec
+import app.andy.desktop.service.voice.desktopGlobalHotKeyRegistrar
+import app.andy.desktop.voice.VoiceNewThreadBlocker
+import app.andy.desktop.voice.VoiceNewThreadOverlayContent
+import app.andy.desktop.voice.voiceNewThreadBlocker
 import app.andy.ui.components.ActiveVoiceDictationShortcut
 import app.andy.ui.components.KeyCombo
+import app.andy.ui.theme.AndyTheme
 import app.andy.ui.theme.windowBackgroundForTint
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.WindowPosition
 import com.kdroid.composetray.tray.api.Tray
 import java.awt.Desktop
 import java.awt.Taskbar
 import java.awt.desktop.AppReopenedListener
 import java.awt.desktop.SystemEventListener
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
+import javax.swing.SwingUtilities
 import javax.imageio.ImageIO
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
@@ -97,9 +109,16 @@ fun main() {
         var requestedDestination by remember { mutableStateOf<AndyDestination?>(null) }
         var requestedOpenAgentTask by remember { mutableStateOf<OpenAgentTaskRequest?>(null) }
         val appFocus = remember { AppFocusState() }
+        // Compose-observable focus — Carbon must unregister while Andy is key so the combo
+        // reaches onPreviewKeyEvent (RegisterEventHotKey otherwise swallows it).
+        var andyWindowFocused by remember { mutableStateOf(true) }
         val scope = rememberCoroutineScope()
         var requestPopOutMirror by remember { mutableStateOf(false) }
         var popOutWindows by remember { mutableStateOf(mapOf<String, MirrorPopOutWindow>()) }
+        var voiceOverlayOpen by remember { mutableStateOf(false) }
+        var voiceOverlayBlocker by remember { mutableStateOf<VoiceNewThreadBlocker?>(null) }
+        var voiceOverlayRecording by remember { mutableStateOf(false) }
+        val hotKeyRegistrar = remember { desktopGlobalHotKeyRegistrar }
         // Presenter *attach* must stay blocked while *any* Andy window is being live-resized,
         // pop-outs included: opening an overlay from the EDT while the main thread is inside a
         // resize drag freezes the whole app. Geometry still tracks the drag (MirrorPresentationGuard).
@@ -127,6 +146,76 @@ fun main() {
         fun openFromNotification() {
             visible = true
             consumePendingOpen()
+        }
+        fun openMicPrivacySettings() {
+            runCatching {
+                ProcessBuilder(
+                    "open",
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+                ).start()
+            }
+        }
+        var voiceOverlayStopRequest by remember { mutableStateOf(0) }
+        // Carbon + focused-window fallback can both fire for one physical press when focused.
+        val voiceNewThreadHotKeyAtMs = remember { AtomicLong(0L) }
+        fun openVoiceOverlay(blocker: VoiceNewThreadBlocker?) {
+            voiceOverlayBlocker = blocker
+            voiceOverlayRecording = blocker == null
+            voiceOverlayOpen = true
+        }
+        fun closeVoiceOverlay() {
+            voiceOverlayOpen = false
+            voiceOverlayRecording = false
+            voiceOverlayBlocker = null
+        }
+        fun handleVoiceNewThreadHotKey() {
+            // Never open/close windows synchronously inside a key or Carbon callback —
+            // that re-enters AWT/Compose mid-dispatch and freezes the desktop UI.
+            val run = Runnable {
+                val now = System.currentTimeMillis()
+                val previous = voiceNewThreadHotKeyAtMs.get()
+                if (now - previous < 400L) return@Runnable
+                voiceNewThreadHotKeyAtMs.set(now)
+                if (voiceOverlayOpen && voiceOverlayRecording) {
+                    voiceOverlayStopRequest += 1
+                    voiceOverlayRecording = false
+                    return@Runnable
+                }
+                if (voiceOverlayOpen) return@Runnable
+                openVoiceOverlay(voiceNewThreadBlocker(services))
+            }
+            SwingUtilities.invokeLater(run)
+        }
+        LaunchedEffect(
+            workspaceState.voiceNewThreadShortcut,
+            hotKeyRegistrar.isSupported,
+            andyWindowFocused,
+            voiceOverlayOpen,
+        ) {
+            val combo = KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
+            // Carbon only while Andy is in the background. While focused (main or overlay),
+            // leave it unregistered so Compose onPreviewKeyEvent can see the combo — a live
+            // RegisterEventHotKey steals the keystroke and never delivers it to the window.
+            val useCarbon = combo != null &&
+                hotKeyRegistrar.isSupported &&
+                !andyWindowFocused &&
+                !voiceOverlayOpen
+            if (!useCarbon) {
+                hotKeyRegistrar.register(null)
+            } else {
+                hotKeyRegistrar.register(
+                    GlobalHotKeySpec(
+                        packedKeyCode = combo.key.keyCode,
+                        ctrl = combo.ctrl,
+                        meta = combo.meta,
+                        alt = combo.alt,
+                        shift = combo.shift,
+                    ),
+                )
+            }
+        }
+        LaunchedEffect(hotKeyRegistrar) {
+            hotKeyRegistrar.pressed.collect { handleVoiceNewThreadHotKey() }
         }
         fun openPopOutMirror() {
             visible = true
@@ -307,8 +396,26 @@ fun main() {
             title = if (unreadCount > 0) "Andy ($unreadCount)" else "Andy",
             icon = appIcon,
             onPreviewKeyEvent = { event ->
-                val shortcut = KeyCombo.decode(workspaceStore.state.value.voiceDictationShortcut)
-                ActiveVoiceDictationShortcut.handle(event, shortcut)
+                val state = workspaceStore.state.value
+                val dictation = KeyCombo.decode(state.voiceDictationShortcut)
+                when {
+                    ActiveVoiceDictationShortcut.handle(event, dictation) -> true
+                    else -> {
+                        // Focused-window path: Carbon covers unfocused; this covers when Andy is
+                        // frontmost (and when Carbon registration fails for any reason).
+                        val newThread = KeyCombo.decode(state.voiceNewThreadShortcut)
+                        if (
+                            newThread != null &&
+                            event.type == KeyEventType.KeyDown &&
+                            newThread.matches(event)
+                        ) {
+                            handleVoiceNewThreadHotKey()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
             },
         ) {
             LaunchedEffect(visible) {
@@ -320,6 +427,7 @@ fun main() {
             DisposableEffect(window) {
                 val listener = object : java.awt.event.WindowAdapter() {
                     override fun windowActivated(event: java.awt.event.WindowEvent) {
+                        andyWindowFocused = true
                         appFocus.focused = true
                         services.agentRuns.setAppForeground(appFocus.isForeground())
                         consumePendingOpen()
@@ -331,6 +439,7 @@ fun main() {
                     }
 
                     override fun windowDeactivated(event: java.awt.event.WindowEvent) {
+                        andyWindowFocused = false
                         appFocus.focused = false
                         services.agentRuns.setAppForeground(false)
                     }
@@ -469,6 +578,58 @@ fun main() {
                         surfaceModeId = workspaceState.surfaceModeId,
                     )
                     }
+                }
+            }
+        }
+        if (voiceOverlayOpen) {
+            Window(
+                onCloseRequest = {
+                    services.voiceDictation.cancelRecording()
+                    closeVoiceOverlay()
+                },
+                visible = true,
+                title = "Andy — New thread",
+                undecorated = true,
+                transparent = true,
+                alwaysOnTop = true,
+                resizable = false,
+                state = rememberWindowState(
+                    position = WindowPosition.Aligned(Alignment.Center),
+                    width = 560.dp,
+                    // Tall enough for Confirm (transcript + pickers + Start/Cancel). The card
+                    // centers in the transparent window, so Recording stays compact visually.
+                    height = 580.dp,
+                ),
+                icon = appIcon,
+                onPreviewKeyEvent = { event ->
+                    val newThread = KeyCombo.decode(workspaceStore.state.value.voiceNewThreadShortcut)
+                    if (
+                        newThread != null &&
+                        event.type == KeyEventType.KeyDown &&
+                        newThread.matches(event)
+                    ) {
+                        handleVoiceNewThreadHotKey()
+                        true
+                    } else {
+                        false
+                    }
+                },
+            ) {
+                AndyTheme {
+                    VoiceNewThreadOverlayContent(
+                        services = services,
+                        workspaceState = workspaceState,
+                        actionsConfig = actionsConfig,
+                        initialBlocker = voiceOverlayBlocker,
+                        stopRequestId = voiceOverlayStopRequest,
+                        onRecordingChanged = { voiceOverlayRecording = it },
+                        onClose = { closeVoiceOverlay() },
+                        onOpenSettings = {
+                            closeVoiceOverlay()
+                            open(AndyDestination.Settings)
+                        },
+                        onOpenMicPrivacySettings = { openMicPrivacySettings() },
+                    )
                 }
             }
         }

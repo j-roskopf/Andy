@@ -722,6 +722,12 @@ interface AgentRunService {
     fun isViewing(taskId: String): Boolean = false
 
     /**
+     * Suspends until the persisted chat list has been loaded into [tasks] once.
+     * Plugin event wiring uses this so store hydration is not mistaken for N new panes.
+     */
+    suspend fun awaitTasksLoaded() = Unit
+
+    /**
      * Publishes window visibility/focus. Losing focus makes the open chat behave like a
      * background one for attention purposes; regaining it marks that chat read again.
      */
@@ -1326,6 +1332,13 @@ data class AndyServices(
     val notificationSounds: NotificationSoundPlayer = NoopNotificationSoundPlayer,
     val voiceSetup: VoiceSetupService = UnavailableVoiceSetupService,
     val voiceDictation: VoiceDictationService = UnavailableVoiceDictationService,
+    /**
+     * macOS Carbon global hotkey for voice-new-thread. False on Windows/Linux so Settings
+     * hides the shortcut row rather than recording a dead combo.
+     */
+    val supportsGlobalVoiceHotKey: Boolean = false,
+    /** Why the last global hotkey registration failed, if any. */
+    val globalVoiceHotKeyError: StateFlow<String?> = MutableStateFlow(null),
     val orchestrationPreferences: OrchestrationPreferencesService = UnavailableOrchestrationPreferencesService,
     val localServers: LocalServerService = UnavailableLocalServerService,
     val remoteSession: RemoteSessionService = UnavailableRemoteSessionService,

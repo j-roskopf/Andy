@@ -177,6 +177,11 @@ class DesktopWorkspaceStore(
             agentNotificationSoundEnabled = props.getProperty("agentNotificationSoundEnabled")?.toBooleanStrictOrNull() ?: true,
             agentIconBadgeEnabled = props.getProperty("agentIconBadgeEnabled")?.toBooleanStrictOrNull() ?: true,
             voiceDictationShortcut = props.getProperty("voiceDictationShortcut")?.takeIf { it.isNotBlank() },
+            voiceNewThreadShortcut = props.getProperty("voiceNewThreadShortcut")?.takeIf { it.isNotBlank() },
+            voiceDefaultAgent = props.getProperty("voiceDefaultAgent")?.takeIf { it.isNotBlank() },
+            voiceDefaultModel = props.getProperty("voiceDefaultModel")?.takeIf { it.isNotBlank() },
+            voiceDefaultAutonomy = props.getProperty("voiceDefaultAutonomy")?.takeIf { it.isNotBlank() } ?: "Standard",
+            voiceDefaultProjectId = props.getProperty("voiceDefaultProjectId")?.takeIf { it.isNotBlank() },
             keepAgentSessionsOnShutdown = props.getProperty("keepAgentSessionsOnShutdown")?.toBooleanStrictOrNull() ?: false,
             agentNotificationTiming = props.getProperty("agentNotificationTiming")?.let { value -> AgentNotificationTiming.entries.firstOrNull { it.name == value } } ?: AgentNotificationTiming.BackgroundOnly,
             agentNotificationSoundId = props.getProperty("agentNotificationSoundId")?.takeIf { id -> AgentNotificationSound.entries.any { it.id == id } } ?: AgentNotificationSound.Chime.id,
@@ -327,6 +332,11 @@ class DesktopWorkspaceStore(
             setProperty("agentNotificationSoundEnabled", state.agentNotificationSoundEnabled.toString())
             setProperty("agentIconBadgeEnabled", state.agentIconBadgeEnabled.toString())
             setProperty("voiceDictationShortcut", state.voiceDictationShortcut.orEmpty())
+            setProperty("voiceNewThreadShortcut", state.voiceNewThreadShortcut.orEmpty())
+            setProperty("voiceDefaultAgent", state.voiceDefaultAgent.orEmpty())
+            setProperty("voiceDefaultModel", state.voiceDefaultModel.orEmpty())
+            setProperty("voiceDefaultAutonomy", state.voiceDefaultAutonomy)
+            setProperty("voiceDefaultProjectId", state.voiceDefaultProjectId.orEmpty())
             setProperty("keepAgentSessionsOnShutdown", state.keepAgentSessionsOnShutdown.toString())
             setProperty("agentNotificationTiming", state.agentNotificationTiming.name)
             setProperty("agentNotificationSoundId", state.agentNotificationSoundId)

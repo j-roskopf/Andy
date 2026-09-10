@@ -20,7 +20,11 @@ sealed interface MobileNavKey : NavKey {
     data class EditHost(val hostId: String? = null) : MobileNavKey
 
     @Serializable
-    data object NewChat : MobileNavKey
+    data class NewChat(
+        /** Prefill from voice / assistant; null keeps the empty composer. */
+        val initialPrompt: String? = null,
+        val fromVoice: Boolean = false,
+    ) : MobileNavKey
 
     @Serializable
     data class Chat(val chatId: String) : MobileNavKey
