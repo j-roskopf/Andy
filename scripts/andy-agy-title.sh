@@ -36,8 +36,8 @@ fi
 
 HOOK="${HOME}/.andy/bin/andy-status-hook.sh"
 if [ -x "$HOOK" ] && [ -n "$status" ]; then
-  # Status is the argv; stdin gates are unused here (payload already consumed).
-  printf '' | "$HOOK" "$status" >/dev/null 2>&1 || true
+  # Status is the argv; pass gate 'title' so title ticks do not clobber Stop hook done.
+  printf '' | "$HOOK" "$status" none title >/dev/null 2>&1 || true
 fi
 
 # Keep the title short; markers must stay literal for OSC scrape.

@@ -1,0 +1,22 @@
+id = "examples.webhook-notify"
+name = "Webhook Notify"
+version = "0.1.0"
+min_andy_version = "0.1.0"
+description = "POST JSON to a webhook when an agent finishes or blocks"
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "test"
+title = "Send test webhook"
+contexts = ["global"]
+command = ["node", "notify.mjs", "--test"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "notify.mjs"]
+
+[[panes]]
+id = "log"
+title = "Webhook log"
+placement = "tab"
+command = ["node", "log.mjs"]

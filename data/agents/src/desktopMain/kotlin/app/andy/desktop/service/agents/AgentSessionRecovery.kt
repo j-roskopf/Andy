@@ -133,9 +133,27 @@ private fun AgentTask.asCompletedTurn(): AgentTask = copy(
 internal fun readLatestHookStatus(artifactDir: File): AgentStatus? {
     val file = File(artifactDir, "status.json")
     if (!file.isFile) return null
-    return file.readLines()
-        .asReversed()
-        .firstNotNullOfOrNull { line -> line.takeIf { it.isNotBlank() }?.let(::parseStatusJson) }
+    val parsed = file.readLines()
+        .asSequence()
+        .filter { it.isNotBlank() }
+        .mapNotNull { line ->
+            val status = parseStatusJson(line) ?: return@mapNotNull null
+            val at = Regex(""""at"\s*:\s*(\d+)""").find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            status to at
+        }
+        .toList()
+    if (parsed.isEmpty()) return null
+
+    val latest = parsed.last()
+    // If the latest line is Working, but it immediately followed Done within 2 seconds
+    // (the title.command race condition clobbering Stop hook), prefer Done.
+    if (latest.first == AgentStatus.Working && parsed.size >= 2) {
+        val previous = parsed[parsed.size - 2]
+        if (previous.first == AgentStatus.Done && (latest.second - previous.second) in 0L..2L) {
+            return AgentStatus.Done
+        }
+    }
+    return latest.first
 }
 
 internal fun scrollbackLooksBlocked(agent: AgentKind, scrollback: String): Boolean =

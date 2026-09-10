@@ -148,7 +148,8 @@ class AgentTranscriptTest {
     }
 
     @Test
-    fun reverseTranscriptBottomIsIndexZeroWithNoOffset() {
+    fun reverseTranscriptBottomHelperKeepsLegacyIndexZeroContract() {
+        // Index/offset-only helper is reverse-era; live edge checks use LazyListState.
         assertTrue(transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 0))
         assertTrue(transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 1))
         assertTrue(!transcriptIsAtBottom(firstVisibleItemIndex = 0, firstVisibleItemScrollOffset = 2))
@@ -338,6 +339,19 @@ class AgentTranscriptTest {
         val text = assertIs<AgentEvent.AssistantText>(merged.single())
         assertEquals(10, text.atMillis)
         assertEquals("Hello", text.text)
+    }
+
+    @Test
+    fun coalesceSealsStreamDeltaWhenBarrierArrives() {
+        val merged = coalesceAgentStreamDeltas(
+            existing = listOf(AgentEvent.AssistantText(atMillis = 10, text = "Hello", isStreamDelta = true)),
+            incoming = listOf(
+                AgentEvent.TaskResult(atMillis = 11, success = true, finalText = "Hello"),
+            ),
+        )
+        val text = assertIs<AgentEvent.AssistantText>(merged.first())
+        assertEquals(false, text.isStreamDelta)
+        assertIs<AgentEvent.TaskResult>(merged.last())
     }
 
     @Test

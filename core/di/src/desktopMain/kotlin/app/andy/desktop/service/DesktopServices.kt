@@ -26,7 +26,9 @@ import app.andy.desktop.service.agents.OpenClawAdapter
 import app.andy.desktop.service.agents.GooseAdapter
 import app.andy.desktop.service.agents.WorktreeManager
 import app.andy.desktop.service.automations.DesktopAutomationService
+import app.andy.desktop.service.plugins.DesktopPluginService
 import app.andy.desktop.service.inspector.DesktopAppDatabaseService
+import app.andy.updates.AndyBuildInfo
 import app.andy.desktop.service.inspector.DesktopSharedPrefsService
 import app.andy.desktop.service.ios.DesktopIosAppDatabaseService
 import app.andy.desktop.service.ios.DesktopIosAppService
@@ -237,7 +239,12 @@ fun createDaemonRuntime(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         startScheduler = true,
     )
-    mcp.bindAgentServices(agentRuns, agentRuns, automations)
+    val plugins = DesktopPluginService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        actionRuns = actionRuns,
+        andyVersion = { AndyBuildInfo.versionName },
+    ).also { it.attachAgentEvents(agentRuns) }
+    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins)
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -302,6 +309,7 @@ fun createDaemonRuntime(
         projectWorkflows = agentRuns,
         kanban = kanban,
         automations = automations,
+        plugins = plugins,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
@@ -311,6 +319,8 @@ fun createDaemonRuntime(
             acceleratedMirror = NativeMirrorJni.isEmbeddedPresentationSupported(),
         ),
     )
+
+    plugins.runStartupHooks()
 
     // Unix socket first (blocking, no nested runBlocking/IO), then HTTP for agent CLIs.
     System.err.println("andyd: binding unix socket ${socketPath.absolutePath}")
@@ -571,10 +581,16 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     )
     remoteShellRef.set { remoteSession.shellEndpoint() }
 
+    val plugins = DesktopPluginService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        actionRuns = actionRuns,
+        andyVersion = { AndyBuildInfo.versionName },
+    ).also { it.attachAgentEvents(swappableAgents) }
     // Network Access HTTP may be started by the GUI when andyd's port is free (or for
     // local tool MCP). Bind the daemon-client agent mirror so /api/chats and /ws/attention
     // are not empty / silent on an unbound DesktopMcpServerService.
-    mcp.bindAgentServices(swappableAgents, swappableAgents, swappableAutomations)
+    mcp.bindAgentServices(swappableAgents, swappableAgents, swappableAutomations, plugins)
+    plugins.runStartupHooks()
 
     // Kanban persistence lives in ~/.andy/agents.db, which andyd owns in this mode.
     // Do not open a second writer here — use UnavailableKanbanService until the daemon
@@ -638,6 +654,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         projectWorkflows = swappableAgents,
         kanban = kanban,
         automations = swappableAutomations,
+        plugins = plugins,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,
@@ -778,7 +795,13 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         startScheduler = true,
     )
-    mcp.bindAgentServices(agentRuns, agentRuns, automations)
+    val plugins = DesktopPluginService(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        actionRuns = actionRuns,
+        andyVersion = { AndyBuildInfo.versionName },
+    ).also { it.attachAgentEvents(agentRuns) }
+    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins)
+    plugins.runStartupHooks()
     val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
     val localAttach = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -939,6 +962,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         projectWorkflows = swappableAgents,
         kanban = kanban,
         automations = swappableAutomations,
+        plugins = plugins,
         notificationSounds = DesktopNotificationSoundPlayer(),
         voiceSetup = voiceSetup,
         voiceDictation = voiceDictation,

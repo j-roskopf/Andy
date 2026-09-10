@@ -3,7 +3,7 @@
 # Installed to ~/.andy/bin/andy-status-hook.sh by the Andy desktop app, andyd, or install-andy.sh.
 # Usage: andy-status-hook.sh <working|done|blocked|error> [respond] [gate]
 # respond: none (default) | empty | allow | stop
-# gate: none (default) | fully-idle | completed
+# gate: none (default) | fully-idle | completed | title
 #
 # Resolves the active task via $ANDY_TASK_ID when set (per-session), else
 # $ANDY_PROJECT_ROOT/.andy/active-task (default: $PWD/.andy/active-task).
@@ -49,5 +49,22 @@ if [ -z "$task_id" ]; then
 fi
 dir="$ROOT/.andy/$task_id"
 mkdir -p "$dir"
-printf '{"status":"%s","at":%s}\n' "$status" "$(date +%s)" >> "$dir/status.json"
+status_file="$dir/status.json"
+
+last_status=""
+if [ -f "$status_file" ]; then
+  last_status=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$status_file" 2>/dev/null | tail -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+fi
+
+# Deduplicate consecutive identical statuses.
+if [ "$last_status" = "$status" ]; then
+  respond_and_exit
+fi
+
+# Title script ticks must never clobber an authoritative done from Stop hook.
+if [ "$gate" = "title" ] && [ "$status" = "working" ] && [ "$last_status" = "done" ]; then
+  respond_and_exit
+fi
+
+printf '{"status":"%s","at":%s}\n' "$status" "$(date +%s)" >> "$status_file"
 respond_and_exit

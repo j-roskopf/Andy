@@ -673,10 +673,69 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
     ScreenRule(
         id = "andy_osc_title_blocked",
         state = ScreenState.Blocked,
-        priority = 1200,
+        priority = 1300,
         region = ScreenRegion.OscTitle,
         visibleBlocker = true,
         gate = ScreenGate(contains = listOf("andy:blocked")),
+    ),
+    // Interactive choices / questions (e.g. ask_question, choices prompt).
+    // Priority > 1100 so it overrides andy_osc_title_working when waiting for user input.
+    ScreenRule(
+        id = "interactive_selection_blocker",
+        state = ScreenState.Blocked,
+        priority = 1250,
+        region = ScreenRegion.BottomNonEmpty(10),
+        visibleBlocker = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(
+                    contains = listOf("enter to select"),
+                    any = listOf(
+                        ScreenGate(contains = listOf("esc to cancel")),
+                        ScreenGate(contains = listOf("to navigate")),
+                        ScreenGate(contains = listOf("↑/↓")),
+                        ScreenGate(contains = listOf("arrow")),
+                    ),
+                ),
+                ScreenGate(contains = listOf("enter to submit")),
+                ScreenGate(contains = listOf("press enter to confirm")),
+            ),
+        ),
+    ),
+    // Concrete permission prompts. Priority > 1100 so it overrides andy_osc_title_working.
+    ScreenRule(
+        id = "permission_prompt",
+        state = ScreenState.Blocked,
+        priority = 1240,
+        region = ScreenRegion.WholeRecent,
+        visibleBlocker = true,
+        gate = ScreenGate(
+            contains = listOf("requesting permission for:"),
+            any = listOf(
+                ScreenGate(contains = listOf("do you want to proceed?")),
+                ScreenGate(contains = listOf("tab amend", "edit command")),
+            ),
+        ),
+    ),
+    ScreenRule(
+        id = "andy_generic_blocker",
+        state = ScreenState.Blocked,
+        priority = 1230,
+        region = ScreenRegion.WholeRecent,
+        visibleBlocker = true,
+        gate = ScreenGate(
+            any = listOf(
+                ScreenGate(contains = listOf("allow this action")),
+                ScreenGate(contains = listOf("do you want to proceed?")),
+                ScreenGate(
+                    contains = listOf("approve"),
+                    any = listOf(
+                        ScreenGate(contains = listOf("(y")),
+                        ScreenGate(contains = listOf("yes")),
+                    ),
+                ),
+            ),
+        ),
     ),
     ScreenRule(
         id = "andy_osc_title_working",
@@ -694,36 +753,26 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
         visibleIdle = true,
         gate = ScreenGate(contains = listOf("andy:idle")),
     ),
+    // Visible terminal working cues (spinners, Thinking, esc to interrupt/cancel).
     ScreenRule(
-        id = "permission_prompt",
-        state = ScreenState.Blocked,
-        priority = 300,
-        region = ScreenRegion.WholeRecent,
-        visibleBlocker = true,
+        id = "spinner_working",
+        state = ScreenState.Working,
+        priority = 950,
+        region = ScreenRegion.BottomNonEmpty(8),
+        visibleWorking = true,
         gate = ScreenGate(
-            contains = listOf("requesting permission for:"),
             any = listOf(
-                ScreenGate(contains = listOf("do you want to proceed?")),
-                ScreenGate(contains = listOf("tab amend", "edit command")),
+                ScreenGate(contains = listOf("esc to cancel")),
+                ScreenGate(contains = listOf("esc to interrupt")),
+                ScreenGate(contains = listOf("ctrl+c to stop")),
+                ScreenGate(contains = listOf("ctrl+c to interrupt")),
+                ScreenGate(lineRegex = listOf(Regex("""^\s*[\u2800-\u28FF]+\s+\p{L}+\w*ing\b"""))),
+                ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Generating|Executing|Running|Building)\b"""))),
             ),
-        ),
-    ),
-    ScreenRule(
-        id = "andy_generic_blocker",
-        state = ScreenState.Blocked,
-        priority = 280,
-        region = ScreenRegion.WholeRecent,
-        gate = ScreenGate(
-            any = listOf(
-                ScreenGate(contains = listOf("allow this action")),
+            not = listOf(
+                ScreenGate(contains = listOf("enter to select")),
+                ScreenGate(contains = listOf("requesting permission for:")),
                 ScreenGate(contains = listOf("do you want to proceed?")),
-                ScreenGate(
-                    contains = listOf("approve"),
-                    any = listOf(
-                        ScreenGate(contains = listOf("(y")),
-                        ScreenGate(contains = listOf("yes")),
-                    ),
-                ),
             ),
         ),
     ),
@@ -738,6 +787,16 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
                 ScreenGate(lineRegex = listOf(Regex(""">\s*$"""))),
                 ScreenGate(lineRegex = listOf(Regex("""›\s*$"""))),
                 ScreenGate(lineRegex = listOf(Regex("""❯\s*$"""))),
+            ),
+            not = listOf(
+                ScreenGate(contains = listOf("esc to cancel")),
+                ScreenGate(contains = listOf("esc to interrupt")),
+                ScreenGate(contains = listOf("ctrl+c to stop")),
+                ScreenGate(contains = listOf("do you want to proceed")),
+                ScreenGate(contains = listOf("requesting permission")),
+                ScreenGate(contains = listOf("enter to select")),
+                ScreenGate(regex = listOf(Regex("""[\u2800-\u28FF]"""))),
+                ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Generating|Executing|Running|Building)\b"""))),
             ),
         ),
     ),

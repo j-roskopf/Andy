@@ -117,6 +117,46 @@ class AgentStatusScenarioTest {
     }
 
     @Test
+    fun antigravityPermissionOverridesWorkingTitle() = runScenario(AgentKind.Antigravity) {
+        osc(title = "agy andy:working")
+        screen(
+            """
+            Requesting permission for:
+            do you want to proceed?
+            """.trimIndent(),
+        ).expect(AgentStatus.Blocked)
+
+        osc(title = "agy andy:idle")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Done)
+    }
+
+    @Test
+    fun antigravityInteractiveSelectionOverridesWorkingTitle() = runScenario(AgentKind.Antigravity) {
+        osc(title = "agy andy:working")
+        screen(
+            """
+            Select an option:
+            ❯ 1. Proceed
+              2. Cancel
+            enter to select · esc to cancel · ↑/↓ to navigate
+            """.trimIndent(),
+        ).expect(AgentStatus.Blocked)
+
+        osc(title = "agy andy:idle")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Done)
+    }
+
+    @Test
+    fun antigravityDoneHookWithStaleWorkingTitleStaysDone() = runScenario(AgentKind.Antigravity) {
+        File(artifactDir, "status.json").writeText("""{"status":"done","at":100}""" + "\n")
+        osc(title = "agy andy:working")
+        screen("Antigravity agent ready\n> ")
+            .expect(AgentStatus.Done)
+    }
+
+    @Test
     fun antigravityBootIdlePromptStaysWorkingUntilTurnArmed() = runScenario(AgentKind.Antigravity, suppressPrematureIdle = true) {
         tracker.markUserWorking()
         screen("Antigravity agent ready\n> ")
@@ -236,6 +276,7 @@ class AgentStatusScenarioTest {
         val tracker: AgentStatusTracker,
         val session: ScenarioSession,
         val statuses: MutableList<AgentStatus>,
+        val artifactDir: File,
     ) {
         suspend fun screen(text: String): Expect {
             session.emitBuffer(text)
@@ -280,7 +321,7 @@ class AgentStatusScenarioTest {
                 suppressPrematureIdle = suppressPrematureIdle,
             )
             tracker.start()
-            ScenarioRobot(tracker, session, statuses).block()
+            ScenarioRobot(tracker, session, statuses, artifactDir).block()
             tracker.close()
         } finally {
             scope.cancel()

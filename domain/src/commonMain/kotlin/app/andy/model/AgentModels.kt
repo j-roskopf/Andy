@@ -1755,9 +1755,30 @@ fun coalesceAgentStreamDeltas(
             mergeStreamDelta(transcript, event)
         event is AgentEvent.Thinking && event.isStreamDelta ->
             mergeStreamDelta(transcript, event)
-        event is AgentEvent.PlanUpdate -> mergePlanUpdate(transcript, event)
-        else -> transcript + event
+        event is AgentEvent.PlanUpdate ->
+            mergePlanUpdate(sealOpenStreamDeltas(transcript), event)
+        else -> sealOpenStreamDeltas(transcript) + event
     }
+}
+
+/** Mark open assistant/thinking stream rows as final so UI can switch to markdown. */
+private fun sealOpenStreamDeltas(transcript: List<AgentEvent>): List<AgentEvent> {
+    var changed = false
+    val out = transcript.toMutableList()
+    for (i in out.indices) {
+        when (val event = out[i]) {
+            is AgentEvent.AssistantText -> if (event.isStreamDelta) {
+                out[i] = event.copy(isStreamDelta = false)
+                changed = true
+            }
+            is AgentEvent.Thinking -> if (event.isStreamDelta) {
+                out[i] = event.copy(isStreamDelta = false)
+                changed = true
+            }
+            else -> Unit
+        }
+    }
+    return if (changed) out else transcript
 }
 
 /**

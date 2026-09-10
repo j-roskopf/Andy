@@ -226,6 +226,7 @@ class AgentStatusTracker(
             scrapeHint = scrapeHint,
             scrapeBlocked = scrape.isCurrentlyBlocked(),
             scrapeWorking = scrape.showsWorkingIndicator(),
+            scrapeVisibleWorking = scrape.showsVisibleWorking(),
         ) ?: return
         // Soft idle stays Done (Herdr idle fallback). Do not invent Working — that trapped
         // Codex/Claude at Working forever when the prompt had placeholder text and no OSC
@@ -272,13 +273,20 @@ class AgentStatusTracker(
         }
         AgentStatus.Done, AgentStatus.Error -> {
             if (scrape.isCurrentlyBlocked()) return false
-            if (scrape.showsWorkingIndicator()) return false
             if (usesStructuredStatusAuthority(agent)) {
-                when (readLatestHookStatus(artifactDir)) {
+                val latestHook = readLatestHookStatus(artifactDir)
+                if (latestHook == AgentStatus.Done) {
+                    // Stale OSC title (andy:working) must not break Done latch; only visible
+                    // on-screen working chrome (spinners/thinking) can break Done.
+                    if (scrape.showsVisibleWorking()) return false
+                    return true
+                }
+                when (latestHook) {
                     AgentStatus.Working, AgentStatus.Blocked -> return false
                     else -> Unit
                 }
             }
+            if (scrape.showsWorkingIndicator()) return false
             true
         }
         AgentStatus.Working -> {
@@ -308,8 +316,9 @@ internal fun usesStructuredStatusAuthority(agent: AgentKind): Boolean =
 
 /**
  * Merge structured hook/title status with screen scrape.
- * Blocked/Working from either source win over Done; scrape permission chrome can
- * elevate to Blocked even when hooks only reported Working.
+ * Blocked from either source wins; for Antigravity (where status.json is authority),
+ * an authoritative Done from hooks is not overridden by a lagging OSC working title,
+ * but real on-screen visible working chrome or blockers can override.
  */
 internal fun combineHookAndScrapeStatus(
     agent: AgentKind,
@@ -317,15 +326,18 @@ internal fun combineHookAndScrapeStatus(
     scrapeHint: AgentStatus?,
     scrapeBlocked: Boolean,
     scrapeWorking: Boolean,
+    scrapeVisibleWorking: Boolean = false,
 ): AgentStatus? {
     if (!usesStructuredStatusAuthority(agent) || hookStatus == null) {
         return scrapeHint
     }
     return when {
         scrapeBlocked || hookStatus == AgentStatus.Blocked -> AgentStatus.Blocked
-        scrapeWorking || hookStatus == AgentStatus.Working -> AgentStatus.Working
+        hookStatus == AgentStatus.Done -> {
+            if (scrapeVisibleWorking) AgentStatus.Working else AgentStatus.Done
+        }
         hookStatus == AgentStatus.Error -> AgentStatus.Error
-        hookStatus == AgentStatus.Done -> AgentStatus.Done
+        scrapeWorking || hookStatus == AgentStatus.Working -> AgentStatus.Working
         else -> scrapeHint ?: hookStatus
     }
 }
@@ -387,7 +399,9 @@ class ScrapeStatusSource(
 
     fun showsVisibleWorking(): Boolean {
         val match = lastMatch ?: evaluateCurrent().also { lastMatch = it }
-        return match.visibleWorking
+        if (!match.visibleWorking) return false
+        if (agent == AgentKind.Antigravity && match.ruleId == "andy_osc_title_working") return false
+        return true
     }
 
     fun showsWorkingIndicator(): Boolean {

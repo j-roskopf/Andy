@@ -87,6 +87,80 @@ class DesktopActionRunService(
         cwdOverride = cwdOverride,
     )
 
+    override fun startCommand(
+        title: String,
+        argv: List<String>,
+        cwd: String,
+        env: Map<String, String>,
+        projectId: String,
+        actionId: String,
+    ): String {
+        require(argv.isNotEmpty()) { "argv must not be empty" }
+        val runId = "run-${nextRun.getAndIncrement()}"
+        val snapshot = RunningAction(
+            runId = runId,
+            projectId = projectId,
+            actionId = actionId,
+            actionName = title,
+            icon = "puzzle",
+            command = argv.joinToString(" "),
+            cwd = cwd,
+            status = ActionRunStatus.Starting,
+            startedAtMillis = System.currentTimeMillis(),
+        )
+        _running.update { it + snapshot }
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val environment = buildTerminalLaunchEnvironment(env)
+                spawnSession(runId, argv, cwd, environment)
+            }.fold(
+                onSuccess = { rustTerminal ->
+                    val registered = synchronized(lifecycleLock) {
+                        val stillStarting = _running.value
+                            .firstOrNull { it.runId == runId }
+                            ?.status == ActionRunStatus.Starting
+                        if (!stillStarting) {
+                            false
+                        } else {
+                            handles[runId] = RunHandle(rustTerminal, rustTerminal)
+                            _running.update { runs ->
+                                runs.map { run ->
+                                    if (run.runId == runId && run.status == ActionRunStatus.Starting) {
+                                        run.copy(status = ActionRunStatus.Running)
+                                    } else {
+                                        run
+                                    }
+                                }
+                            }
+                            true
+                        }
+                    }
+                    if (!registered) {
+                        runCatching { rustTerminal.close() }
+                        return@launch
+                    }
+                    val exitCode = runCatching {
+                        rustTerminal.exitCode.first { it != null }
+                    }.getOrNull() ?: -1
+                    markComplete(
+                        runId,
+                        if (exitCode == 0) ActionRunStatus.Exited else ActionRunStatus.Failed,
+                        exitCode,
+                    )
+                },
+                onFailure = {
+                    markComplete(runId, ActionRunStatus.Failed, null)
+                    synchronized(lifecycleLock) {
+                        if (_running.value.any { it.runId == runId }) {
+                            handles[runId] = RunHandle(null, null)
+                        }
+                    }
+                },
+            )
+        }
+        return runId
+    }
+
     override fun run(project: ActionProject, action: ProjectAction, cwdOverride: String?): String {
         val command = action.command.takeIf { it.isNotBlank() }
         val cwd = resolveCwd(project, action, cwdOverride)

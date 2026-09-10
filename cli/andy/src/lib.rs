@@ -18,6 +18,7 @@ pub mod events;
 pub mod file_picker;
 pub mod loading;
 pub mod mcp;
+pub mod plugin_cli;
 pub mod remote;
 pub mod skills;
 pub mod slash;

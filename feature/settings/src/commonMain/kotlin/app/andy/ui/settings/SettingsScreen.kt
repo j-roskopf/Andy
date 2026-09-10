@@ -174,6 +174,7 @@ private enum class DesktopSettingsCategory(
     Agents("Agents", "Sessions, orchestration, and notifications"),
     Proxy("Proxy", "HTTP debug capture proxy"),
     Mcp("MCP", "Server, tools, and client setup"),
+    Plugins("Plugins", "Install, enable, and run workflow plugins"),
     Updates("Updates", "Version, desktop app, CLI, andyd, and extras"),
     Onboarding("Onboarding", "Replay guided introductions"),
 }
@@ -287,6 +288,7 @@ fun SettingsScreen(
                     mcpServerPort = workspaceState.mcpServerPort,
                 )
             }
+            DesktopSettingsCategory.Plugins -> PluginsPanel(services = services)
             DesktopSettingsCategory.Updates -> UpdatesPanel(
                 updates = services.updates,
                 runtimeBundle = services.runtimeBundle,
@@ -2674,6 +2676,192 @@ private fun McpToolsPanel(toolNames: List<String>) {
                 ) {
                     Text(tool, color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PluginsPanel(services: AndyServices) {
+    val scope = rememberCoroutineScope()
+    val plugins by services.plugins.plugins.collectAsState()
+    val logs by services.plugins.commandLogs.collectAsState()
+    var linkPath by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    fun reload(message: String? = null) {
+        busy = true
+        scope.launch {
+            status = runCatching {
+                services.plugins.refresh()
+                message ?: "Loaded ${services.plugins.plugins.value.size} plugin(s)"
+            }.getOrElse { "Error: ${it.message}" }
+            busy = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        runCatching { services.plugins.refresh() }
+    }
+
+    SettingsGroup(
+        title = "Plugins",
+        description = "Out-of-process workflow packages with andy-plugin.toml. " +
+            "Linked plugins are stored in ~/.andy/plugins.json and show up here after Link or Refresh. " +
+            "Use an absolute path (relative paths resolve inside Andy.app).",
+    ) {
+        TextField(
+            linkPath,
+            { linkPath = it },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            colors = fieldColors(),
+            placeholder = {
+                Text(
+                    "/absolute/path/to/plugin (or samples/plugins/… via CLI)",
+                    color = TextSecondary,
+                )
+            },
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                enabled = !busy && linkPath.isNotBlank(),
+                onClick = {
+                    busy = true
+                    scope.launch {
+                        status = runCatching {
+                            val info = services.plugins.link(linkPath.trim())
+                            "Linked ${info.pluginId}" +
+                                if (info.warnings.isEmpty()) "" else " (${info.warnings.joinToString()})"
+                        }.getOrElse { "Error: ${it.message}" }
+                        busy = false
+                    }
+                },
+            ) { Text("Link") }
+            OutlinedButton(
+                enabled = !busy,
+                onClick = { reload() },
+            ) { Text("Refresh") }
+        }
+        status?.let { Text(it, color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont) }
+
+        if (plugins.isEmpty()) {
+            Text(
+                "No plugins installed yet. Link a folder with andy-plugin.toml, e.g.\n" +
+                    "andy plugin link samples/plugins/webhook-notify",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        } else {
+            plugins.forEach { plugin ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = AndySpace.Space2),
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space1),
+                ) {
+                    Text("${plugin.name} (${plugin.pluginId})", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "v${plugin.version} · ${if (plugin.enabled) "enabled" else "disabled"} · ${plugin.source.kind.name.lowercase()}",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        fontFamily = MonoFont,
+                    )
+                    Text(plugin.pluginRoot, color = TextSecondary, fontSize = 11.sp, fontFamily = MonoFont)
+                    plugin.description?.let {
+                        Text(it, color = TextSecondary, fontSize = 12.sp)
+                    }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    services.plugins.setEnabled(plugin.pluginId, !plugin.enabled)
+                                }
+                            },
+                        ) { Text(if (plugin.enabled) "Disable" else "Enable") }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    runCatching {
+                                        val dir = services.plugins.configDir(plugin.pluginId)
+                                        status = "Config: $dir"
+                                    }
+                                }
+                            },
+                        ) { Text("Config dir") }
+                        plugin.actions.firstOrNull()?.let { action ->
+                            OutlinedButton(
+                                enabled = plugin.enabled && !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        status = runCatching {
+                                            val log = services.plugins.invokeAction(action.id, plugin.pluginId)
+                                            "Action ${action.id} exit=${log.exitCode}"
+                                        }.getOrElse { "Error: ${it.message}" }
+                                        busy = false
+                                    }
+                                },
+                            ) { Text("Run ${action.title}") }
+                        }
+                        plugin.panes.firstOrNull()?.let { pane ->
+                            OutlinedButton(
+                                enabled = plugin.enabled && !busy,
+                                onClick = {
+                                    busy = true
+                                    scope.launch {
+                                        status = runCatching {
+                                            val session = services.plugins.openPane(plugin.pluginId, pane.id)
+                                            "Opened pane ${session.paneId}"
+                                        }.getOrElse { "Error: ${it.message}" }
+                                        busy = false
+                                    }
+                                },
+                            ) { Text("Open ${pane.title}") }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    status = runCatching {
+                                        if (plugin.source.kind == app.andy.model.PluginSourceKind.Local) {
+                                            services.plugins.unlink(plugin.pluginId)
+                                            "Unlinked ${plugin.pluginId}"
+                                        } else {
+                                            services.plugins.uninstall(plugin.pluginId)
+                                            "Uninstalled ${plugin.pluginId}"
+                                        }
+                                    }.getOrElse { "Error: ${it.message}" }
+                                }
+                            },
+                        ) {
+                            Text(
+                                if (plugin.source.kind == app.andy.model.PluginSourceKind.Local) {
+                                    "Unlink"
+                                } else {
+                                    "Uninstall"
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (logs.isNotEmpty()) {
+            Text("Recent command logs", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+            logs.take(8).forEach { log ->
+                Text(
+                    "${log.pluginId} ${log.kind} exit=${log.exitCode ?: "?"}",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                )
             }
         }
     }
