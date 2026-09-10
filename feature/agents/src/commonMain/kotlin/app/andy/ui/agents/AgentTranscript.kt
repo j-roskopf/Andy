@@ -476,14 +476,28 @@ fun AgentTranscript(
     // frame behind the jump.
     LaunchedEffect(taskId, listState, scrollInitialized) {
         if (!scrollInitialized) return@LaunchedEffect
-        var sawProgrammatic = false
+        // Track a scroll "session" from isScrollInProgress true -> false. Only a session that
+        // never touched the programmatic flag is a real user settle; programmatic jumps must not
+        // re-evaluate the live edge (the flag clears one emission after the scroll ends, which
+        // previously let a lagging layout clear follow right after "jump to latest").
+        var inSession = false
+        var sessionProgrammatic = false
         snapshotFlow {
             listState.isScrollInProgress to programmaticScroll.active
         }.distinctUntilChanged().collect { (inProgress, programmatic) ->
-            if (programmatic) sawProgrammatic = true
-            if (inProgress) return@collect
-            if (sawProgrammatic) {
-                sawProgrammatic = false
+            if (inProgress) {
+                if (!inSession) {
+                    inSession = true
+                    sessionProgrammatic = programmatic
+                } else if (programmatic) {
+                    sessionProgrammatic = true
+                }
+                return@collect
+            }
+            if (!inSession) return@collect
+            inSession = false
+            if (sessionProgrammatic) {
+                sessionProgrammatic = false
                 return@collect
             }
             stickToBottom = listState.isAtLiveEdge()
@@ -494,10 +508,18 @@ fun AgentTranscript(
     LaunchedEffect(taskId, listState, scrollInitialized, wheelScrollTicks) {
         if (!scrollInitialized) return@LaunchedEffect
         wheelScrollTicks.collectLatest {
+            // Let the scroll settle first (frames 1-2 often catch it mid-flight and would
+            // misread the position), then keep checking across more frames so a live edge that
+            // is only reached late is not missed with no retry.
             withFrameMillis { }
             withFrameMillis { }
-            if (listState.isAtLiveEdge()) {
-                stickToBottom = true
+            var rearmed = false
+            repeat(3) {
+                if (!rearmed && listState.isAtLiveEdge()) {
+                    stickToBottom = true
+                    rearmed = true
+                }
+                withFrameMillis { }
             }
         }
     }

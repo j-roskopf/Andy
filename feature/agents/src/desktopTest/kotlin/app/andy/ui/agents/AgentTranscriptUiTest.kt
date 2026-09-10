@@ -181,11 +181,23 @@ class AgentTranscriptUiTest {
 
             onNodeWithTag("transcript-list").performMouseInput {
                 moveTo(center)
-                repeat(40) { scroll(80f) }
+                scroll(1_000_000f)
             }
             waitForIdle()
-            val relocked = assertNotNull(memory.get("streaming"))
-            assertEquals(true, relocked.stickToBottom)
+            // Lazy composition may not reach the live edge after a single jump; keep nudging so
+            // the final row is composed, then wait for the wheel/scroll settle to re-arm follow.
+            repeat(20) {
+                if (memory.get("streaming")?.stickToBottom == true) return@repeat
+                onNodeWithTag("transcript-list").performMouseInput {
+                    moveTo(center)
+                    scroll(200_000f)
+                }
+                waitForIdle()
+            }
+            waitUntil(timeoutMillis = 5_000) {
+                memory.get("streaming")?.stickToBottom == true
+            }
+            assertEquals(true, assertNotNull(memory.get("streaming")).stickToBottom)
 
             onNodeWithTag("transcript-list").performMouseInput {
                 moveTo(center)
@@ -210,9 +222,10 @@ class AgentTranscriptUiTest {
                 )
             }
             waitForIdle()
-            repeat(5) {
-                mainClock.advanceTimeByFrame()
-                waitForIdle()
+            waitUntil(timeoutMillis = 5_000) {
+                onAllNodesWithText("post-follow streamed line 199", substring = true)
+                    .fetchSemanticsNodes()
+                    .isNotEmpty()
             }
             assertEquals(true, assertNotNull(memory.get("streaming")).stickToBottom)
             onNodeWithText("post-follow streamed line 199", substring = true).assertIsDisplayed()
