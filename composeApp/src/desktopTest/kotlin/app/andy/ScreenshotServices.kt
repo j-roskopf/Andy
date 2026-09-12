@@ -121,6 +121,7 @@ internal object ScreenshotServices {
         override suspend fun reconnect(rememberPassword: Boolean) = Result.success(Unit)
         override suspend fun addSavedTarget(target: String) = Unit
         override suspend fun removeSavedTarget(target: String) = Unit
+        override suspend fun renameSavedTargetAlias(target: String, alias: String) = Unit
         override suspend fun saveRemoteActionsConfig(config: ActionsConfig) = Result.success(Unit)
         override suspend fun forwardPort(remotePort: Int) = Result.success(remotePort)
         override suspend fun openRemoteScreen() = Result.success("Opened Screen Sharing")
@@ -770,6 +771,7 @@ internal object ScreenshotServices {
             skills: List<AgentSkill>,
             contextBundleIds: List<String>,
             provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
         ) = Unit
         override fun reattachSession(taskId: String) = Unit
         override fun canReattachSession(taskId: String): Boolean = false
@@ -783,6 +785,7 @@ internal object ScreenshotServices {
             skills: List<AgentSkill>,
             contextBundleIds: List<String>,
             provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
         ) = Unit
         override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
         override fun sendQueuedFollowUp(taskId: String, queueIndex: Int) = Unit

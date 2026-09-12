@@ -85,9 +85,11 @@ class McpHubOAuthStore(
     }
 
     companion object {
+        private val cursorAuthJson = Json { ignoreUnknownKeys = true }
+
         internal fun parseCursorMcpAuth(file: File, serverId: String): McpHubOAuthTokens? {
             val root = runCatching {
-                Json { ignoreUnknownKeys = true }.parseToJsonElement(file.readText()).jsonObject
+                cursorAuthJson.parseToJsonElement(file.readText()).jsonObject
             }.getOrNull() ?: return null
             val serverObj = root[serverId]?.jsonObject ?: return null
             val tokens = serverObj["tokens"]?.jsonObject ?: return null

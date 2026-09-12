@@ -493,7 +493,8 @@ fun showsChatFollowUpComposer(
     interactive: Boolean,
     hasStagedImages: Boolean,
     canReconnect: Boolean = false,
-): Boolean = (!interactive && !canReconnect) || hasStagedImages
+    hasStagedAttachments: Boolean = false,
+): Boolean = (!interactive && !canReconnect) || hasStagedImages || hasStagedAttachments
 
 /** True while the card timer should keep ticking with wall clock. */
 fun isElapsedLive(task: AgentTask): Boolean =

@@ -146,9 +146,9 @@ internal val NetworkAccessAuthPlugin = createApplicationPlugin(
 
         if (resolved != null) {
             if (provided != null && path != "/api/auth/login") {
-                tokenLimiter.clear(pluginConfig.sessionStore.fingerprint(provided))
+                tokenLimiter.resetKey(pluginConfig.sessionStore.fingerprint(provided))
             }
-            ipLimiter.clear(remote)
+            ipLimiter.resetKey(remote)
             call.attributes.put(
                 NetworkAccessAuthFingerprintKey,
                 resolved.fingerprint,
@@ -341,7 +341,7 @@ internal fun evaluateNetworkAccessAuth(
     val resolved = sessionStore.resolveAuth(tokenHeaderOrQuery, expectedToken)
     if (resolved != null) {
         if (!scopeAllows(requiredScope, resolved.scope)) return HttpStatusCode.Forbidden
-        limiter.clear(remoteHost)
+        limiter.resetKey(remoteHost)
         return null
     }
     if (limiter.isBlocked(remoteHost)) return HttpStatusCode.TooManyRequests

@@ -8,7 +8,7 @@ import com.joetr.andy.mobile.data.VoiceDefaultsStore
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessClient
 import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import com.joetr.andy.mobile.data.networkaccess.ProjectGroup
-import com.joetr.andy.mobile.data.networkaccess.groupChatsByProject
+import com.joetr.andy.mobile.data.networkaccess.loadProjectGroupsConcurrently
 import com.joetr.andy.mobile.data.updates.AndroidAppUpdateService
 import com.joetr.andy.mobile.data.vnc.RfbClient
 import com.joetr.andy.mobile.di.SessionManager
@@ -93,9 +93,10 @@ class ProjectsViewModel(
         if (showLoading) _loading.value = true
         _error.value = null
         try {
-            val projects = client.listProjects()
-            val chats = client.listChats()
-            _groups.value = groupChatsByProject(projects, chats)
+            _groups.value = loadProjectGroupsConcurrently(
+                loadProjects = client::listProjects,
+                loadChats = client::listChats,
+            )
             _signedIn.value = true
             _loadedHostId.value = hostId
         } catch (e: NetworkAccessException) {

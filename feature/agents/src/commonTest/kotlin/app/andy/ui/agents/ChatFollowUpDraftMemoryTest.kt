@@ -1,6 +1,7 @@
 package app.andy.ui.agents
 
 import androidx.compose.ui.text.input.TextFieldValue
+import app.andy.model.AgentAttachment
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -21,6 +22,20 @@ class ChatFollowUpDraftMemoryTest {
         memory.save("task-a", ChatFollowUpDraft(TextFieldValue("typing")))
         memory.save("task-a", ChatFollowUpDraft(TextFieldValue("")))
         assertNull(memory.get("task-a"))
+    }
+
+    @Test
+    fun retainsDraftWithAttachmentsOnly() {
+        val memory = ChatFollowUpDraftMemory()
+        val attachment = AgentAttachment(
+            id = "att-1",
+            displayName = "pasted.txt",
+            byteCount = 100,
+            lineCount = 5,
+            sha256 = "a".repeat(64),
+        )
+        memory.save("task-a", ChatFollowUpDraft(attachments = listOf(attachment)))
+        assertEquals(listOf(attachment), memory.get("task-a")?.attachments)
     }
 
     @Test

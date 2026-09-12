@@ -11,6 +11,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import app.andy.mergeChatImagePaths
+import app.andy.model.shouldAttachLargeText
 import app.andy.pickImageFiles
 import app.andy.readClipboardImagePaths
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +39,40 @@ suspend fun attachImagesFromPicker(onImagesAttached: (List<String>) -> Unit) {
     if (picked.isNotEmpty()) onImagesAttached(picked)
 }
 
+/**
+ * Intercepts Cmd/Ctrl+V before the TextField paste runs. Images take priority; otherwise plain
+ * text is routed to [onLargeTextPaste] or [onSmallTextPaste]. Returns true (consumes the event)
+ * once the shortcut is recognized — clipboard work runs on [scope].
+ */
+fun Modifier.onChatComposerPaste(
+    scope: CoroutineScope,
+    onImagesAttached: (List<String>) -> Unit,
+    onSmallTextPaste: (String) -> Unit,
+    onLargeTextPaste: (String) -> Unit,
+    readClipboardText: suspend () -> String? = { null },
+): Modifier = onPreviewKeyEvent { event ->
+    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+    if (event.key != Key.V || (!event.isMetaPressed && !event.isCtrlPressed)) return@onPreviewKeyEvent false
+    scope.launch {
+        val pastedImages = readClipboardImagePaths()
+        if (pastedImages.isNotEmpty()) {
+            onImagesAttached(pastedImages)
+            return@launch
+        }
+        val text = readClipboardText()?.takeIf { it.isNotEmpty() } ?: return@launch
+        if (shouldAttachLargeText(text)) {
+            onLargeTextPaste(text)
+        } else {
+            onSmallTextPaste(text)
+        }
+    }
+    true
+}
+
+/**
+ * Image-only paste hook for simple text fields. Does not consume Cmd/Ctrl+V, so plain-text
+ * paste still reaches the TextField. Prefer [onChatComposerPaste] when staging large text.
+ */
 fun Modifier.onChatImagePaste(
     scope: CoroutineScope,
     onImagesAttached: (List<String>) -> Unit,

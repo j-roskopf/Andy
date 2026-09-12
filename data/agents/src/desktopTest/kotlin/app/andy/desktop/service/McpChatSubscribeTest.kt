@@ -621,6 +621,7 @@ private class FakeSubscribeAgentRunService : AgentRunService by UnavailableAgent
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         resumeCalls += ResumeCall(taskId, followUp, imagePaths)
     }
@@ -632,6 +633,7 @@ private class FakeSubscribeAgentRunService : AgentRunService by UnavailableAgent
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         queueCalls += QueueCall(taskId, followUp, imagePaths)
     }

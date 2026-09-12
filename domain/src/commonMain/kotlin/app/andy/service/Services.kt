@@ -692,6 +692,8 @@ interface AgentRunService {
         contextBundleIds: List<String> = emptyList(),
         /** Where this turn's contextual action came from (§5); recorded on the task when it has none yet. */
         provenance: AgentContextualProvenance? = null,
+        /** Managed text attachments (descriptors only). */
+        attachments: List<AgentAttachment> = emptyList(),
     )
     /** Reopens a stored provider session so the live interactive terminal UI comes back. */
     fun reattachSession(taskId: String)
@@ -754,7 +756,45 @@ interface AgentRunService {
         contextBundleIds: List<String> = emptyList(),
         /** Where this follow-up's contextual action came from (§5). */
         provenance: AgentContextualProvenance? = null,
+        /** Managed text attachments (descriptors only). */
+        attachments: List<AgentAttachment> = emptyList(),
     )
+
+    /**
+     * Materializes (or remotely uploads) [attachments] then starts [resume]. Suspends until
+     * attachments are ready or fails — the provider turn continues asynchronously.
+     * Callers that clear a composer draft must await this and keep the draft on failure.
+     */
+    suspend fun resumePrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String> = emptyList(),
+        skills: List<AgentSkill> = emptyList(),
+        contextBundleIds: List<String> = emptyList(),
+        provenance: AgentContextualProvenance? = null,
+        attachments: List<AgentAttachment> = emptyList(),
+    ): Result<Unit> {
+        resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+        return Result.success(Unit)
+    }
+
+    /**
+     * Like [queueFollowUp], but suspends until attachments are materialized/uploaded (or fails)
+     * before treating the send as successful for composer draft clearing.
+     */
+    suspend fun queueFollowUpPrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String> = emptyList(),
+        skills: List<AgentSkill> = emptyList(),
+        contextBundleIds: List<String> = emptyList(),
+        provenance: AgentContextualProvenance? = null,
+        attachments: List<AgentAttachment> = emptyList(),
+    ): Result<Unit> {
+        queueFollowUp(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+        return Result.success(Unit)
+    }
+
     /** Removes an unsent follow-up at [queueIndex]. */
     fun removeQueuedFollowUp(taskId: String, queueIndex: Int)
     /** Sends the queued follow-up at [queueIndex] when the chat is idle. */
@@ -790,6 +830,12 @@ interface AgentRunService {
      * the PTY buffer is the transcript. Kept for call-site compatibility during migration.
      */
     fun events(taskId: String): StateFlow<List<AgentEvent>>
+    /**
+     * Streams transcript-body matches for [query] (user/assistant text and tool titles).
+     * Emits progressively as the FTS index and any cold-task backfill find hits.
+     * Empty / short queries yield [emptyFlow].
+     */
+    fun searchTranscripts(query: String): Flow<TranscriptSearchHit> = emptyFlow()
     fun interactiveResumeCommand(taskId: String): String?
     /**
      * Provider label when this exact conversation can continue in its desktop app.
@@ -1324,6 +1370,7 @@ data class AndyServices(
     val crashInspector: CrashInspectorService = UnavailableCrashInspectorService,
     val heapDump: HeapDumpService = UnavailableHeapDumpService,
     val evidence: InvestigationEvidenceService = UnavailableInvestigationEvidenceService,
+    val chatAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val runtimeBundle: RuntimeBundleService = UnavailableRuntimeBundleService,

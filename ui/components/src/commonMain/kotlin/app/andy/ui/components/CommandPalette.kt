@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +29,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -46,7 +50,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.ui.theme.AndyColors
-import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
 import app.andy.ui.theme.DisplayFont
@@ -54,6 +57,8 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.PaneDividerTint
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
 /** A searchable command-palette item. */
@@ -65,11 +70,20 @@ data class CommandPaletteItem(
     val keywords: List<String> = emptyList(),
 )
 
+/** Chat ids already covered by metadata results — skip duplicate transcript hits. */
+fun commandPaletteExcludedChatIds(syncItems: List<CommandPaletteItem>): Set<String> =
+    syncItems.mapNotNull { item ->
+        item.id.removePrefix("chat:").takeIf { item.id.startsWith("chat:") }
+    }.toSet()
+
 /**
  * Astryx CommandPalette — modal search with grouped results and keyboard footer.
  *
  * Visual markers: PowerSearch field chrome, popover surface, item overlay hover/selected,
  * footer `↑↓ Navigate · ↵ Select · Esc Close`.
+ *
+ * When [asyncSearch] is set, metadata [items] filter instantly and transcript hits stream
+ * into the list after a short debounce, with a bottom spinner while the Flow is active.
  */
 @Composable
 fun CommandPalette(
@@ -80,28 +94,25 @@ fun CommandPalette(
     modifier: Modifier = Modifier,
     placeholder: String = "Type to search",
     title: String? = null,
+    asyncSearch: ((query: String, excludeChatIds: Set<String>) -> Flow<CommandPaletteItem>)? = null,
 ) {
     if (!isOpen) return
     SuppressHeavyweightSurfacesWhileOpen()
     var query by remember { mutableStateOf("") }
     var highlighted by remember { mutableIntStateOf(0) }
+    var asyncItems by remember { mutableStateOf<List<CommandPaletteItem>>(emptyList()) }
+    var asyncSearching by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val filtered = remember(items, query) {
-        val trimmed = query.trim()
-        if (trimmed.isBlank()) {
-            items
-        } else {
-            items.filter { item ->
-                item.label.contains(trimmed, ignoreCase = true) ||
-                    item.supporting?.contains(trimmed, ignoreCase = true) == true ||
-                    item.group.contains(trimmed, ignoreCase = true) ||
-                    item.keywords.any { it.contains(trimmed, ignoreCase = true) }
-            }
-        }
+        filterCommandPaletteItems(items, query)
     }
-    val flat = remember(filtered) { filtered }
+    val excludeChatIds = remember(filtered) { commandPaletteExcludedChatIds(filtered) }
+    val flat = remember(filtered, asyncItems) { filtered + asyncItems }
+    // Parent screens (Actions) recompose often while a chat streams; never key the search
+    // effect on the lambda identity or each recomposition cancels before hits arrive.
+    val asyncSearchUpdated by rememberUpdatedState(asyncSearch)
     LaunchedEffect(flat) {
         highlighted = highlighted.coerceIn(0, (flat.size - 1).coerceAtLeast(0))
     }
@@ -109,7 +120,32 @@ fun CommandPalette(
         if (isOpen) {
             query = ""
             highlighted = 0
+            asyncItems = emptyList()
+            asyncSearching = false
             focusRequester.requestFocus()
+        }
+    }
+    LaunchedEffect(query, excludeChatIds) {
+        val search = asyncSearchUpdated
+        val trimmed = query.trim()
+        if (search == null || trimmed.length < 2) {
+            asyncItems = emptyList()
+            asyncSearching = false
+            return@LaunchedEffect
+        }
+        asyncItems = emptyList()
+        asyncSearching = true
+        try {
+            delay(150)
+            search(trimmed, excludeChatIds).collect { hit ->
+                val chatId = hit.id.removePrefix("chat:")
+                if (hit.id.startsWith("chat:") && chatId in excludeChatIds) return@collect
+                if (asyncItems.none { it.id == hit.id }) {
+                    asyncItems = asyncItems + hit
+                }
+            }
+        } finally {
+            asyncSearching = false
         }
     }
 
@@ -207,6 +243,17 @@ fun CommandPalette(
                     placeholder = {
                         Text(placeholder, color = TextSecondary.copy(alpha = 0.66f), fontFamily = DisplayFont, fontSize = 13.sp)
                     },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        cursorColor = TextPrimary,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                    ),
                 )
             }
             Box(
@@ -214,7 +261,7 @@ fun CommandPalette(
                     .fillMaxWidth()
                     .heightIn(min = 120.dp, max = 360.dp),
             ) {
-                if (flat.isEmpty()) {
+                if (flat.isEmpty() && !asyncSearching) {
                     Text(
                         "No results",
                         color = TextSecondary,
@@ -261,11 +308,42 @@ fun CommandPalette(
                                 )
                             }
                         }
+                        if (asyncSearching) {
+                            item(key = "async-searching") {
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                                ) {
+                                    Spinner(spinnerSize = SpinnerSize.Sm, shade = SpinnerShade.Subtle)
+                                    Text(
+                                        "Searching transcripts…",
+                                        color = TextSecondary,
+                                        fontFamily = DisplayFont,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
             CommandPaletteFooter()
         }
+    }
+}
+
+/** Sync metadata filter used by [CommandPalette] — extracted for tests. */
+fun filterCommandPaletteItems(items: List<CommandPaletteItem>, query: String): List<CommandPaletteItem> {
+    val trimmed = query.trim()
+    if (trimmed.isBlank()) return items
+    return items.filter { item ->
+        item.label.contains(trimmed, ignoreCase = true) ||
+            item.supporting?.contains(trimmed, ignoreCase = true) == true ||
+            item.group.contains(trimmed, ignoreCase = true) ||
+            item.keywords.any { it.contains(trimmed, ignoreCase = true) }
     }
 }
 

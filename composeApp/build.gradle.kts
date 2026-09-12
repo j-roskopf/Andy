@@ -119,7 +119,7 @@ kotlin {
                 implementation(project(":data:workspace"))
                 implementation(project(":data:platform-tools"))
                 implementation(compose.desktop.currentOs)
-                implementation(compose.material3)
+                implementation(libs.compose.material3)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
                 implementation("io.github.kdroidfilter:composenativetray:1.3.3")
             }
@@ -127,8 +127,8 @@ kotlin {
         val wasmJsMain by getting {
             dependencies {
                 implementation(project(":core:di"))
-                implementation(compose.runtime)
-                implementation(compose.ui)
+                implementation(libs.compose.runtime)
+                implementation(libs.compose.ui)
                 implementation("org.jetbrains.kotlinx:kotlinx-browser:0.3")
                 implementation(npm("@yume-chan/adb", "2.6.0"))
                 implementation(npm("@yume-chan/adb-daemon-webusb", "2.3.2"))
@@ -532,6 +532,33 @@ compose.desktop {
         jvmArgs += "--add-exports=java.base/java.lang=ALL-UNNAMED"
         jvmArgs += "--add-exports=java.desktop/sun.awt=ALL-UNNAMED"
         jvmArgs += "--add-exports=java.desktop/sun.java2d=ALL-UNNAMED"
+
+        // --- Footprint ---
+        // Without an explicit -Xmx the JVM picks 25% of physical RAM (12g on a 48g Mac). G1 then
+        // sizes regions at 8m, never feels pressure, and parks ~470m of committed heap for a
+        // ~110m live set. Capping the ceiling is what makes every other knob here effective.
+        jvmArgs += "-Xms128m"
+        jvmArgs += "-Xmx768m"
+        // Let G1 hand pages back instead of hoarding them. Without the periodic GC the heap only
+        // shrinks on a full collection, which an idle desktop app never triggers.
+        jvmArgs += "-XX:MinHeapFreeRatio=10"
+        jvmArgs += "-XX:MaxHeapFreeRatio=25"
+        jvmArgs += "-XX:G1PeriodicGCInterval=15000"
+        jvmArgs += "-XX:G1PeriodicGCSystemLoadThreshold=0"
+        // 14 GC threads on a desktop UI app is all overhead: stacks plus per-thread GC structures.
+        jvmArgs += "-XX:ParallelGCThreads=4"
+        jvmArgs += "-XX:ConcGCThreads=2"
+        // Measured peak is ~23m across the segmented heaps; the 240m default just reserves address
+        // space and commits more than we ever JIT.
+        jvmArgs += "-XX:ReservedCodeCacheSize=96m"
+        // Class space actually uses ~8m. The 1g default reservation bloats the address space.
+        jvmArgs += "-XX:CompressedClassSpaceSize=256m"
+        // Diff text repeats heavily across stored agent runs.
+        jvmArgs += "-XX:+UseStringDeduplication"
+        // Netty defaults to 2*cores arenas of 16m chunks — server sizing for a loopback server.
+        jvmArgs += "-Dio.netty.allocator.numDirectArenas=2"
+        jvmArgs += "-Dio.netty.allocator.numHeapArenas=2"
+        jvmArgs += "-Dio.netty.allocator.maxOrder=6"
         buildTypes.release.proguard {
             isEnabled.set(false)
         }

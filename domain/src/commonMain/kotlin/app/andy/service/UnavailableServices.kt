@@ -371,6 +371,7 @@ object UnavailableAgentRunService : AgentRunService {
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
+        attachments: List<AgentAttachment>,
     ) = Unit
 
     override fun reattachSession(taskId: String) = Unit
@@ -385,6 +386,7 @@ object UnavailableAgentRunService : AgentRunService {
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
+        attachments: List<AgentAttachment>,
     ) = Unit
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) = Unit
     override fun sendQueuedFollowUp(taskId: String, queueIndex: Int) = Unit

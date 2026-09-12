@@ -39,14 +39,23 @@ class FollowUpCliPayloadTest {
     }
 
     @Test
-    fun liveTerminalPromptKeepsAttachedImagesInline() {
-        val task = task(AgentKind.ClaudeCode)
-        val prompt = task.followUpPromptForLiveTerminal(
-            text = "fix this bug",
-            imagePaths = listOf("/tmp/screenshot.png"),
+    fun followUpPromptIncludesAttachmentHintsWithoutBodies() {
+        val attachment = AgentAttachment(
+            id = "att-1",
+            displayName = "dump.txt",
+            byteCount = 8_000_000,
+            lineCount = 90_000,
+            sha256 = "c".repeat(64),
+            relativePath = ".andy/task-1/attachments/dump.txt",
         )
-        assertTrue(prompt.contains("fix this bug"))
-        assertTrue(prompt.contains("/tmp/screenshot.png"))
-        assertTrue(!prompt.contains("\n\nAttached image file"))
+        val payload = task(AgentKind.ClaudeCode).followUpCliPayload(
+            text = "summarize the dump",
+            imagePaths = emptyList(),
+            attachments = listOf(attachment),
+        )
+        assertTrue(payload.prompt.contains("summarize the dump"))
+        assertTrue(payload.prompt.contains(".andy/task-1/attachments/dump.txt"))
+        assertTrue(payload.prompt.contains(attachment.sha256))
+        assertTrue(payload.prompt.length < 4_000)
     }
 }

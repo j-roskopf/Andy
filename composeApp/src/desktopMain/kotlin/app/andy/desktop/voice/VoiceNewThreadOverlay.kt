@@ -64,6 +64,7 @@ import app.andy.ui.theme.MonoFont
 import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** Why the overlay opened without starting capture. */
@@ -128,6 +129,7 @@ fun VoiceNewThreadOverlayContent(
     var projectId by remember { mutableStateOf(workspaceState.voiceDefaultProjectId) }
     var starting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var finishJob by remember { mutableStateOf<Job?>(null) }
 
     val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
     val providerModels by services.agentRuns.providerModels.collectAsState()
@@ -139,28 +141,58 @@ fun VoiceNewThreadOverlayContent(
     }
     val projects = actionsConfig.projects
 
+    fun recordingStartFailureBlocker(): VoiceNewThreadBlocker {
+        val err = voice.lastError.value
+        return when {
+            err?.contains("Already recording", ignoreCase = true) == true ->
+                VoiceNewThreadBlocker.ComposerRecording
+            err?.contains("Microphone", ignoreCase = true) == true ->
+                VoiceNewThreadBlocker.MicDenied
+            else -> VoiceNewThreadBlocker.Other(err ?: "Could not start recording")
+        }
+    }
+
+    /** Starts capture and keeps [onRecordingChanged] in sync so the hotkey can stop. */
+    fun beginListening() {
+        blocker = null
+        phase = VoiceNewThreadPhase.Recording
+        scope.launch {
+            onRecordingChanged(true)
+            val started = voice.startRecording()
+            if (!started) {
+                blocker = recordingStartFailureBlocker()
+                onRecordingChanged(false)
+                phase = VoiceNewThreadPhase.Blocked
+            }
+        }
+    }
+
     fun stopAndConfirm() {
         if (phase != VoiceNewThreadPhase.Recording) return
         phase = VoiceNewThreadPhase.Transcribing
         onRecordingChanged(false)
-        scope.launch {
-            val text = voice.finishRecording()
-            if (!text.isNullOrBlank()) {
-                transcript = text
-                val matched = matchProject(
-                    text,
-                    projects.map { it.id to it.name },
-                )
-                if (matched != null) projectId = matched
-                phase = VoiceNewThreadPhase.Confirm
-            } else {
-                val err = voice.lastError.value
-                blocker = when {
-                    err?.contains("Microphone", ignoreCase = true) == true ->
-                        VoiceNewThreadBlocker.MicDenied
-                    else -> VoiceNewThreadBlocker.Other(err ?: "No speech detected")
+        finishJob = scope.launch {
+            try {
+                val text = voice.finishRecording()
+                if (!text.isNullOrBlank()) {
+                    transcript = text
+                    val matched = matchProject(
+                        text,
+                        projects.map { it.id to it.name },
+                    )
+                    if (matched != null) projectId = matched
+                    phase = VoiceNewThreadPhase.Confirm
+                } else {
+                    val err = voice.lastError.value
+                    blocker = when {
+                        err?.contains("Microphone", ignoreCase = true) == true ->
+                            VoiceNewThreadBlocker.MicDenied
+                        else -> VoiceNewThreadBlocker.Other(err ?: "No speech detected")
+                    }
+                    phase = VoiceNewThreadPhase.Blocked
                 }
-                phase = VoiceNewThreadPhase.Blocked
+            } finally {
+                finishJob = null
             }
         }
     }
@@ -170,18 +202,11 @@ fun VoiceNewThreadOverlayContent(
         // Let the overlay window finish its first layout pass before touching audio —
         // starting capture in the same frame as window creation has frozen the EDT.
         kotlinx.coroutines.delay(64)
-        if (phase == VoiceNewThreadPhase.Recording) {
+        if (phase == VoiceNewThreadPhase.Recording && blocker == null) {
             onRecordingChanged(true)
             val started = voice.startRecording()
             if (!started) {
-                val err = voice.lastError.value
-                blocker = when {
-                    err?.contains("Already recording", ignoreCase = true) == true ->
-                        VoiceNewThreadBlocker.ComposerRecording
-                    err?.contains("Microphone", ignoreCase = true) == true ->
-                        VoiceNewThreadBlocker.MicDenied
-                    else -> VoiceNewThreadBlocker.Other(err ?: "Could not start recording")
-                }
+                blocker = recordingStartFailureBlocker()
                 onRecordingChanged(false)
                 phase = VoiceNewThreadPhase.Blocked
             }
@@ -195,11 +220,21 @@ fun VoiceNewThreadOverlayContent(
     }
 
     fun cancel() {
-        if (phase == VoiceNewThreadPhase.Recording) voice.cancelRecording()
+        when (phase) {
+            VoiceNewThreadPhase.Recording -> voice.cancelRecording()
+            VoiceNewThreadPhase.Transcribing -> {
+                finishJob?.cancel()
+                // Clears isBusy if recording already stopped mid-transcribe.
+                voice.cancelRecording()
+            }
+            else -> Unit
+        }
+        onRecordingChanged(false)
         onClose()
     }
 
     fun startThread() {
+        if (starting) return
         val prompt = transcript.trim()
         if (prompt.isBlank()) {
             error = "Transcript is empty"
@@ -271,19 +306,7 @@ fun VoiceNewThreadOverlayContent(
                     onOpenSettings = onOpenSettings,
                     onOpenMicPrivacySettings = onOpenMicPrivacySettings,
                     onDismiss = onClose,
-                    onTryAgain = {
-                        blocker = null
-                        phase = VoiceNewThreadPhase.Recording
-                        scope.launch {
-                            val started = voice.startRecording()
-                            if (!started) {
-                                blocker = VoiceNewThreadBlocker.Other(
-                                    voice.lastError.value ?: "Could not start recording",
-                                )
-                                phase = VoiceNewThreadPhase.Blocked
-                            }
-                        }
-                    },
+                    onTryAgain = { beginListening() },
                 )
                 VoiceNewThreadPhase.Recording -> {
                     Text(
@@ -399,6 +422,7 @@ private fun BlockedBody(
         blocker != null -> blocker
         else -> VoiceNewThreadBlocker.Other("Voice is not ready")
     }
+    var awaitingReady by remember { mutableStateOf(false) }
     val message: String
     val actionLabel: String
     val action: () -> Unit
@@ -429,15 +453,21 @@ private fun BlockedBody(
             action = onTryAgain
         }
     }
+    LaunchedEffect(setupState, awaitingReady) {
+        if (awaitingReady && setupState is VoiceSetupState.Ready) {
+            awaitingReady = false
+            onTryAgain()
+        }
+    }
     Text(message, color = TextSecondary, fontSize = 13.sp)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = {
-            action()
             if (effective is VoiceNewThreadBlocker.NotEnabled ||
                 effective is VoiceNewThreadBlocker.Failed
             ) {
-                // After Enable/Retry, attempt capture once setup reports Ready.
+                awaitingReady = true
             }
+            action()
         }) { Text(actionLabel) }
         TextButton(onClick = onOpenSettings) { Text("Open Settings", color = TextSecondary) }
         TextButton(onClick = onDismiss) { Text("Close", color = TextSecondary) }

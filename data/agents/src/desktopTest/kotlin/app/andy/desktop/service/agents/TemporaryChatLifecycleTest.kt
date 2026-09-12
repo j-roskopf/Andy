@@ -141,6 +141,24 @@ class TemporaryChatLifecycleTest {
         assertFalse(tempDir.exists())
     }
 
+    @Test
+    fun deletingPermanentChatRemovesOnlyThatTasksWorkflowArtifacts() = withService { harness ->
+        val keep = harness.service.createAndStart(harness.draft("keep me"))
+        val remove = harness.service.createAndStart(harness.draft("delete me"))
+        val keepDir = AgentWorkflowArtifacts.dirFor(harness.projectDir, keep.id).also { it.mkdirs() }
+        val removeDir = AgentWorkflowArtifacts.dirFor(harness.projectDir, remove.id).also { it.mkdirs() }
+        File(keepDir, "attachments").mkdirs()
+        File(File(keepDir, "attachments"), "keep.txt").writeText("sibling")
+        File(removeDir, "attachments").mkdirs()
+        File(File(removeDir, "attachments"), "gone.txt").writeText("delete")
+
+        harness.service.delete(remove.id, removeWorktree = false)
+
+        assertFalse(removeDir.exists(), "deleted chat's .andy/<taskId> must be removed")
+        assertTrue(keepDir.exists(), "sibling task artifacts must survive")
+        assertEquals("sibling", File(keepDir, "attachments/keep.txt").readText())
+    }
+
     private class Harness(
         val service: DesktopAgentRunService,
         val store: DesktopAgentTaskStore,

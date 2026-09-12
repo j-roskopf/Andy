@@ -125,6 +125,7 @@ import app.andy.domain.visibleChatSessions
 import app.andy.pickDirectory
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
+import app.andy.service.RemoteSessionStatus
 import app.andy.ui.components.Button
 import app.andy.ui.components.CommandPalette
 import app.andy.ui.components.CommandPaletteItem
@@ -134,6 +135,7 @@ import app.andy.ui.components.LabeledField
 import app.andy.ui.components.OutlinedButton
 import app.andy.ui.components.TextField
 import app.andy.ui.components.Toolbar
+import app.andy.ui.components.Tooltip
 import app.andy.ui.components.WorkspaceCanvas
 import app.andy.ui.components.WorkspaceEmptyCanvas
 import app.andy.ui.components.WorkspaceRail
@@ -153,6 +155,7 @@ import app.andy.ui.agents.isChatRelaunching
 import app.andy.ui.agents.isSessionWorking
 import app.andy.ui.components.StatusTag
 import app.andy.ui.components.RetainedDestination
+import app.andy.ui.components.SuppressHeavyweightSurfacesWhileOpen
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndySpace
@@ -171,6 +174,8 @@ import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.andyTokens
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 
@@ -201,10 +206,19 @@ private enum class ProjectCanvas(val label: String) {
 private const val RecentSessionsPerProject = 5
 private const val ShowMoreSessionsIncrement = 20
 
+/**
+ * How long the outgoing project list is held after a host switch reports success. Only a release
+ * valve — the destination config normally arrives in well under a second and ends the switch.
+ */
+private const val HostSwitchReleaseMillis = 8_000L
+/** Slow enough not to flash on a warm host that reconnects instantly. */
+private const val HostSwitchFadeInMillis = 220
+private const val HostSwitchFadeOutMillis = 160
+
 @Composable
 private fun ProjectCockpit(
     services: AndyServices,
-    config: ActionsConfig,
+    incomingConfig: ActionsConfig,
     onConfigChange: (ActionsConfig) -> Unit,
     agentTasks: List<AgentTask>,
     preferredProjectId: String?,
@@ -226,6 +240,9 @@ private fun ProjectCockpit(
     val outdatedCliUpdates by services.cliUpdates.outdated.collectAsState()
     val updatingCliKinds by services.cliUpdates.updating.collectAsState()
     val workflowProjects by services.projectWorkflows.projects.collectAsState()
+    val remoteSession by services.remoteSession.state.collectAsState()
+    val savedTargetProjects by services.remoteSession.savedTargetProjects.collectAsState()
+    val mergeRemoteProjects = workspaceState.mergeRemoteProjects
     var selectedProjectId by remember { mutableStateOf<String?>(null) }
     var selectedTaskId by remember { mutableStateOf<String?>(null) }
     var selectedWorkflowTaskId by remember { mutableStateOf<String?>(null) }
@@ -262,6 +279,31 @@ private fun ProjectCockpit(
     var buildEditor by remember { mutableStateOf<BuildEditorSeed?>(null) }
     var profilesOpen by remember { mutableStateOf(false) }
     var pendingConfirmation by remember { mutableStateOf<PendingConfirmation?>(null) }
+    /** Host being switched to on behalf of a merged "other host" project row. */
+    var switchingToHost by remember { mutableStateOf<ProjectHost?>(null) }
+    /** Project to select once the newly attached host's actions.toml arrives. */
+    var pendingRemoteProjectId by remember { mutableStateOf<String?>(null) }
+    var switchingHostLabel by remember { mutableStateOf("") }
+    /**
+     * A host switch tears the old backend down before the new config arrives, so for a moment
+     * `incomingConfig` is the *local* list. Rendering that would flash a third project list —
+     * and steal the selection — between the one the user left and the one they asked for, so the
+     * outgoing list is held on screen until the destination is ready.
+     */
+    // Also covers a switch started from the Local/Remote sidebar switcher, which flashes the same
+    // way — the backend swap is identical, only the entry point differs.
+    val switchingHosts = switchingToHost != null ||
+        pendingRemoteProjectId != null ||
+        remoteSession.status == RemoteSessionStatus.Connecting
+    var heldConfig by remember { mutableStateOf(incomingConfig) }
+    LaunchedEffect(incomingConfig, switchingHosts) {
+        if (!switchingHosts) {
+            heldConfig = incomingConfig
+            // Stale label would mislabel the next sidebar-initiated switch.
+            switchingHostLabel = ""
+        }
+    }
+    val config = if (switchingHosts) heldConfig else incomingConfig
     val transcriptScrollMemory = remember { TranscriptScrollMemory() }
     val followUpDraftMemory = remember { ChatFollowUpDraftMemory() }
     var expandedActionId by remember { mutableStateOf<String?>(null) }
@@ -278,6 +320,37 @@ private fun ProjectCockpit(
     fun selectProject(projectId: String, rememberAsPreferred: Boolean = true) {
         selectedProjectId = projectId
         if (rememberAsPreferred) onPreferredProjectChange(projectId)
+    }
+
+    /**
+     * Opens a project that lives on another host: attach Andy there first (connecting to a
+     * previously used host is usually instant — it stays warm), then select the project once its
+     * config lands.
+     */
+    fun openOtherHostProject(row: OtherHostProjectRow) {
+        if (switchingHosts) return
+        scope.launch {
+            switchingHostLabel = row.hostLabel
+            switchingToHost = row.host
+            val result = when (val host = row.host) {
+                ProjectHost.Local -> {
+                    services.remoteSession.disconnect()
+                    Result.success(Unit)
+                }
+                is ProjectHost.Ssh -> services.remoteSession.connect(host.target)
+            }
+            switchingToHost = null
+            if (result.isSuccess) {
+                pendingRemoteProjectId = row.project.id
+            } else {
+                pendingConfirmation = PendingConfirmation(
+                    title = "Could not connect to ${row.hostLabel}",
+                    message = result.exceptionOrNull()?.message
+                        ?: "SSH connect failed. Check the host from the Local/Remote switcher.",
+                    confirmLabel = "OK",
+                ) {}
+            }
+        }
     }
 
     fun ensureWorkflowProjectLoaded() {
@@ -325,11 +398,36 @@ private fun ProjectCockpit(
 
     LaunchedEffect(workspaceReady, config.projects, preferredProjectId) {
         if (!workspaceReady) return@LaunchedEffect
+        // A host switch has its own destination in mind; letting this fall back to the preferred
+        // project first would render one frame of the wrong project before that lands.
+        if (pendingRemoteProjectId != null) return@LaunchedEffect
         val projectIds = config.projects.map { it.id }
         if (selectedProjectId !in projectIds) {
             selectedProjectId = preferredProjectId?.takeIf { it in projectIds }
                 ?: config.projects.firstOrNull()?.id
         }
+    }
+    // Watches the incoming config, not the held one: this is what ends the switch. Runs after the
+    // selection effect above so a just-attached host lands on the project the user actually
+    // clicked, not on the preferred/first one that effect would restore.
+    LaunchedEffect(incomingConfig.projects, pendingRemoteProjectId) {
+        val pending = pendingRemoteProjectId ?: return@LaunchedEffect
+        if (incomingConfig.projects.none { it.id == pending }) return@LaunchedEffect
+        selectProject(pending)
+        selectedTaskId = null
+        selectedWorkflowTaskId = null
+        canvas = ProjectCanvas.Chat
+        pendingRemoteProjectId = null
+    }
+    // Safety valve: if the destination never lists that project (its actions.toml changed, or the
+    // config never lands), release the held list rather than leaving the UI frozen mid-switch.
+    LaunchedEffect(pendingRemoteProjectId) {
+        if (pendingRemoteProjectId == null) return@LaunchedEffect
+        delay(HostSwitchReleaseMillis)
+        pendingRemoteProjectId = null
+    }
+    LaunchedEffect(active, mergeRemoteProjects) {
+        if (active && mergeRemoteProjects) services.remoteSession.refreshSavedTargetProjects()
     }
     LaunchedEffect(requestedAgentTaskId, requestedProjectId, agentTasks) {
         val taskId = requestedAgentTaskId ?: return@LaunchedEffect
@@ -425,7 +523,53 @@ private fun ProjectCockpit(
     val sidebarEntries = remember(config.projects) {
         config.projects.map { ProjectSidebarEntry(it) }
     }
-    val commandPaletteItems = remember(config.projects, projectChatLists) {
+    val activeRemoteTarget = remoteSession.target?.takeIf { remoteSession.isRemote }
+    // While remoted the main list is the remote host's, so this machine's own projects become
+    // "elsewhere" and have to be read separately to stay in the merged view.
+    var localProjectsWhileRemote by remember { mutableStateOf<List<ActionProject>>(emptyList()) }
+    LaunchedEffect(mergeRemoteProjects, activeRemoteTarget) {
+        localProjectsWhileRemote = if (mergeRemoteProjects && activeRemoteTarget != null) {
+            runCatching { services.actionConfig.load().projects }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+    }
+    val computedRemoteRows = remember(
+        mergeRemoteProjects,
+        savedTargetProjects,
+        activeRemoteTarget,
+        remoteSession.targetAliases,
+        localProjectsWhileRemote,
+    ) {
+        otherHostProjectRows(
+            enabled = mergeRemoteProjects,
+            savedTargetProjects = savedTargetProjects,
+            activeTarget = activeRemoteTarget,
+            localProjects = localProjectsWhileRemote,
+            displayNameFor = remoteSession::displayNameFor,
+        )
+    }
+    val computedUnreachableHosts = remember(mergeRemoteProjects, savedTargetProjects, activeRemoteTarget, remoteSession.targetAliases) {
+        unreachableRemoteHosts(
+            enabled = mergeRemoteProjects,
+            savedTargetProjects = savedTargetProjects,
+            activeTarget = activeRemoteTarget,
+            displayNameFor = remoteSession::displayNameFor,
+        )
+    }
+    // These follow the live session, which flips to the destination before its project list
+    // arrives — held alongside [config] so the sidebar moves once, not twice.
+    var heldRemoteRows by remember { mutableStateOf(computedRemoteRows) }
+    var heldUnreachableHosts by remember { mutableStateOf(computedUnreachableHosts) }
+    LaunchedEffect(computedRemoteRows, computedUnreachableHosts, switchingHosts) {
+        if (!switchingHosts) {
+            heldRemoteRows = computedRemoteRows
+            heldUnreachableHosts = computedUnreachableHosts
+        }
+    }
+    val remoteProjectRows = if (switchingHosts) heldRemoteRows else computedRemoteRows
+    val unreachableHosts = if (switchingHosts) heldUnreachableHosts else computedUnreachableHosts
+    val commandPaletteItems = remember(config.projects, projectChatLists, remoteProjectRows) {
         buildList {
             config.projects.forEach { project ->
                 add(
@@ -452,6 +596,21 @@ private fun ProjectCockpit(
                         ),
                     )
                 }
+            }
+            // Listed after everything local so a same-named project on this host still ranks first.
+            remoteProjectRows.forEach { row ->
+                add(
+                    CommandPaletteItem(
+                        id = "remote-project:${row.key}",
+                        label = row.project.name,
+                        group = "Projects on other hosts",
+                        supporting = row.hostLabel,
+                        keywords = listOfNotNull(
+                            row.project.contextDir,
+                            (row.host as? ProjectHost.Ssh)?.target,
+                        ),
+                    ),
+                )
             }
         }
     }
@@ -637,6 +796,24 @@ private fun ProjectCockpit(
                                     canvas = ProjectCanvas.Chat
                                 },
                                 onEditProject = { editingProject = EditingProject(item) },
+                            )
+                        }
+                        if (remoteProjectRows.isNotEmpty() || unreachableHosts.isNotEmpty()) {
+                            item(key = "remote-projects-header") {
+                                ChatInboxSectionLabel("On other hosts")
+                            }
+                        }
+                        items(remoteProjectRows, key = { row -> row.key }) { row ->
+                            OtherHostProjectSidebarRow(
+                                row = row,
+                                connecting = switchingToHost == row.host,
+                                onClick = { openOtherHostProject(row) },
+                            )
+                        }
+                        items(unreachableHosts, key = { host -> "remote-host:${host.target}" }) { host ->
+                            RemoteHostUnavailableRow(
+                                hostLabel = remoteSession.displayNameFor(host.target),
+                                error = host.error,
                             )
                         }
                     }
@@ -896,6 +1073,19 @@ private fun ProjectCockpit(
                 }
             }
         }
+        // Covers the moment the backend detaches and reattaches: the held list stays behind this,
+        // so the switch reads as one deliberate transition instead of two list flashes.
+        HostSwitchOverlay(
+            // Only while Projects is on screen: this screen stays composed in the background, and
+            // the overlay drops interop surfaces app-wide — including another page's mirror.
+            visible = switchingHosts && active,
+            // Blank for a sidebar-initiated switch, where the session already names the target.
+            hostLabel = switchingHostLabel.ifBlank {
+                remoteSession.target?.let(remoteSession::displayNameFor) ?: "another host"
+            },
+            leavingForLocal = switchingToHost == ProjectHost.Local,
+            modifier = Modifier.matchParentSize(),
+        )
         if (outdatedCliUpdates.isNotEmpty()) {
             CliUpdateSnackbarStack(
                 items = outdatedCliUpdates,
@@ -912,10 +1102,29 @@ private fun ProjectCockpit(
         isOpen = commandPaletteOpen,
         onOpenChange = { commandPaletteOpen = it },
         items = commandPaletteItems,
-        placeholder = "Search projects and chats",
+        placeholder = "Search projects, chats, and transcripts",
         title = "Jump to",
+        asyncSearch = { query, excludeChatIds ->
+            services.agentRuns.searchTranscripts(query)
+                .mapNotNull { hit ->
+                    if (hit.taskId in excludeChatIds) return@mapNotNull null
+                    val supporting = listOfNotNull(hit.projectName, hit.snippet)
+                        .joinToString(" · ")
+                        .ifBlank { null }
+                    CommandPaletteItem(
+                        id = "chat:${hit.taskId}",
+                        label = hit.title.ifBlank { "Untitled chat" },
+                        group = "Transcripts",
+                        supporting = supporting,
+                    )
+                }
+        },
         onSelect = { item ->
             when {
+                item.id.startsWith("remote-project:") -> {
+                    val key = item.id.removePrefix("remote-project:")
+                    remoteProjectRows.firstOrNull { it.key == key }?.let(::openOtherHostProject)
+                }
                 item.id.startsWith("project:") -> {
                     val projectId = item.id.removePrefix("project:")
                     selectProject(projectId)
@@ -1108,7 +1317,7 @@ fun ActionsScreen(
     } else {
         ProjectCockpit(
             services = services,
-            config = config,
+            incomingConfig = config,
             onConfigChange = onConfigChange,
             agentTasks = agentTasks,
             preferredProjectId = preferredProjectId,
@@ -1273,6 +1482,146 @@ private fun ProjectFolderGlyph(
         TextSecondary.copy(alpha = 0.78f),
         modifier.size(16.dp),
     )
+}
+
+/**
+ * Scrim shown while Andy detaches from one host and attaches to another. It also swallows input:
+ * chats, terminals and runbooks behind it belong to the host being left, so clicking them during
+ * the swap would act on a backend that is already going away.
+ */
+@Composable
+private fun HostSwitchOverlay(
+    visible: Boolean,
+    hostLabel: String,
+    leavingForLocal: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = tween(HostSwitchFadeInMillis)),
+        exit = fadeOut(animationSpec = tween(HostSwitchFadeOutMillis)),
+        modifier = modifier,
+    ) {
+        // Terminals and mirrors are Swing/Metal interop hosts that paint above ordinary Compose
+        // content — without this they would show through the scrim, still rendering the backend
+        // that is being torn down.
+        SuppressHeavyweightSurfacesWhileOpen()
+        val blocker = remember { MutableInteractionSource() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(AndyColors.WindowBg.copy(alpha = 0.82f))
+                .clickable(interactionSource = blocker, indication = null) {},
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+            ) {
+                ProjectActivityIndicator(22.dp)
+                Text(
+                    if (leavingForLocal) "Switching to $hostLabel" else "Connecting to $hostLabel",
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                )
+                Text(
+                    "Moving chats, terminals, and devices to this host.",
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Projects list row for a project on a host other than the active one. The glyph + host name mark
+ * where it lives; clicking switches Andy there, after which it becomes an ordinary project row.
+ */
+@Composable
+private fun OtherHostProjectSidebarRow(
+    row: OtherHostProjectRow,
+    connecting: Boolean,
+    onClick: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    // Stale rows came from the last successful scan — dim them so they read as "was here".
+    val fade = if (row.stale) 0.55f else 1f
+    val isLocal = row.host == ProjectHost.Local
+    val tooltip = when {
+        connecting && isLocal -> "Disconnecting from the remote host…"
+        connecting -> "Connecting to ${row.hostLabel}…"
+        row.stale -> "Last seen on ${row.hostLabel} — ${row.error ?: "host unreachable"}"
+        isLocal -> "${row.project.contextDir.ifBlank { row.project.name }} on ${row.hostLabel} — " +
+            "opens it by leaving the remote host"
+        else -> "${row.project.contextDir.ifBlank { row.project.name }} on ${row.hostLabel} — opens over SSH"
+    }
+    Tooltip(tooltip, Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(AndyShape.Row)
+                .background(if (hovered) AndyColors.SurfaceSelected.copy(alpha = 0.5f) else Color.Transparent)
+                .hoverable(interactionSource)
+                .clickable(enabled = !connecting, onClick = onClick)
+                .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            LucideIcon(
+                if (isLocal) Lucide.Monitor else Lucide.Server,
+                TextSecondary.copy(alpha = 0.78f * fade),
+                Modifier.size(16.dp),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    row.project.name,
+                    color = TextSecondary.copy(alpha = fade),
+                    fontFamily = DisplayFont,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    row.hostLabel,
+                    color = TextSecondary.copy(alpha = 0.6f * fade),
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (connecting) ProjectActivityIndicator(14.dp)
+        }
+    }
+}
+
+/** A saved host that answered with nothing — reported so its projects don't just disappear. */
+@Composable
+private fun RemoteHostUnavailableRow(hostLabel: String, error: String?) {
+    Tooltip(error ?: "Host did not respond to a background scan", Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = AndySpace.Space2, vertical = AndySpace.Space1),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            LucideIcon(Lucide.Server, TextSecondary.copy(alpha = 0.4f), Modifier.size(16.dp))
+            Text(
+                "$hostLabel unavailable",
+                color = TextSecondary.copy(alpha = 0.5f),
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 private data class ProjectSidebarEntry(
@@ -1542,6 +1891,7 @@ private fun ProjectSessionRow(
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val copyText = rememberCopyText()
     Box(Modifier.fillMaxWidth()) {
         ChatSessionSidebarRow(
             task = task,
@@ -1603,6 +1953,13 @@ private fun ProjectSessionRow(
                     onArchive()
                 },
                 enabled = archiveLabel == "Unarchive" || !task.isActive,
+            )
+            DropdownMenuItem(
+                text = { Text("Copy chat ID", color = TextPrimary, fontFamily = MonoFont, fontSize = 12.sp) },
+                onClick = {
+                    menuExpanded = false
+                    copyText(task.id)
+                },
             )
             DropdownMenuItem(
                 text = { Text("Delete", color = Red, fontFamily = MonoFont, fontSize = 12.sp) },

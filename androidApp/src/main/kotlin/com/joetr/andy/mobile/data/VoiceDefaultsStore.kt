@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import dev.zacsweers.metro.Inject
@@ -42,9 +41,9 @@ class VoiceDefaultsStore(context: Context) {
     }
 
     suspend fun update(transform: (VoiceDefaults) -> VoiceDefaults) = withContext(Dispatchers.IO) {
-        _defaults.update { current ->
-            transform(current).also { persist(it) }
-        }
+        val next = transform(_defaults.value)
+        persist(next)
+        _defaults.value = next
     }
 
     private suspend fun load(): VoiceDefaults {

@@ -39,6 +39,8 @@ import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.TranscriptSearchHit
+import app.andy.desktop.service.agents.DesktopTranscriptSearchIndex
 import app.andy.model.Automation
 import app.andy.model.AutomationDraft
 import app.andy.model.WorktreeBaseOption
@@ -54,13 +56,17 @@ import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
 import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
+import app.andy.service.ChatAttachmentService
 import app.andy.service.CommandResult
 import app.andy.service.ProjectWorkflowService
+import app.andy.service.UnavailableChatAttachmentService
+import app.andy.model.AgentAttachment
 import app.andy.terminal.TmuxAndy
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -106,6 +112,11 @@ class McpAgentRunClient(
     private val scope: CoroutineScope,
     private val socketPath: File,
     private val cliLocator: AgentCliLocator = AgentCliLocator(),
+    /**
+     * Local staging service on the GUI host. Remote chat mutations upload through
+     * chat.attachment_* before sending daemon-side descriptors.
+     */
+    private val localAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
 ) : AgentRunService, ProjectWorkflowService, AutomationService {
     private val json = Json { ignoreUnknownKeys = true }
     private val idSeq = AtomicLong(1)
@@ -197,6 +208,13 @@ class McpAgentRunClient(
             sharedAgentTaskStore.archiveFile(taskId).isFile
         File(sharedAgentTaskStore.resolvedContentDirBlocking(taskId, compressed), "transcript.jsonl")
     })
+    private val transcriptSearch by lazy {
+        sharedAgentTaskStore.transcriptSearchIndex { taskId ->
+            val compressed = _tasks.value.firstOrNull { it.id == taskId }?.transcriptCompressed == true ||
+                sharedAgentTaskStore.archiveFile(taskId).isFile
+            File(sharedAgentTaskStore.resolvedContentDirBlocking(taskId, compressed), "transcript.jsonl")
+        }
+    }
 
     private var localBridge: DesktopAgentRunService? = null
 
@@ -257,25 +275,30 @@ class McpAgentRunClient(
         if (appForeground) clientViewingTaskId.get()?.let(::setOf).orEmpty() else emptySet()
 
     private suspend fun refreshTasks() {
-        refreshComposerOptions()
-        refreshProviderDefaults()
-        // Snapshot before the fetch: the list we are about to request is produced after the
-        // daemon acknowledged these reads, so it already reflects them.
-        val settledReads = daemonAckedReadTaskIds.toSet()
-        val raw = callTool("chat.list", emptyMap())
-        val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return
-        // Keep a lightweight task list for the GUI; lifecycle fields must round-trip so
-        // badges/labels match the daemon (startedAtMillis drives isQueued).
-        val refreshedTasks = arr.mapNotNull { el -> parseListedTask(el.jsonObject) }
-        dropSettledClientReads(clientReadTaskIds, daemonAckedReadTaskIds, settledReads)
-        dropConfirmedClientReads(clientReadTaskIds, refreshedTasks)
-        _tasks.value = mergeRefreshedAgentTasks(
-            refreshed = refreshedTasks,
-            clientReadTaskIds = clientReadTaskIds,
-            viewingTaskIds = viewingTaskIdsForMerge(),
-        ).filterNot { it.id in locallyDeletedTaskIds }
-        locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
-        if (!tasksLoaded.isCompleted) tasksLoaded.complete(Unit)
+        try {
+            refreshComposerOptions()
+            refreshProviderDefaults()
+            // Snapshot before the fetch: the list we are about to request is produced after the
+            // daemon acknowledged these reads, so it already reflects them.
+            val settledReads = daemonAckedReadTaskIds.toSet()
+            val raw = callTool("chat.list", emptyMap())
+            val arr = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull()
+            if (arr == null) return
+            // Keep a lightweight task list for the GUI; lifecycle fields must round-trip so
+            // badges/labels match the daemon (startedAtMillis drives isQueued).
+            val refreshedTasks = arr.mapNotNull { el -> parseListedTask(el.jsonObject) }
+            dropSettledClientReads(clientReadTaskIds, daemonAckedReadTaskIds, settledReads)
+            dropConfirmedClientReads(clientReadTaskIds, refreshedTasks)
+            _tasks.value = mergeRefreshedAgentTasks(
+                refreshed = refreshedTasks,
+                clientReadTaskIds = clientReadTaskIds,
+                viewingTaskIds = viewingTaskIdsForMerge(),
+            ).filterNot { it.id in locallyDeletedTaskIds }
+            locallyDeletedTaskIds.removeAll { deletedId -> refreshedTasks.none { it.id == deletedId } }
+        } finally {
+            // Always complete — parse/RPC failure must not hang plugin attach forever.
+            if (!tasksLoaded.isCompleted) tasksLoaded.complete(Unit)
+        }
     }
 
     override suspend fun awaitTasksLoaded() {
@@ -456,6 +479,18 @@ class McpAgentRunClient(
         hierarchyNodeId?.let { put("hierarchyNodeId", it) }
         packageName?.let { put("packageName", it) }
         kanbanCardId?.let { put("kanbanCardId", it) }
+    }
+
+    /** Descriptor-only serialization for managed text attachments (never bodies). */
+    private fun app.andy.model.AgentAttachment.toJsonObject(): JsonObject = buildJsonObject {
+        put("id", id)
+        put("displayName", displayName)
+        put("kind", kind.name)
+        put("mediaType", mediaType)
+        put("byteCount", byteCount)
+        lineCount?.let { put("lineCount", it) }
+        put("sha256", sha256)
+        relativePath?.let { put("relativePath", it) }
     }
 
     private fun JsonObject.string(key: String): String? =
@@ -723,57 +758,62 @@ class McpAgentRunClient(
     override fun refreshSlashCommands(agent: AgentKind, directory: String?) = Unit
 
     override suspend fun createAndStart(draft: AgentTaskDraft): AgentTask {
-        val raw = callTool(
-            "chat.start",
-            buildMap {
-                put("prompt", JsonPrimitive(draft.prompt))
-                put("agent", JsonPrimitive(draft.agent.name))
-                put("title", JsonPrimitive(draft.title))
-                draft.projectId?.let { put("projectId", JsonPrimitive(it)) }
-                draft.directory?.let { put("directory", JsonPrimitive(it)) }
-                put("useWorktree", JsonPrimitive(draft.useWorktree))
-                draft.existingWorktreePath?.takeIf { it.isNotBlank() }?.let {
-                    put("existingWorktreePath", JsonPrimitive(it))
-                }
-                draft.baseWorktreeTaskId?.let { put("baseWorktreeTaskId", JsonPrimitive(it)) }
-                draft.baseRef?.takeIf { it.isNotBlank() }?.let { put("baseRef", JsonPrimitive(it)) }
-                put("attachAndyMcp", JsonPrimitive(draft.attachAndyMcp))
-                put("autonomy", JsonPrimitive(draft.autonomy.name))
-                draft.model?.takeIf { it.isNotBlank() }?.let { put("model", JsonPrimitive(it)) }
-                if (draft.imagePaths.isNotEmpty()) {
-                    put("imagePaths", JsonArray(draft.imagePaths.map { JsonPrimitive(it) }))
-                }
-                // Managed evidence bundle ids only (§4) — never a local filesystem path.
-                if (draft.contextBundleIds.isNotEmpty()) {
-                    put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
-                }
-                draft.provenance?.let { put("provenance", it.toJsonObject()) }
-                draft.lane?.let { put("lane", JsonPrimitive(it.name)) }
-                draft.vendorSessionId?.takeIf { it.isNotBlank() }?.let {
-                    put("vendorSessionId", JsonPrimitive(it))
-                }
-            },
-        )
-        refreshTasks()
-        val id = runCatching {
-            json.parseToJsonElement(raw).jsonObject["id"]?.jsonPrimitive?.content
-        }.getOrNull()
-        val listed = id?.let { taskId -> _tasks.value.firstOrNull { it.id == taskId } }
-        if (listed != null) return listed
-        val fallback = AgentTask(
-            id = id ?: UUID.randomUUID().toString(),
-            title = draft.title,
-            prompt = draft.prompt,
-            agent = draft.agent,
-            projectId = draft.projectId,
-            cwd = draft.directory,
-            attachAndyMcp = draft.attachAndyMcp,
-            lane = draft.lane ?: draft.agent.defaultLane(),
-            status = app.andy.model.AgentStatus.Working,
-            createdAtMillis = System.currentTimeMillis(),
-        )
-        _tasks.value = _tasks.value + fallback
-        return fallback
+        return withRemoteAttachments(draft.attachments) { remoteAttachments ->
+            val raw = callTool(
+                "chat.start",
+                buildMap {
+                    put("prompt", JsonPrimitive(draft.prompt))
+                    put("agent", JsonPrimitive(draft.agent.name))
+                    put("title", JsonPrimitive(draft.title))
+                    draft.projectId?.let { put("projectId", JsonPrimitive(it)) }
+                    draft.directory?.let { put("directory", JsonPrimitive(it)) }
+                    put("useWorktree", JsonPrimitive(draft.useWorktree))
+                    draft.existingWorktreePath?.takeIf { it.isNotBlank() }?.let {
+                        put("existingWorktreePath", JsonPrimitive(it))
+                    }
+                    draft.baseWorktreeTaskId?.let { put("baseWorktreeTaskId", JsonPrimitive(it)) }
+                    draft.baseRef?.takeIf { it.isNotBlank() }?.let { put("baseRef", JsonPrimitive(it)) }
+                    put("attachAndyMcp", JsonPrimitive(draft.attachAndyMcp))
+                    put("autonomy", JsonPrimitive(draft.autonomy.name))
+                    draft.model?.takeIf { it.isNotBlank() }?.let { put("model", JsonPrimitive(it)) }
+                    if (draft.imagePaths.isNotEmpty()) {
+                        put("imagePaths", JsonArray(draft.imagePaths.map { JsonPrimitive(it) }))
+                    }
+                    if (remoteAttachments.isNotEmpty()) {
+                        put("attachments", JsonArray(remoteAttachments.map { it.toJsonObject() }))
+                    }
+                    // Managed evidence bundle ids only (§4) — never a local filesystem path.
+                    if (draft.contextBundleIds.isNotEmpty()) {
+                        put("contextBundleIds", JsonArray(draft.contextBundleIds.map { JsonPrimitive(it) }))
+                    }
+                    draft.provenance?.let { put("provenance", it.toJsonObject()) }
+                    draft.lane?.let { put("lane", JsonPrimitive(it.name)) }
+                    draft.vendorSessionId?.takeIf { it.isNotBlank() }?.let {
+                        put("vendorSessionId", JsonPrimitive(it))
+                    }
+                },
+            )
+            refreshTasks()
+            val id = runCatching {
+                json.parseToJsonElement(raw).jsonObject["id"]?.jsonPrimitive?.content
+            }.getOrNull()
+            val listed = id?.let { taskId -> _tasks.value.firstOrNull { it.id == taskId } }
+            if (listed != null) return@withRemoteAttachments listed
+            val fallback = AgentTask(
+                id = id ?: UUID.randomUUID().toString(),
+                title = draft.title,
+                prompt = draft.prompt,
+                agent = draft.agent,
+                projectId = draft.projectId,
+                cwd = draft.directory,
+                attachAndyMcp = draft.attachAndyMcp,
+                lane = draft.lane ?: draft.agent.defaultLane(),
+                status = app.andy.model.AgentStatus.Working,
+                createdAtMillis = System.currentTimeMillis(),
+            )
+            _tasks.value = _tasks.value + fallback
+            fallback
+        }
     }
 
     override fun stop(taskId: String) {
@@ -802,8 +842,27 @@ class McpAgentRunClient(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         scope.launch {
+            resumePrepared(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+                .onFailure { error ->
+                    patchTask(taskId) { it.copy(errorMessage = error.message) }
+                    System.err.println("andy: chat.resume attachment upload failed for $taskId: ${error.message}")
+                }
+        }
+    }
+
+    override suspend fun resumePrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
+    ): Result<Unit> = runCatching {
+        withRemoteAttachments(attachments) { remotes ->
             callTool(
                 "chat.resume",
                 buildMap {
@@ -812,6 +871,9 @@ class McpAgentRunClient(
                     if (imagePaths.isNotEmpty()) {
                         put("imagePaths", JsonArray(imagePaths.map { JsonPrimitive(it) }))
                     }
+                    if (remotes.isNotEmpty()) {
+                        put("attachments", JsonArray(remotes.map { it.toJsonObject() }))
+                    }
                     // Managed evidence bundle ids only (§4) — never a local filesystem path.
                     if (contextBundleIds.isNotEmpty()) {
                         put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
@@ -819,7 +881,7 @@ class McpAgentRunClient(
                 },
             )
         }
-    }
+    }.map { }
 
     override fun reattachSession(taskId: String) {
         localBridge?.reattachSession(taskId)
@@ -902,8 +964,27 @@ class McpAgentRunClient(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         scope.launch {
+            queueFollowUpPrepared(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+                .onFailure { error ->
+                    patchTask(taskId) { it.copy(errorMessage = error.message) }
+                    System.err.println("andy: chat.queue_follow_up attachment upload failed for $taskId: ${error.message}")
+                }
+        }
+    }
+
+    override suspend fun queueFollowUpPrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
+    ): Result<Unit> = runCatching {
+        withRemoteAttachments(attachments) { remotes ->
             callTool(
                 "chat.queue_follow_up",
                 buildMap {
@@ -912,11 +993,49 @@ class McpAgentRunClient(
                     if (imagePaths.isNotEmpty()) {
                         put("imagePaths", JsonArray(imagePaths.map { JsonPrimitive(it) }))
                     }
+                    if (remotes.isNotEmpty()) {
+                        put("attachments", JsonArray(remotes.map { it.toJsonObject() }))
+                    }
                     if (contextBundleIds.isNotEmpty()) {
                         put("contextBundleIds", JsonArray(contextBundleIds.map { JsonPrimitive(it) }))
                     }
                 },
             )
+        }
+    }.map { }
+
+    /**
+     * Streams each local staged attachment to the daemon and returns remote descriptors.
+     * Never forwards GUI-local staging ids — those cannot be materialized on andyd.
+     * Locals are retained until the chat mutation succeeds.
+     */
+    private suspend fun uploadAttachmentsForRemote(
+        attachments: List<AgentAttachment>,
+    ): RemoteAttachmentUploadResult {
+        if (attachments.isEmpty()) return RemoteAttachmentUploadResult(emptyList(), emptyList())
+        return uploadLocalAttachmentsToRemote(
+            attachments = attachments,
+            readChunk = { id, offset, max -> localAttachments.readStagedChunk(id, offset, max) },
+            callTool = { name, args -> callTool(name, args) },
+        )
+    }
+
+    /**
+     * Uploads locals → runs [block] with remote descriptors → discards locals on success,
+     * or cancels every remote staging id created by this attempt on failure.
+     */
+    private suspend fun <T> withRemoteAttachments(
+        attachments: List<AgentAttachment>,
+        block: suspend (remotes: List<AgentAttachment>) -> T,
+    ): T {
+        val upload = uploadAttachmentsForRemote(attachments)
+        return try {
+            val result = block(upload.remotes)
+            discardLocalsAfterMutationSuccess(upload.localIds) { id -> localAttachments.discardStaged(id) }
+            result
+        } catch (error: Exception) {
+            cleanupRemoteAttachmentsAfterMutationFailure(upload.remotes) { name, args -> callTool(name, args) }
+            throw error
         }
     }
 
@@ -1083,6 +1202,19 @@ class McpAgentRunClient(
             }
         }
         return flow
+    }
+
+    override fun searchTranscripts(query: String): Flow<TranscriptSearchHit> {
+        val refs = _tasks.value.map { task ->
+            DesktopTranscriptSearchIndex.TaskRef(
+                taskId = task.id,
+                projectId = task.projectId,
+                title = task.title,
+                projectName = null,
+                updatedAtMillis = task.finishedAtMillis ?: task.createdAtMillis,
+            )
+        }
+        return transcriptSearch.search(query, refs)
     }
 
     override fun interactiveResumeCommand(taskId: String): String? =

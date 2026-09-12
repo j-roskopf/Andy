@@ -64,11 +64,21 @@ upsertTask:
 INSERT OR REPLACE INTO agent_task(id, status, agent, created_at_millis, updated_at_millis, payload)
 VALUES (?, ?, ?, ?, ?, ?);
 
+-- Paired with AgentJsonSql.updateTaskPreservingDiffs: insert-if-absent, then splice stored diffs
+-- back. The splice itself lives in raw SQL because SQLDelight's dialects do not model the JSON1
+-- functions it needs.
+insertTaskIfAbsent:
+INSERT OR IGNORE INTO agent_task(id, status, agent, created_at_millis, updated_at_millis, payload)
+VALUES (?, ?, ?, ?, ?, ?);
+
 deleteTask:
 DELETE FROM agent_task WHERE id = ?;
 
 deleteAllTasks:
 DELETE FROM agent_task;
+
+deleteTasksNotIn:
+DELETE FROM agent_task WHERE id NOT IN ?;
 
 selectAllWorkflows:
 SELECT project_id, updated_at_millis, payload FROM project_workflow;

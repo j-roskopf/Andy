@@ -303,5 +303,6 @@ private class FakeWorktreeAgentRunService(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) = Unit
 }

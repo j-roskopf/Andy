@@ -6,6 +6,8 @@ import java.io.File
 import kotlinx.serialization.json.*
 
 object McpClientConfig {
+    private val prettyJson = Json { prettyPrint = true }
+
     enum class ClientType(val label: String) {
         ClaudeCode("Claude Code"),
         Cursor("Cursor"),
@@ -283,7 +285,7 @@ object McpClientConfig {
         }
         if (!changed) return content
         val updated = json.toMutableMap().apply { this[rootKey] = JsonObject(block) }
-        return Json { prettyPrint = true }.encodeToString(JsonObject.serializer(), JsonObject(updated))
+        return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
     internal fun stripTomlMcpServers(content: String, ids: Set<String>): String {
@@ -340,7 +342,6 @@ object McpClientConfig {
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(mcpServers)
         }
-        val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
@@ -362,7 +363,6 @@ object McpClientConfig {
                 this["${'$'}schema"] = JsonPrimitive("https://opencode.ai/config.json")
             }
         }
-        val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
@@ -399,7 +399,6 @@ object McpClientConfig {
         val updated = json.toMutableMap().apply {
             this["mcpServers"] = JsonObject(servers)
         }
-        val prettyJson = Json { prettyPrint = true }
         return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(updated))
     }
 
@@ -411,8 +410,7 @@ object McpClientConfig {
             put("url", "http://127.0.0.1:$port/mcp-http")
             putMcpAuthHeaders(bearerToken)
         }
-        val pretty = Json { prettyPrint = true }
-        return pretty.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
+        return prettyJson.encodeToString(JsonObject.serializer(), JsonObject(json.toMutableMap().apply { this["mcp"] = JsonObject(mcp) }))
     }
 
     internal fun mergeHermesYaml(content: String, port: Int, bearerToken: String? = null): String {

@@ -19,6 +19,8 @@ import app.andy.model.permissionSandbox
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentAttachment
+import app.andy.model.AgentAttachmentKind
 import app.andy.model.importedThreadTitle
 import app.andy.model.withImportedVendorSession
 import app.andy.model.LocalAgentRuntime
@@ -33,8 +35,10 @@ import app.andy.model.ContextualActionKind
 import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
+import app.andy.service.ChatAttachmentService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.UnavailableAutomationService
+import app.andy.service.UnavailableChatAttachmentService
 import app.andy.terminal.TmuxAndy
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
@@ -63,6 +67,40 @@ private val ImagePathsSchema = buildJsonObject {
     )
 }
 
+private val AttachmentsSchema = buildJsonObject {
+    put("type", "array")
+    put(
+        "description",
+        "Managed text attachment descriptors previously staged via chat.attachment_* upload tools " +
+            "(id, displayName, byteCount, sha256, optional lineCount/relativePath). Never include bodies.",
+    )
+    put(
+        "items",
+        buildJsonObject {
+            put("type", "object")
+            put(
+                "properties",
+                buildJsonObject {
+                    put("id", buildJsonObject { put("type", "string") })
+                    put("displayName", buildJsonObject { put("type", "string") })
+                    put("kind", buildJsonObject { put("type", "string") })
+                    put("mediaType", buildJsonObject { put("type", "string") })
+                    put("byteCount", buildJsonObject { put("type", "number") })
+                    put("lineCount", buildJsonObject { put("type", "number") })
+                    put("sha256", buildJsonObject { put("type", "string") })
+                    put("relativePath", buildJsonObject { put("type", "string") })
+                },
+            )
+            put("required", buildJsonArray {
+                add(JsonPrimitive("id"))
+                add(JsonPrimitive("displayName"))
+                add(JsonPrimitive("byteCount"))
+                add(JsonPrimitive("sha256"))
+            })
+        },
+    )
+}
+
 /** MCP argument keys that would smuggle a raw filesystem path in place of a managed evidence bundle id. */
 private val DisallowedRawPathKeys = listOf("evidencePath", "evidencePaths", "filePath", "filePaths", "localPath")
 
@@ -84,6 +122,7 @@ fun Server.registerAgentProjectTools(
     projectWorkflows: ProjectWorkflowService,
     callerTaskId: String? = null,
     automations: AutomationService = UnavailableAutomationService,
+    chatAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
 ) {
     fun register(
         name: String,
@@ -578,6 +617,7 @@ fun Server.registerAgentProjectTools(
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
             "imagePaths" to ImagePathsSchema,
+            "attachments" to AttachmentsSchema,
             "provenance" to buildJsonObject {
                 put("type", "object")
                 put(
@@ -592,7 +632,8 @@ fun Server.registerAgentProjectTools(
         rejectRawEvidencePaths(args)
         val vendorSessionId = str(args, "vendorSessionId")?.trim()?.takeIf { it.isNotBlank() }
         val prompt = str(args, "prompt").orEmpty()
-        if (prompt.isBlank() && vendorSessionId == null) error("prompt required")
+        val attachments = parseAttachmentsArg(args)
+        if (prompt.isBlank() && vendorSessionId == null && attachments.isEmpty()) error("prompt required")
         val agentName = str(args, "agent") ?: error("agent required")
         val agent = AgentKind.entries.firstOrNull {
             it.name.equals(agentName, ignoreCase = true) ||
@@ -663,6 +704,7 @@ fun Server.registerAgentProjectTools(
                         ?: error("unknown lane; expected ACP or Terminal")
                 },
                 imagePaths = imagePaths,
+                attachments = attachments,
                 contextBundleIds = strList(args, "contextBundleIds"),
                 provenance = parseProvenance(args),
                 vendorSessionId = vendorSessionId,
@@ -876,6 +918,7 @@ fun Server.registerAgentProjectTools(
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
             "imagePaths" to ImagePathsSchema,
+            "attachments" to AttachmentsSchema,
         ),
         required = listOf("taskId", "followUp"),
     ) { args ->
@@ -883,11 +926,13 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
         val imagePaths = parseImagePathsArg(args)
+        val attachments = parseAttachmentsArg(args)
         agentRuns.resume(
             id,
             followUp,
             imagePaths = imagePaths,
             contextBundleIds = strList(args, "contextBundleIds"),
+            attachments = attachments,
         )
         textResult("""{"ok":true,"id":"$id"}""")
     }
@@ -904,6 +949,7 @@ fun Server.registerAgentProjectTools(
                 put("description", "Managed evidence bundle ids (§4) to attach; never raw filesystem paths")
             },
             "imagePaths" to ImagePathsSchema,
+            "attachments" to AttachmentsSchema,
         ),
         required = listOf("taskId", "followUp"),
     ) { args ->
@@ -911,6 +957,7 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         val followUp = str(args, "followUp") ?: error("followUp required")
         val imagePaths = parseImagePathsArg(args)
+        val attachments = parseAttachmentsArg(args)
         val queuedBefore = agentRuns.tasks.value.excludingTemporary()
             .firstOrNull { it.id == id }
             ?.queuedFollowUps
@@ -921,6 +968,7 @@ fun Server.registerAgentProjectTools(
             followUp,
             imagePaths = imagePaths,
             contextBundleIds = strList(args, "contextBundleIds"),
+            attachments = attachments,
         )
         val queuedAfter = agentRuns.tasks.value.excludingTemporary()
             .firstOrNull { it.id == id }
@@ -1380,6 +1428,86 @@ fun Server.registerAgentProjectTools(
     }
 
     registerAutomationTools(automations, agentRuns, callerTaskId)
+
+    register(
+        name = "chat.attachment_begin",
+        description = "Begin a chunked managed text-attachment upload. Pass the returned uploadId to append/commit.",
+        properties = mapOf(
+            "displayName" to buildJsonObject { put("type", "string") },
+            "byteCount" to buildJsonObject { put("type", "number") },
+            "sha256" to buildJsonObject { put("type", "string") },
+            "mediaType" to buildJsonObject { put("type", "string") },
+            "draftKey" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("displayName", "byteCount", "sha256"),
+    ) { args ->
+        val displayName = str(args, "displayName") ?: error("displayName required")
+        val byteCount = args["byteCount"]?.jsonPrimitive?.longOrNull
+            ?: error("byteCount required")
+        val sha256 = str(args, "sha256") ?: error("sha256 required")
+        val session = chatAttachments.beginUpload(
+            displayName = displayName,
+            byteCount = byteCount,
+            sha256 = sha256,
+            mediaType = str(args, "mediaType") ?: "text/plain; charset=utf-8",
+            draftKey = str(args, "draftKey"),
+        ).getOrElse { error(it.message ?: "begin upload failed") }
+        textResult(
+            buildJsonObject {
+                put("uploadId", session.uploadId)
+                put("displayName", session.displayName)
+                put("expectedBytes", session.expectedBytes)
+                put("expectedSha256", session.expectedSha256)
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "chat.attachment_append",
+        description = "Append a Base64 chunk to an in-progress managed text-attachment upload.",
+        properties = mapOf(
+            "uploadId" to buildJsonObject { put("type", "string") },
+            "sequence" to buildJsonObject { put("type", "number") },
+            "base64Chunk" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("uploadId", "sequence", "base64Chunk"),
+    ) { args ->
+        val uploadId = str(args, "uploadId") ?: error("uploadId required")
+        val sequence = args["sequence"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: args["sequence"]?.jsonPrimitive?.longOrNull?.toInt()
+            ?: error("sequence required")
+        val chunk = str(args, "base64Chunk") ?: error("base64Chunk required")
+        chatAttachments.appendUploadChunk(uploadId, sequence, chunk)
+            .getOrElse { error(it.message ?: "append failed") }
+        textResult("""{"ok":true,"uploadId":"$uploadId","sequence":$sequence}""")
+    }
+
+    register(
+        name = "chat.attachment_commit",
+        description = "Finalize a managed text-attachment upload and return its descriptor.",
+        properties = mapOf(
+            "uploadId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("uploadId"),
+    ) { args ->
+        val uploadId = str(args, "uploadId") ?: error("uploadId required")
+        val attachment = chatAttachments.commitUpload(uploadId)
+            .getOrElse { error(it.message ?: "commit failed") }
+        textResult(attachmentDescriptorJson(attachment).toString())
+    }
+
+    register(
+        name = "chat.attachment_cancel",
+        description = "Cancel an in-progress managed text-attachment upload, or discard a committed-but-unsent staged attachment, deleting its bytes.",
+        properties = mapOf(
+            "uploadId" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("uploadId"),
+    ) { args ->
+        val uploadId = str(args, "uploadId") ?: error("uploadId required")
+        val cancelled = chatAttachments.cancelUpload(uploadId)
+        textResult("""{"ok":$cancelled,"uploadId":"$uploadId"}""")
+    }
 }
 
 /**
@@ -1464,6 +1592,10 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.delete",
     "chat.resume",
     "chat.queue_follow_up",
+    "chat.attachment_begin",
+    "chat.attachment_append",
+    "chat.attachment_commit",
+    "chat.attachment_cancel",
     "chat.remove_queued_follow_up",
     "chat.send_queued_follow_up",
     "chat.send_next_queued_follow_up",

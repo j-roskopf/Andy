@@ -745,10 +745,7 @@ fun LiveScreen(
                             session = dhuSession,
                             readiness = dhuReadiness,
                             onRetry = {
-                                val target = androidAutoForSerial ?: serial
-                                if (target != null) {
-                                    scope.launch { services.dhu.start(target) }
-                                }
+                                scope.launch { services.dhu.start(androidAutoForSerial) }
                             },
                             onStop = { onAndroidAutoSerialChange(null) },
                         )

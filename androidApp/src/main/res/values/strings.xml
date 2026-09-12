@@ -4,4 +4,5 @@
     <string name="shortcut_voice_new_thread_long">New thread from voice</string>
     <string name="widget_voice_new_thread_label">Voice thread</string>
     <string name="widget_voice_new_thread_description">Dictate a new Andy agent thread</string>
+    <string name="voice_recognizer_prompt">New Andy thread</string>
 </resources>

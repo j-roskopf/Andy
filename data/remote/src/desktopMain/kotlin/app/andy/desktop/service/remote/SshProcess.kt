@@ -47,10 +47,10 @@ object SshProcess {
     fun controlPathForPid(pid: Long = ProcessHandle.current().pid()): File =
         File(File("/tmp", "andy-r$pid").also { it.mkdirs() }, "mux")
 
-    private fun commonOptions(): List<String> = listOf(
+    private fun commonOptions(connectTimeoutSeconds: Int = 20): List<String> = listOf(
         "-o", "StrictHostKeyChecking=yes",
         "-o", "ForwardAgent=no",
-        "-o", "ConnectTimeout=20",
+        "-o", "ConnectTimeout=$connectTimeoutSeconds",
         "-o", "Compression=no",
         "-o", "IPQoS=lowdelay",
         // One prompt only — Cancel must not open 3 stacked Andy SSH dialogs.
@@ -85,8 +85,40 @@ object SshProcess {
     fun baseOptions(controlPath: File?): List<String> =
         if (controlPath != null) muxOptions(controlPath) else commonOptions()
 
-    fun processBuilder(command: List<String>): ProcessBuilder =
-        ProcessBuilder(command).also { SshAskpass.applyTo(it) }
+    /**
+     * Background probes that must never interrupt the user: `BatchMode=yes` makes OpenSSH fail
+     * instead of prompting, so a host needing a password reports an error rather than popping the
+     * askpass dialog. Reuses an existing master when [controlPath] is live (already authenticated).
+     */
+    fun batchOptions(controlPath: File?, connectTimeoutSeconds: Int = 8): List<String> = buildList {
+        addAll(commonOptions(connectTimeoutSeconds))
+        add("-o")
+        add("BatchMode=yes")
+        if (controlPath != null) {
+            add("-o")
+            add("ControlPath=${controlPath.absolutePath}")
+        }
+    }
+
+    /**
+     * Background probe that may use a *saved* password: no `BatchMode`, because that would rule
+     * password auth out entirely. Safe only when paired with a non-prompting askpass endpoint
+     * such as [SshScanAskpass] — `NumberOfPasswordPrompts=1` then bounds the attempt.
+     */
+    fun credentialProbeOptions(controlPath: File?, connectTimeoutSeconds: Int = 8): List<String> = buildList {
+        addAll(commonOptions(connectTimeoutSeconds))
+        if (controlPath != null) {
+            add("-o")
+            add("ControlPath=${controlPath.absolutePath}")
+        }
+    }
+
+    /**
+     * @param askpass false for [batchOptions] probes — without a prompt path there is nothing for
+     *   the askpass helper to do, and attaching it risks a dialog on a background scan.
+     */
+    fun processBuilder(command: List<String>, askpass: Boolean = true): ProcessBuilder =
+        ProcessBuilder(command).also { if (askpass) SshAskpass.applyTo(it) }
 
     fun exitMaster(controlPath: File) {
         if (!controlPath.exists()) return

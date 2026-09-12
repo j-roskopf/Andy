@@ -16,6 +16,7 @@ import app.andy.desktop.service.agents.CursorAdapter
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentRetentionService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
+import app.andy.desktop.service.agents.DesktopChatAttachmentService
 import app.andy.desktop.service.agents.DesktopOrchestrationPreferencesService
 import app.andy.desktop.service.agents.defaultAndyAgentArtifactsDir
 import app.andy.desktop.service.agents.registerArchiveViewShutdownHook
@@ -213,6 +214,7 @@ fun createDaemonRuntime(
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
+    val chatAttachmentService = DesktopChatAttachmentService()
     val agentRuns = DesktopAgentRunService(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         store = agentTaskStore,
@@ -233,6 +235,7 @@ fun createDaemonRuntime(
         workspaceStore = store,
         actionConfig = actionConfig,
         terminalMode = AgentTerminalMode.TmuxHeadless,
+        chatAttachments = chatAttachmentService,
     )
     val automations = DesktopAutomationService(
         store = agentTaskStore,
@@ -245,7 +248,7 @@ fun createDaemonRuntime(
         actionRuns = actionRuns,
         andyVersion = { AndyBuildInfo.versionName },
     ).also { it.attachAgentEvents(agentRuns) }
-    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins)
+    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins, chatAttachmentService)
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -294,6 +297,7 @@ fun createDaemonRuntime(
         crashInspector = crashInspector,
         heapDump = heapDump,
         evidence = evidenceService,
+        chatAttachments = chatAttachmentService,
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         runtimeBundle = DesktopRuntimeBundleService(),
@@ -499,9 +503,11 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
     val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val chatAttachmentService = DesktopChatAttachmentService()
     val remoteAgents = McpAgentRunClient(
         scope = agentScope,
         socketPath = socket,
+        localAttachments = chatAttachmentService,
     )
     // Attach-only terminal host: must not open ~/.andy/agents.db. andyd owns that
     // store; a second writer silently reverts chats / unread badges on GUI quit.
@@ -581,6 +587,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         localLocalServers = localLocalServers,
         agentRunsForLocalServers = swappableAgents,
         actionRunsForLocalServers = actionRuns,
+        localAttachments = chatAttachmentService,
     )
     remoteShellRef.set { remoteSession.shellEndpoint() }
 
@@ -644,6 +651,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         crashInspector = crashInspector,
         heapDump = heapDump,
         evidence = evidenceService,
+        chatAttachments = chatAttachmentService,
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,
@@ -775,6 +783,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
+    val chatAttachmentService = DesktopChatAttachmentService()
     val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val agentRuns = DesktopAgentRunService(
         scope = agentScope,
@@ -795,6 +804,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         mcp = mcp,
         workspaceStore = store,
         actionConfig = actionConfig,
+        chatAttachments = chatAttachmentService,
     )
     val automations = DesktopAutomationService(
         store = agentTaskStore,
@@ -807,7 +817,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         actionRuns = actionRuns,
         andyVersion = { AndyBuildInfo.versionName },
     ).also { it.attachAgentEvents(agentRuns) }
-    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins)
+    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins, chatAttachmentService)
     plugins.runStartupHooks()
     val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
     val localAttach = DesktopAgentRunService(
@@ -953,6 +963,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         crashInspector = crashInspector,
         heapDump = heapDump,
         evidence = evidenceService,
+        chatAttachments = chatAttachmentService,
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,

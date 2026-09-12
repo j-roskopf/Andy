@@ -1,6 +1,8 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentAttachment
+import app.andy.model.AgentAttachmentKind
 import app.andy.model.AgentContextualProvenance
 import app.andy.model.AgentConnectionRecovery
 import app.andy.model.AgentConnectionRecoveryReason
@@ -86,6 +88,10 @@ class DesktopAgentTaskStore(
     private val legacyTomlFile: File get() = File(databaseFile.parentFile, "agents.toml")
     private val sqlite by lazy { SqliteAgentStore(dbFile = databaseFile) }
 
+    /** Cmd+K transcript FTS index; [transcriptFileFor] should resolve compressed archives. */
+    fun transcriptSearchIndex(transcriptFileFor: (String) -> File): DesktopTranscriptSearchIndex =
+        sqlite.transcriptSearchIndex(transcriptFileFor)
+
     fun taskDir(taskId: String): File = File(transcriptsDir, taskId)
 
     fun archiveFile(taskId: String): File = File(taskDir(taskId), "archive.zip")
@@ -151,6 +157,13 @@ class DesktopAgentTaskStore(
         databaseFile.parentFile?.mkdirs()
         sqlite.save(state, allowEmptyTaskList)
     }
+
+    /**
+     * Stored diffs for one task. [load] returns snapshots summary-only to keep ~80MB of diff text
+     * off the heap, so the diff UI fetches them here when a chat's changes are actually opened.
+     */
+    suspend fun loadCompletedDiffs(taskId: String): Map<String, AgentFileDiff> =
+        withContext(Dispatchers.IO) { sqlite.loadTaskDiffs(taskId) }
 
     fun loadAllKanbanBoards(): Map<String, KanbanBoard> = sqlite.loadAllKanbanBoards()
 
@@ -278,6 +291,7 @@ internal data class AgentTaskDto(
     val fastMode: Boolean = false,
     val openClawNewSession: Boolean = true,
     val imagePaths: List<String> = emptyList(),
+    val attachments: List<AgentAttachmentDto> = emptyList(),
     val skillNames: List<String> = emptyList(),
     val skillPaths: List<String> = emptyList(),
     val goal: String = "",
@@ -537,7 +551,42 @@ internal data class AgentQueuedFollowUpDto(
     val skillNames: List<String> = emptyList(),
     val skillPaths: List<String> = emptyList(),
     val contextBundleIds: List<String> = emptyList(),
+    val attachments: List<AgentAttachmentDto> = emptyList(),
     val provenance: AgentContextualProvenanceDto? = null,
+)
+
+@Serializable
+internal data class AgentAttachmentDto(
+    val id: String,
+    val displayName: String,
+    val kind: String = "Text",
+    val mediaType: String = "text/plain; charset=utf-8",
+    val byteCount: Long = 0,
+    val lineCount: Long = 0,
+    val sha256: String = "",
+    val relativePath: String = "",
+)
+
+internal fun AgentAttachmentDto.toModel(): AgentAttachment = AgentAttachment(
+    id = id,
+    displayName = displayName,
+    kind = AgentAttachmentKind.entries.firstOrNull { it.name == kind } ?: AgentAttachmentKind.Text,
+    mediaType = mediaType,
+    byteCount = byteCount,
+    lineCount = lineCount.takeIf { it > 0 },
+    sha256 = sha256,
+    relativePath = relativePath.takeIf { it.isNotBlank() },
+)
+
+internal fun AgentAttachment.toDto(): AgentAttachmentDto = AgentAttachmentDto(
+    id = id,
+    displayName = displayName,
+    kind = kind.name,
+    mediaType = mediaType,
+    byteCount = byteCount,
+    lineCount = lineCount ?: 0,
+    sha256 = sha256,
+    relativePath = relativePath.orEmpty(),
 )
 
 @Serializable
@@ -665,12 +714,15 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
         fastMode = fastMode,
         openClawNewSession = openClawNewSession,
         imagePaths = imagePaths,
+        attachments = attachments.map { it.toModel() },
         skills = skillNames.zip(skillPaths).filter { (_, path) -> path.isNotBlank() }.map { (name, path) ->
             AgentSkill(name = name, description = "", path = path)
         },
         goal = goal.takeIf { it.isNotBlank() },
         queuedFollowUps = queuedFollowUps.mapNotNull { queued ->
-            queued.text.takeIf { it.isNotBlank() || queued.imagePaths.isNotEmpty() }?.let { text ->
+            queued.text.takeIf {
+                it.isNotBlank() || queued.imagePaths.isNotEmpty() || queued.attachments.isNotEmpty()
+            }?.let { text ->
                 AgentQueuedFollowUp(
                     text = text,
                     imagePaths = queued.imagePaths,
@@ -678,6 +730,7 @@ internal fun AgentTaskDto.toModel(scrollbackFile: (String) -> File): AgentTask? 
                     .filter { (_, path) -> path.isNotBlank() }
                     .map { (name, path) -> AgentSkill(name = name, description = "", path = path) },
                     contextBundleIds = queued.contextBundleIds,
+                    attachments = queued.attachments.map { it.toModel() },
                     provenance = queued.provenance?.toModel(),
                 )
             }
@@ -799,6 +852,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
             fastMode = task.fastMode,
             openClawNewSession = task.openClawNewSession,
             imagePaths = task.imagePaths,
+            attachments = task.attachments.map { it.toDto() },
             skillNames = task.skills.map { it.name },
             skillPaths = task.skills.map { it.path },
             goal = task.goal.orEmpty(),
@@ -809,6 +863,7 @@ internal fun AgentStoreState.toFileDto(): AgentsFileDto = AgentsFileDto(
                     skillNames = queued.skills.map { it.name },
                     skillPaths = queued.skills.map { it.path },
                     contextBundleIds = queued.contextBundleIds,
+                    attachments = queued.attachments.map { it.toDto() },
                     provenance = queued.provenance?.toDto(),
                 )
             },
@@ -1120,24 +1175,33 @@ private fun ProjectTask.toDto(): ProjectTaskDto = ProjectTaskDto(
 
 private fun AgentThreadChangeSnapshotDto.toModel(): AgentThreadChangeSnapshot = AgentThreadChangeSnapshot(
     summary = AgentChangeSummary(files.map { AgentFileChange(it.path, it.additions, it.deletions) }),
-    diffs = diffs.associate { diff ->
-        diff.path to AgentFileDiff(
-            path = diff.path,
-            lines = diff.lines.map { line ->
-                DiffLine(
-                    kind = DiffLineKind.entries.firstOrNull { it.name == line.kind } ?: DiffLineKind.Context,
-                    text = line.text,
-                    oldLineNumber = line.oldLineNumber,
-                    newLineNumber = line.newLineNumber,
-                )
-            },
-            additions = diff.additions,
-            deletions = diff.deletions,
-            isBinary = diff.isBinary,
-            isNewFile = diff.isNewFile,
+    diffs = diffs.associate { it.path to it.toModel() },
+)
+
+internal fun AgentFileDiffDto.toModel(): AgentFileDiff = AgentFileDiff(
+    path = path,
+    lines = lines.map { line ->
+        DiffLine(
+            kind = DiffLineKind.entries.firstOrNull { it.name == line.kind } ?: DiffLineKind.Context,
+            text = line.text,
+            oldLineNumber = line.oldLineNumber,
+            newLineNumber = line.newLineNumber,
         )
     },
+    additions = additions,
+    deletions = deletions,
+    isBinary = isBinary,
+    isNewFile = isNewFile,
 )
+
+/**
+ * Marks a task loaded from the summary-only projection so persistence knows its empty [diffs] map
+ * means "not read", not "no changes". See [AgentThreadChangeSnapshot.diffsHydrated].
+ */
+internal fun AgentTask.withUnhydratedDiffs(): AgentTask {
+    val changes = completedChanges ?: return this
+    return copy(completedChanges = changes.copy(diffs = emptyMap(), diffsHydrated = false))
+}
 
 private fun AgentThreadChangeSnapshot.toDto(): AgentThreadChangeSnapshotDto = AgentThreadChangeSnapshotDto(
     files = summary.files.map { AgentFileChangeDto(it.path, it.additions, it.deletions) },

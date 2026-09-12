@@ -1,6 +1,8 @@
 package app.andy.desktop.service.agents.acp
 
 import app.andy.model.AcpToolCallPresentation
+import app.andy.model.AgentAttachment
+import app.andy.model.AgentAttachmentKind
 import app.andy.model.AgentEvent
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.AgentPlanEntry
@@ -139,6 +141,7 @@ private data class TranscriptEvent(
     val model: String = "",
     val skills: List<TranscriptSkill> = emptyList(),
     val images: List<String> = emptyList(),
+    val attachments: List<TranscriptAttachment> = emptyList(),
     val toolImages: List<String> = emptyList(),
     val toolName: String = "",
     val toolCallId: String = "",
@@ -195,6 +198,16 @@ private data class TranscriptEvent(
 )
 
 @Serializable private data class TranscriptSkill(val name: String, val path: String)
+@Serializable private data class TranscriptAttachment(
+    val id: String,
+    val displayName: String,
+    val kind: String = "Text",
+    val mediaType: String = "text/plain; charset=utf-8",
+    val byteCount: Long = 0,
+    val lineCount: Long = 0,
+    val sha256: String = "",
+    val relativePath: String = "",
+)
 @Serializable private data class TranscriptQuotaWindow(val label: String, val fraction: Float? = null, val resetAt: Long? = null, val detail: String? = null)
 @Serializable private data class TranscriptPlanEntry(val content: String, val status: String)
 @Serializable private data class TranscriptCommand(val name: String, val description: String, val inputHint: String? = null)
@@ -205,7 +218,25 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
     is AgentEvent.SessionStarted -> TranscriptEvent("session", atMillis, sessionId = sessionId.orEmpty(), model = model.orEmpty())
     is AgentEvent.AssistantText -> TranscriptEvent("assistant", atMillis, text = text, isStreamDelta = isStreamDelta)
     is AgentEvent.Thinking -> TranscriptEvent("thinking", atMillis, text = text, isStreamDelta = isStreamDelta)
-    is AgentEvent.UserMessage -> TranscriptEvent("user", atMillis, text = text, skills = skills.map { TranscriptSkill(it.name, it.path) }, images = imagePaths)
+    is AgentEvent.UserMessage -> TranscriptEvent(
+        "user",
+        atMillis,
+        text = text,
+        skills = skills.map { TranscriptSkill(it.name, it.path) },
+        images = imagePaths,
+        attachments = attachments.map {
+            TranscriptAttachment(
+                id = it.id,
+                displayName = it.displayName,
+                kind = it.kind.name,
+                mediaType = it.mediaType,
+                byteCount = it.byteCount,
+                lineCount = it.lineCount ?: 0,
+                sha256 = it.sha256,
+                relativePath = it.relativePath.orEmpty(),
+            )
+        },
+    )
     is AgentEvent.ToolCall -> TranscriptEvent("tool", atMillis, toolName = toolName, toolCallId = toolCallId.orEmpty(), summary = summary, detail = detail, toolKind = kind?.name.orEmpty(), toolState = state.name, locations = locations, toolImages = images.map { it.dataUri })
     is AgentEvent.ToolResult -> TranscriptEvent("tool-result", atMillis, toolName = toolName.orEmpty(), summary = summary, detail = detail, isError = isError, quotaWindows = quotaWindows.map { TranscriptQuotaWindow(it.label, it.remainingFraction, it.resetAtMillis, it.detail) })
     is AgentEvent.TaskError -> TranscriptEvent("error", atMillis, text = message)
@@ -255,7 +286,24 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "session" -> AgentEvent.SessionStarted(atMillis, sessionId.takeIf { it.isNotBlank() }, model.takeIf { it.isNotBlank() })
     "assistant" -> AgentEvent.AssistantText(atMillis, text, isStreamDelta)
     "thinking" -> AgentEvent.Thinking(atMillis, text, isStreamDelta)
-    "user" -> AgentEvent.UserMessage(atMillis, text, skills.map { AgentSkill(it.name, "", it.path) }, images)
+    "user" -> AgentEvent.UserMessage(
+        atMillis,
+        text,
+        skills.map { AgentSkill(it.name, "", it.path) },
+        images,
+        attachments.map {
+            AgentAttachment(
+                id = it.id,
+                displayName = it.displayName,
+                kind = AgentAttachmentKind.entries.firstOrNull { kind -> kind.name == it.kind } ?: AgentAttachmentKind.Text,
+                mediaType = it.mediaType,
+                byteCount = it.byteCount,
+                lineCount = it.lineCount.takeIf { count -> count > 0 },
+                sha256 = it.sha256,
+                relativePath = it.relativePath.takeIf { path -> path.isNotBlank() },
+            )
+        },
+    )
     "tool" -> {
         val storedKind = AgentToolKind.entries.firstOrNull { it.name == toolKind } ?: AgentToolKind.Other
         val resolvedKind = if (storedKind == AgentToolKind.Other) {

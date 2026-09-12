@@ -64,7 +64,11 @@ import com.joetr.andy.mobile.data.networkaccess.NetworkAccessException
 import com.joetr.andy.mobile.data.networkaccess.ProjectGroup
 import com.joetr.andy.mobile.data.networkaccess.awaitingPlanConfirmation
 import com.joetr.andy.mobile.data.networkaccess.displayStatusLabel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun ProjectsScreen(
@@ -74,6 +78,7 @@ fun ProjectsScreen(
     okHttpClient: okhttp3.OkHttpClient,
     viewModel: ProjectsViewModel,
     onClientReady: (NetworkAccessClient) -> Unit,
+    onConnectionReady: () -> Unit = {},
     onSignedOut: () -> Unit = {},
     onOpenChat: (String) -> Unit,
     onNewChat: () -> Unit,
@@ -139,20 +144,30 @@ fun ProjectsScreen(
         }
     }
 
-    suspend fun refresh(client: NetworkAccessClient, showLoading: Boolean) {
+    suspend fun refresh(client: NetworkAccessClient, showLoading: Boolean): Boolean {
         try {
             viewModel.refresh(client, host.id, showLoading = showLoading)
         } catch (e: NetworkAccessException) {
             handleAuthFailure(e)
         }
+        return viewModel.signedIn.value
     }
 
     suspend fun completeLogin(client: NetworkAccessClient) {
         val session = client.sessionToken
         if (session.isNullOrBlank()) throw NetworkAccessException("Login failed")
-        repository.saveNetworkAccessSession(host.id, session)
-        onClientReady(client)
-        refresh(client, showLoading = true)
+        coroutineScope {
+            val persistSession = async(Dispatchers.IO) {
+                repository.saveNetworkAccessSession(host.id, session)
+            }
+            try {
+                onClientReady(client)
+                if (refresh(client, showLoading = true)) onConnectionReady()
+            } finally {
+                // A valid login must remain saved even if the first project refresh fails.
+                persistSession.await()
+            }
+        }
     }
 
     LaunchedEffect(host.id) {
@@ -166,8 +181,16 @@ fun ProjectsScreen(
                 return@LaunchedEffect
             }
         }
-        val storedSession = repository.networkAccessSession(host.id)
-        val legacyToken = repository.legacyNetworkAccessToken(host.id)
+        val storedSession = withContext(Dispatchers.IO) {
+            repository.networkAccessSession(host.id)
+        }
+        // Legacy tokens are only a migration fallback. Avoid another encrypted DataStore read
+        // on every normal connection after a session has already been established.
+        val legacyToken = if (storedSession.isNullOrBlank()) {
+            withContext(Dispatchers.IO) { repository.legacyNetworkAccessToken(host.id) }
+        } else {
+            null
+        }
         when {
             !storedSession.isNullOrBlank() -> {
                 val existing = networkClient
@@ -181,7 +204,9 @@ fun ProjectsScreen(
                 }
                 try {
                     onClientReady(client)
-                    refresh(client, showLoading = !viewModel.hasCachedProjects(host.id))
+                    if (refresh(client, showLoading = !viewModel.hasCachedProjects(host.id))) {
+                        onConnectionReady()
+                    }
                 } catch (e: Exception) {
                     viewModel.markSignedOut()
                     if (e !is NetworkAccessException) {

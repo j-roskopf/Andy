@@ -27,6 +27,19 @@ class RemoteSessionSidebarStateTest {
     }
 
     @Test
+    fun connectedSessionPrefersAliasInHeader() {
+        val session = RemoteSessionState(
+            status = RemoteSessionStatus.Connected,
+            target = "ada@garden-box",
+            targetAliases = mapOf("ada@garden-box" to "Garden"),
+        )
+        val phase = hostPhaseOf(session, busy = false)
+        assertEquals("Garden", hostHeaderDetail(session, phase))
+        assertEquals("Garden", session.displayNameFor("ada@garden-box"))
+        assertEquals("ada@build-rack", session.displayNameFor("ada@build-rack"))
+    }
+
+    @Test
     fun localSwitchInFlightReadsAsSwitching() {
         val session = RemoteSessionState(status = RemoteSessionStatus.Local)
         val phase = hostPhaseOf(session, busy = true)

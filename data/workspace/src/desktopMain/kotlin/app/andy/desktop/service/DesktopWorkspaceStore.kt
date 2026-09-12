@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.model.CachedRemoteProject
 import app.andy.model.IntentDraft
 import app.andy.model.PairedWifiDevice
 import app.andy.model.ProxyRule
@@ -24,6 +25,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -207,7 +210,10 @@ class DesktopWorkspaceStore(
             lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
             lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
             savedSshTargets = props.getProperty("savedSshTargets").orEmpty().lines().filter { it.isNotBlank() },
+            sshTargetAliases = loadIndexedStringMap(props, "sshTargetAlias"),
             iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
+            mergeRemoteProjects = props.getProperty("mergeRemoteProjects")?.toBooleanStrictOrNull() ?: false,
+            remoteProjectCache = decodeRemoteProjectCache(props.getProperty("remoteProjectCache").orEmpty()),
             savedDockLayouts = decodeSavedDockLayouts(props.getProperty("savedDockLayouts").orEmpty()),
         ).also { mutableState.value = it }
     }
@@ -354,7 +360,10 @@ class DesktopWorkspaceStore(
             setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
             setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
             setProperty("savedSshTargets", state.savedSshTargets.joinToString("\n"))
+            saveIndexedStringMap(this, "sshTargetAlias", state.sshTargetAliases)
             saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
+            setProperty("mergeRemoteProjects", state.mergeRemoteProjects.toString())
+            setProperty("remoteProjectCache", encodeRemoteProjectCache(state.remoteProjectCache))
             setProperty("savedDockLayouts", encodeSavedDockLayouts(state.savedDockLayouts))
         }
         file.outputStream().use { props.store(it, "Andy workspace") }
@@ -372,6 +381,16 @@ class DesktopWorkspaceStore(
         return runCatching {
             WorkspaceJson.decodeFromString(ListSerializer(IntentDraft.serializer()), value)
         }.getOrDefault(emptyList())
+    }
+
+    private fun encodeRemoteProjectCache(cache: Map<String, List<CachedRemoteProject>>): String =
+        if (cache.isEmpty()) "" else WorkspaceJson.encodeToString(RemoteProjectCacheSerializer, cache)
+
+    private fun decodeRemoteProjectCache(value: String): Map<String, List<CachedRemoteProject>> {
+        if (value.isBlank()) return emptyMap()
+        return runCatching {
+            WorkspaceJson.decodeFromString(RemoteProjectCacheSerializer, value)
+        }.getOrDefault(emptyMap())
     }
 
     private fun encodeSavedDockLayouts(layouts: List<SavedDockLayout>): String =
@@ -461,5 +480,7 @@ class DesktopWorkspaceStore(
 
     private companion object {
         val WorkspaceJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val RemoteProjectCacheSerializer =
+            MapSerializer(String.serializer(), ListSerializer(CachedRemoteProject.serializer()))
     }
 }

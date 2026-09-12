@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import app.andy.loadImageBitmap
+import app.andy.model.AgentAttachment
+import app.andy.model.metadataLabel
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyLayout
 import app.andy.ui.theme.AndyOverlay
@@ -71,6 +73,11 @@ data class ChatComposerDrawerItem(
     val onRemove: () -> Unit,
     /** When set, the drawer renders a thumbnail preview instead of a text-only chip. */
     val imagePath: String? = null,
+    /** Secondary line — e.g. `8.3 MB · 90768 lines` for text attachments. */
+    val subtitle: String? = null,
+    val pending: Boolean = false,
+    val error: String? = null,
+    val onClick: (() -> Unit)? = null,
 )
 
 /**
@@ -201,17 +208,23 @@ private fun ChatComposerAttachmentItems(
         itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         items.forEach { item ->
-            if (item.imagePath != null) {
-                ChatComposerDrawerImageChip(
-                    label = item.label,
-                    imagePath = item.imagePath,
-                    onRemove = item.onRemove,
-                )
-            } else {
-                ChatComposerDrawerChip(
-                    label = item.label,
-                    onRemove = item.onRemove,
-                )
+            when {
+                item.imagePath != null -> {
+                    ChatComposerDrawerImageChip(
+                        label = item.label,
+                        imagePath = item.imagePath,
+                        onRemove = item.onRemove,
+                    )
+                }
+                item.subtitle != null || item.pending || item.error != null || item.onClick != null -> {
+                    ChatComposerDrawerTextAttachmentChip(item = item)
+                }
+                else -> {
+                    ChatComposerDrawerChip(
+                        label = item.label,
+                        onRemove = item.onRemove,
+                    )
+                }
             }
         }
     }
@@ -361,6 +374,145 @@ private fun ChatComposerImagePreviewDialog(
                 color = TextSecondary.copy(alpha = 0.8f),
                 fontFamily = MonoFont,
                 fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatComposerDrawerTextAttachmentChip(
+    item: ChatComposerDrawerItem,
+    modifier: Modifier = Modifier,
+) {
+    var previewOpen by remember(item.id) { mutableStateOf(false) }
+    val chipShape = RoundedCornerShape(AndyRadius.Interactive)
+    val subtitle = when {
+        item.pending -> "Staging…"
+        item.error != null -> item.error
+        else -> item.subtitle
+    }
+    val subtitleColor = when {
+        item.error != null -> Red.copy(alpha = 0.9f)
+        item.pending -> TextSecondary.copy(alpha = 0.75f)
+        else -> TextSecondary.copy(alpha = 0.78f)
+    }
+    Row(
+        modifier
+            .clip(chipShape)
+            .background(AndyColors.Neutral800, chipShape)
+            .border(1.dp, PaneDividerTint, chipShape)
+            .then(
+                if (item.onClick != null && !item.pending) {
+                    Modifier
+                        .pointerHoverIcon(PointerIcon.Hand)
+                        .clickable { item.onClick?.invoke() ?: run { previewOpen = true } }
+                } else {
+                    Modifier
+                },
+            )
+            .padding(start = AndySpace.Space2, end = AndySpace.Space1, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Column(
+            Modifier.widthIn(max = 220.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Text(
+                item.label,
+                color = TextPrimary.copy(alpha = if (item.pending) 0.65f else 0.88f),
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    color = subtitleColor,
+                    fontFamily = MonoFont,
+                    fontSize = 10.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        IconButton(
+            onClick = item.onRemove,
+            modifier = Modifier.size(AndyLayout.ControlHeightSm),
+            contentDescription = "Remove ${item.label}",
+        ) {
+            LucideIcon(Lucide.X, TextSecondary.copy(alpha = 0.75f), Modifier.size(10.dp))
+        }
+    }
+    if (previewOpen) {
+        ChatTextAttachmentPreviewDialog(
+            label = item.label,
+            subtitle = item.subtitle,
+            onDismiss = { previewOpen = false },
+        )
+    }
+}
+
+@Composable
+fun ChatTextAttachmentPreviewDialog(
+    label: String,
+    subtitle: String?,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .background(
+                    AndyColors.Neutral900.copy(alpha = AndyOverlay.Strong),
+                    RoundedCornerShape(AndyRadius.Control),
+                )
+                .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            Text(
+                label.ifBlank { "attachment" },
+                color = TextPrimary,
+                fontFamily = DisplayFont,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    it,
+                    color = TextSecondary,
+                    fontFamily = MonoFont,
+                    fontSize = 12.sp,
+                )
+            }
+            Text(
+                "Sent as a managed text file — the agent reads it incrementally from disk.",
+                color = TextSecondary.copy(alpha = 0.85f),
+                fontFamily = DisplayFont,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+            )
+            Text(
+                "click to close",
+                color = TextSecondary.copy(alpha = 0.8f),
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(onClick = onDismiss),
             )
         }
     }
@@ -640,9 +792,65 @@ fun chatComposerDrawerItemsFromPaths(
     skillLabels: List<Pair<String, () -> Unit>>,
     imagePaths: List<String>,
     onRemoveImage: (String) -> Unit,
+    attachments: List<AgentAttachment> = emptyList(),
+    onRemoveAttachment: (AgentAttachment) -> Unit = {},
+    onPreviewAttachment: (AgentAttachment) -> Unit = {},
+    pendingAttachmentLabels: List<Pair<String, () -> Unit>> = emptyList(),
+    attachmentErrors: List<Pair<String, String>> = emptyList(),
+): List<ChatComposerDrawerItem> = chatComposerDrawerItems(
+    skillLabels = skillLabels,
+    imagePaths = imagePaths,
+    onRemoveImage = onRemoveImage,
+    attachments = attachments,
+    onRemoveAttachment = onRemoveAttachment,
+    onPreviewAttachment = onPreviewAttachment,
+    pendingAttachmentLabels = pendingAttachmentLabels,
+    attachmentErrors = attachmentErrors,
+)
+
+fun chatComposerDrawerItems(
+    skillLabels: List<Pair<String, () -> Unit>>,
+    imagePaths: List<String>,
+    onRemoveImage: (String) -> Unit,
+    attachments: List<AgentAttachment> = emptyList(),
+    onRemoveAttachment: (AgentAttachment) -> Unit = {},
+    onPreviewAttachment: (AgentAttachment) -> Unit = {},
+    pendingAttachmentLabels: List<Pair<String, () -> Unit>> = emptyList(),
+    attachmentErrors: List<Pair<String, String>> = emptyList(),
 ): List<ChatComposerDrawerItem> = buildList {
     skillLabels.forEach { (label, onRemove) ->
         add(ChatComposerDrawerItem(id = "skill:$label", label = label, onRemove = onRemove))
+    }
+    attachments.forEach { attachment ->
+        add(
+            ChatComposerDrawerItem(
+                id = "attachment:${attachment.id}",
+                label = attachment.displayName,
+                subtitle = attachment.metadataLabel(),
+                onRemove = { onRemoveAttachment(attachment) },
+                onClick = { onPreviewAttachment(attachment) },
+            ),
+        )
+    }
+    pendingAttachmentLabels.forEachIndexed { index, (label, onRemove) ->
+        add(
+            ChatComposerDrawerItem(
+                id = "attachment-pending:$index:$label",
+                label = label,
+                pending = true,
+                onRemove = onRemove,
+            ),
+        )
+    }
+    attachmentErrors.forEachIndexed { index, (label, error) ->
+        add(
+            ChatComposerDrawerItem(
+                id = "attachment-error:$index:$label",
+                label = label,
+                error = error,
+                onRemove = {},
+            ),
+        )
     }
     imagePaths.forEach { path ->
         val name = path.substringAfterLast('/').substringAfterLast('\\')

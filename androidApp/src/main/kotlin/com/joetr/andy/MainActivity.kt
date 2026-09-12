@@ -1,6 +1,7 @@
 package com.joetr.andy
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -34,11 +35,12 @@ class MainActivity : ComponentActivity() {
 
     private val speechRecognizer =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
             val spoken = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()
                 ?.takeIf { it.isNotBlank() }
-            // Always land on confirm even if recognition failed — user can type.
+            // OK with empty results still opens confirm so the user can type.
             pendingVoiceNewThread = PendingVoiceNewThread(prompt = spoken.orEmpty())
         }
 
@@ -75,21 +77,31 @@ class MainActivity : ComponentActivity() {
 
     private fun handleVoiceIntent(intent: Intent?) {
         if (intent?.action != ACTION_VOICE_NEW_THREAD) return
-        val supplied = intent.voicePromptExtra()
-        if (supplied != null) {
-            // Assistant / third-party supplied text — skip recognition, still require Start tap.
-            pendingVoiceNewThread = PendingVoiceNewThread(prompt = supplied)
-        } else {
-            // Marker that AndyMobileApp should request recognition (or we launch it here).
-            pendingVoiceNewThread = PendingVoiceNewThread(prompt = null)
-        }
+        // Never accept third-party prompt extras — widget/shortcut only trigger recognition.
+        pendingVoiceNewThread = PendingVoiceNewThread(prompt = null)
+        scrubVoiceIntent()
+    }
+
+    /** Drop the voice action so process death / recreate does not re-fire recognition. */
+    private fun scrubVoiceIntent() {
+        setIntent(
+            Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                // Preserve open-chat deep links if they were combined somehow.
+                pendingOpenChatId?.let { putExtra(EXTRA_OPEN_CHAT_ID, it) }
+            },
+        )
     }
 
     private fun launchSpeechRecognition() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "New Andy thread")
+            putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                getString(com.joetr.andy.R.string.voice_recognizer_prompt),
+            )
             // Best-effort: give thinking pauses more room. OEM recognizers (esp. Google /
             // Samsung) may ignore these — full control needs an in-app SpeechRecognizer.
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, VOICE_MIN_LENGTH_MS)
@@ -139,15 +151,3 @@ data class PendingVoiceNewThread(val prompt: String?)
 
 private fun Intent.chatIdExtra(): String? =
     getStringExtra(MainActivity.EXTRA_OPEN_CHAT_ID)?.takeIf { it.isNotBlank() }
-
-/**
- * Accepts assistant-supplied text from any caller ([RecognizerIntent.EXTRA_RESULTS] or
- * [Intent.EXTRA_TEXT]). The mandatory Start tap on NewChat is the security gate.
- */
-private fun Intent.voicePromptExtra(): String? {
-    getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-        ?.firstOrNull()
-        ?.takeIf { it.isNotBlank() }
-        ?.let { return it }
-    return getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
-}

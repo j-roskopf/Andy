@@ -83,11 +83,11 @@ dependencies {
     // Kept for one-shot migration from EncryptedSharedPreferences.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    implementation(compose.runtime)
-    implementation(compose.foundation)
-    implementation(compose.material3)
-    implementation(compose.ui)
-    implementation(compose.components.resources)
+    implementation(libs.compose.runtime)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.ui)
+    implementation(libs.compose.components.resources)
 
     implementation(libs.coroutines.core)
     implementation(libs.serialization.json)
@@ -96,7 +96,7 @@ dependencies {
     implementation(libs.ktor.serialization.json)
     implementation(libs.ktor.client.websockets)
 
-    debugImplementation(compose.uiTooling)
+    debugImplementation(libs.compose.ui.tooling)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation(libs.coroutines.test)

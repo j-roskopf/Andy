@@ -51,14 +51,16 @@ import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.m3.Markdown
-import dev.snipme.highlights.Highlights
-import dev.snipme.highlights.model.SyntaxTheme
-import dev.snipme.highlights.model.SyntaxThemes
+import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.markdownDimens
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.rememberMarkdownState
+import dev.snipme.highlights.Highlights
+import dev.snipme.highlights.model.SyntaxTheme
+import dev.snipme.highlights.model.SyntaxThemes
+import org.intellij.markdown.MarkdownTokenTypes
 
 /**
  * Ambient handler for markdown links that look like source-file references rather than web
@@ -219,6 +221,28 @@ private fun AndyMarkdown(
     val unwrapped = if (onTextChange == null) text.unwrapOuterMarkdownFence() else text
     val markdownState = rememberMarkdownState(unwrapped, retainState = true)
     val highlightsBuilder = rememberAndyHighlightsBuilder()
+    val findHighlight = LocalChatFindHighlight.current
+    val defaultAnnotator = remember { markdownAnnotator() }
+    val findAnnotator = remember(findHighlight?.trimmedQuery, findHighlight?.activeRange) {
+        val query = findHighlight?.trimmedQuery.orEmpty()
+        val activeRange = findHighlight?.activeRange
+        if (query.isEmpty()) {
+            null
+        } else {
+            markdownAnnotator { content, child ->
+                if (child.type != MarkdownTokenTypes.TEXT) return@markdownAnnotator false
+                val leaf = content.substring(child.startOffset, child.endOffset)
+                if (leaf.isEmpty()) return@markdownAnnotator false
+                val localActive = activeRangeInLeaf(
+                    leafStart = child.startOffset,
+                    leafEnd = child.endOffset,
+                    activeRange = activeRange,
+                )
+                appendFindHighlighted(leaf, query, localActive)
+                true
+            }
+        }
+    }
     val thinking = density == AndyMarkdownDensity.Thinking
     val body = MaterialTheme.typography.bodyMedium.copy(
         fontFamily = if (thinking) MonoFont else DisplayFont,
@@ -244,6 +268,7 @@ private fun AndyMarkdown(
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
     Markdown(
         markdownState = markdownState,
+        annotator = findAnnotator ?: defaultAnnotator,
         colors = markdownColor(
             text = if (thinking) TextSecondary else TextPrimary,
             // Thinking/tool rows sit on a near-black aside — keep code chrome strong enough that a

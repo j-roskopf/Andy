@@ -504,6 +504,8 @@ data class AgentQueuedFollowUp(
     val skills: List<AgentSkill> = emptyList(),
     /** Managed evidence bundle ids (§4) attached to this follow-up, if any. */
     val contextBundleIds: List<String> = emptyList(),
+    /** Managed text attachments for this follow-up (descriptors only; never bodies). */
+    val attachments: List<AgentAttachment> = emptyList(),
     /** Where this follow-up's contextual action was triggered from, if any. */
     val provenance: AgentContextualProvenance? = null,
 )
@@ -571,6 +573,8 @@ data class AgentTask(
     val openClawNewSession: Boolean = true,
     /** Local images supplied with the original task prompt. */
     val imagePaths: List<String> = emptyList(),
+    /** Managed text attachments for the original prompt (descriptors only; never bodies). */
+    val attachments: List<AgentAttachment> = emptyList(),
     /** Local skills selected while composing the original prompt. */
     val skills: List<AgentSkill> = emptyList(),
     /** A durable objective Andy keeps alongside the provider session. */
@@ -784,6 +788,8 @@ data class AgentTaskDraft(
     val fastMode: Boolean = false,
     val openClawNewSession: Boolean = true,
     val imagePaths: List<String> = emptyList(),
+    /** Managed text attachments staged for launch (descriptors only; never bodies). */
+    val attachments: List<AgentAttachment> = emptyList(),
     val skills: List<AgentSkill> = emptyList(),
     val goal: String? = null,
     val maxBudgetUsd: Double? = null,
@@ -1053,6 +1059,17 @@ data class AgentChangeSummary(val files: List<AgentFileChange>) {
 data class AgentThreadChangeSnapshot(
     val summary: AgentChangeSummary,
     val diffs: Map<String, AgentFileDiff>,
+    /**
+     * False when this snapshot came off disk summary-only and [diffs] is therefore empty because
+     * it was never read, not because the chat changed nothing. Loading every stored diff at
+     * startup costs ~80MB of heap, so the store hydrates [summary] eagerly and leaves [diffs] to
+     * an explicit fetch (`AgentRunService.completedDiffs`).
+     *
+     * Persistence keys off this: an unhydrated snapshot is saved through a statement that splices
+     * the stored diffs back, so a save can never blank them. Anything built in-memory from a live
+     * working tree is hydrated by definition, which is why this defaults to true.
+     */
+    val diffsHydrated: Boolean = true,
 )
 
 enum class DiffLineKind { Context, Addition, Deletion }
@@ -1211,6 +1228,10 @@ fun AgentTaskDraft.fallbackTitle(): String = when {
         val first = localPathFileName(imagePaths.first())
         if (imagePaths.size == 1) first else "$first (+${imagePaths.size - 1})"
     }
+    attachments.isNotEmpty() -> {
+        val first = attachments.first().displayName
+        if (attachments.size == 1) first else "$first (+${attachments.size - 1})"
+    }
     else -> ""
 }
 
@@ -1310,12 +1331,15 @@ fun promptWithLocalEvidencePathsHint(text: String, hint: String?): String =
     if (hint.isNullOrBlank()) text else text + hint
 
 fun AgentTask.promptForCli(): String = promptWithImageHints(
-    promptWithLocalEvidencePathsHint(
-        promptWithEvidenceHint(
-            composeAgentPrompt(continuationPrompt ?: prompt, skills, id, planMode, goal),
-            contextBundleIds,
+    promptWithAttachmentHints(
+        promptWithLocalEvidencePathsHint(
+            promptWithEvidenceHint(
+                composeAgentPrompt(continuationPrompt ?: prompt, skills, id, planMode, goal),
+                contextBundleIds,
+            ),
+            evidenceLocalPathsHint,
         ),
-        evidenceLocalPathsHint,
+        attachments,
     ),
     imagePaths,
 )
@@ -1324,8 +1348,12 @@ fun AgentTask.followUpPromptForCli(
     text: String,
     imagePaths: List<String>,
     skills: List<AgentSkill> = this.skills,
+    attachments: List<AgentAttachment> = emptyList(),
 ): String = promptWithImageHints(
-    composeAgentPrompt(text, skills, id, planMode, goal),
+    promptWithAttachmentHints(
+        composeAgentPrompt(text, skills, id, planMode, goal),
+        attachments,
+    ),
     imagePaths,
 )
 
@@ -1343,8 +1371,12 @@ fun AgentTask.followUpCliPayload(
     text: String,
     imagePaths: List<String>,
     skills: List<AgentSkill> = emptyList(),
+    attachments: List<AgentAttachment> = emptyList(),
 ): FollowUpCliPayload {
-    val composed = composeAgentPrompt(text, skills, id, planMode, goal)
+    val composed = promptWithAttachmentHints(
+        composeAgentPrompt(text, skills, id, planMode, goal),
+        attachments,
+    )
     return when (agent) {
         AgentKind.Codex -> FollowUpCliPayload(
             prompt = composed,
@@ -1361,8 +1393,12 @@ fun AgentTask.followUpPromptForLiveTerminal(
     text: String,
     imagePaths: List<String>,
     skills: List<AgentSkill> = emptyList(),
+    attachments: List<AgentAttachment> = emptyList(),
 ): String = promptWithInlineImageHints(
-    composeAgentPrompt(text, skills, id, planMode, goal),
+    promptWithAttachmentHints(
+        composeAgentPrompt(text, skills, id, planMode, goal),
+        attachments,
+    ),
     imagePaths,
 )
 
@@ -1414,6 +1450,8 @@ sealed interface AgentEvent {
         val skills: List<AgentSkill> = emptyList(),
         /** Local image paths attached with this message, shown as thumbnails in the bubble. */
         val imagePaths: List<String> = emptyList(),
+        /** Managed text attachments shown as compact rows (descriptors only). */
+        val attachments: List<AgentAttachment> = emptyList(),
     ) : AgentEvent
     data class ToolCall(
         override val atMillis: Long,
@@ -1507,6 +1545,16 @@ sealed interface AgentEvent {
     /** Fallback for stdout lines the adapter could not parse; nothing is dropped. */
     data class Raw(override val atMillis: Long, val line: String) : AgentEvent
 }
+
+/** One Cmd+K / search hit from project chat transcript body text. */
+data class TranscriptSearchHit(
+    val taskId: String,
+    val projectId: String?,
+    val title: String,
+    val projectName: String?,
+    val snippet: String,
+    val atMillis: Long,
+)
 
 /**
  * Wall time from the current turn's user message (or [startedAtMillis]) to [finishedAtMillis].

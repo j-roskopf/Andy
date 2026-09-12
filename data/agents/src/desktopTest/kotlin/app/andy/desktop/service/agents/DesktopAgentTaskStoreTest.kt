@@ -42,6 +42,7 @@ import app.andy.model.ProjectWorkflowState
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -141,9 +142,99 @@ class DesktopAgentTaskStoreTest {
         )
         store.save(AgentStoreState(tasks = listOf(task), binaryOverrides = mapOf("codex" to "/bin/codex"), maxConcurrent = 4))
         val loaded = store.load()
-        assertEquals(listOf(task), loaded.tasks)
+        // Diffs are deliberately left on disk; everything else round-trips verbatim.
+        val expected = task.copy(
+            completedChanges = task.completedChanges?.copy(diffs = emptyMap(), diffsHydrated = false),
+        )
+        assertEquals(listOf(expected), loaded.tasks)
         assertEquals(mapOf("codex" to "/bin/codex"), loaded.binaryOverrides)
         assertEquals(4, loaded.maxConcurrent)
+        assertEquals(task.completedChanges?.diffs, store.loadCompletedDiffs("task-abc"))
+    }
+
+    /** A task with completed changes, diffs included. */
+    private fun taskWithDiffs(id: String, text: String = "new") = AgentTask(
+        id = id,
+        title = "t",
+        prompt = "p",
+        agent = AgentKind.Codex,
+        cwd = "/tmp",
+        originDir = "/tmp",
+        status = AgentStatus.Done,
+        createdAtMillis = 1,
+        completedChanges = AgentThreadChangeSnapshot(
+            summary = AgentChangeSummary(listOf(AgentFileChange("src/Main.kt", additions = 1, deletions = 0))),
+            diffs = mapOf(
+                "src/Main.kt" to AgentFileDiff(
+                    path = "src/Main.kt",
+                    lines = listOf(DiffLine(DiffLineKind.Addition, text, newLineNumber = 1)),
+                ),
+            ),
+        ),
+    )
+
+    @Test
+    fun savingASummaryOnlyTaskKeepsItsStoredDiffs() = withStore { store ->
+        val task = taskWithDiffs("task-keep")
+        store.save(AgentStoreState(tasks = listOf(task)))
+
+        // Simulate the app's real cycle: load (summary-only), mutate something unrelated, save.
+        val loaded = store.load().tasks.single()
+        assertEquals(false, loaded.completedChanges?.diffsHydrated)
+        assertTrue(loaded.completedChanges?.diffs.isNullOrEmpty())
+        store.save(AgentStoreState(tasks = listOf(loaded.copy(unread = true, title = "renamed"))))
+
+        assertEquals(task.completedChanges?.diffs, store.loadCompletedDiffs("task-keep"))
+        val reloaded = store.load().tasks.single()
+        assertEquals("renamed", reloaded.title)
+        assertTrue(reloaded.unread)
+        assertEquals(
+            task.completedChanges?.summary,
+            reloaded.completedChanges?.summary,
+        )
+    }
+
+    @Test
+    fun clearingCompletedChangesWritesThrough() = withStore { store ->
+        store.save(AgentStoreState(tasks = listOf(taskWithDiffs("task-undo"))))
+        val loaded = store.load().tasks.single()
+
+        // Undo nulls completedChanges; that must not be defeated by the preserving write.
+        store.save(AgentStoreState(tasks = listOf(loaded.copy(completedChanges = null))))
+
+        assertEquals(emptyMap(), store.loadCompletedDiffs("task-undo"))
+        assertNull(store.load().tasks.single().completedChanges)
+    }
+
+    @Test
+    fun freshlyCapturedDiffsReplaceStoredOnes() = withStore { store ->
+        store.save(AgentStoreState(tasks = listOf(taskWithDiffs("task-recapture", text = "first"))))
+        val loaded = store.load().tasks.single()
+
+        // A new capture arrives hydrated, so it must overwrite rather than be spliced over.
+        val recaptured = taskWithDiffs("task-recapture", text = "second")
+        store.save(AgentStoreState(tasks = listOf(loaded.copy(completedChanges = recaptured.completedChanges))))
+
+        val diffs = store.loadCompletedDiffs("task-recapture")
+        assertEquals("second", diffs["src/Main.kt"]?.lines?.single()?.text)
+    }
+
+    @Test
+    fun taskWithoutStoredDiffsLoadsEmpty() = withStore { store ->
+        val noChanges = taskWithDiffs("task-plain").copy(completedChanges = null)
+        store.save(AgentStoreState(tasks = listOf(noChanges)))
+        assertEquals(emptyMap(), store.loadCompletedDiffs("task-plain"))
+        assertEquals(emptyMap(), store.loadCompletedDiffs("task-does-not-exist"))
+    }
+
+    @Test
+    fun deletingATaskRemovesItsRow() = withStore { store ->
+        store.save(AgentStoreState(tasks = listOf(taskWithDiffs("task-a"), taskWithDiffs("task-b"))))
+        val remaining = store.load().tasks.filter { it.id == "task-a" }
+        store.save(AgentStoreState(tasks = remaining))
+
+        assertEquals(listOf("task-a"), store.load().tasks.map { it.id })
+        assertEquals(emptyMap(), store.loadCompletedDiffs("task-b"))
     }
 
     @Test
