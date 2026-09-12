@@ -40,7 +40,6 @@ import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.TranscriptSearchHit
-import app.andy.desktop.service.agents.DesktopTranscriptSearchIndex
 import app.andy.model.Automation
 import app.andy.model.AutomationDraft
 import app.andy.model.WorktreeBaseOption
@@ -70,6 +69,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -208,13 +209,6 @@ class McpAgentRunClient(
             sharedAgentTaskStore.archiveFile(taskId).isFile
         File(sharedAgentTaskStore.resolvedContentDirBlocking(taskId, compressed), "transcript.jsonl")
     })
-    private val transcriptSearch by lazy {
-        sharedAgentTaskStore.transcriptSearchIndex { taskId ->
-            val compressed = _tasks.value.firstOrNull { it.id == taskId }?.transcriptCompressed == true ||
-                sharedAgentTaskStore.archiveFile(taskId).isFile
-            File(sharedAgentTaskStore.resolvedContentDirBlocking(taskId, compressed), "transcript.jsonl")
-        }
-    }
 
     private var localBridge: DesktopAgentRunService? = null
 
@@ -1204,18 +1198,29 @@ class McpAgentRunClient(
         return flow
     }
 
-    override fun searchTranscripts(query: String): Flow<TranscriptSearchHit> {
-        val refs = _tasks.value.map { task ->
-            DesktopTranscriptSearchIndex.TaskRef(
-                taskId = task.id,
-                projectId = task.projectId,
-                title = task.title,
-                projectName = null,
-                updatedAtMillis = task.finishedAtMillis ?: task.createdAtMillis,
+    override fun searchTranscripts(query: String): Flow<TranscriptSearchHit> = flow {
+        if (query.trim().length < 2) return@flow
+        // Remote transcripts live on the host that owns andyd; delegate so the search sees the
+        // authoritative index instead of the GUI machine's (empty) local artifact directory.
+        val raw = runCatching {
+            callTool("chat.search", mapOf("query" to JsonPrimitive(query)))
+        }.getOrNull() ?: return@flow
+        val hits = runCatching { json.parseToJsonElement(raw).jsonArray }.getOrNull() ?: return@flow
+        for (element in hits) {
+            val obj = element as? JsonObject ?: continue
+            val taskId = obj.string("taskId") ?: continue
+            emit(
+                TranscriptSearchHit(
+                    taskId = taskId,
+                    projectId = obj.string("projectId")?.takeIf { it.isNotBlank() },
+                    title = obj.string("title").orEmpty(),
+                    projectName = obj.string("projectName")?.takeIf { it.isNotBlank() },
+                    snippet = obj.string("snippet").orEmpty(),
+                    atMillis = obj.long("atMillis") ?: 0L,
+                ),
             )
         }
-        return transcriptSearch.search(query, refs)
-    }
+    }.flowOn(Dispatchers.IO)
 
     override fun interactiveResumeCommand(taskId: String): String? =
         "tmux -L andy attach -t ${TmuxAndy.sessionName(taskId)}"

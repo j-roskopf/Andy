@@ -1421,7 +1421,19 @@ internal class ShellState(
                     } else {
                         current.sshTargetAliases
                     }
-                updated.copy(savedSshTargets = targets, sshTargetAliases = aliases)
+                // The remote project scanner writes the cache straight to the store; ShellState only
+                // holds a load-time snapshot, so preserve the store's copy unless this save changed it.
+                val remoteProjectCache =
+                    if (updated.remoteProjectCache != previous.remoteProjectCache) {
+                        updated.remoteProjectCache
+                    } else {
+                        current.remoteProjectCache
+                    }
+                updated.copy(
+                    savedSshTargets = targets,
+                    sshTargetAliases = aliases,
+                    remoteProjectCache = remoteProjectCache,
+                )
             }
             if (workspaceState.savedSshTargets != committed.savedSshTargets ||
                 workspaceState.sshTargetAliases != committed.sshTargetAliases

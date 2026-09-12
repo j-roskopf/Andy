@@ -455,7 +455,16 @@ internal fun Application.installWebChatRoutes(
                 if (message.isEmpty() && attachments.isEmpty()) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "message required")
                 }
-                agents.resume(id, message, attachments = attachments)
+                // Await attachment materialization/upload so a missing or changed staging file is
+                // reported to the caller, letting the web client keep and retry the draft. The
+                // provider turn itself continues asynchronously.
+                val prepared = agents.resumePrepared(id, message, attachments = attachments)
+                prepared.exceptionOrNull()?.let { error ->
+                    return@post call.respondJsonError(
+                        HttpStatusCode.BadRequest,
+                        error.message ?: "failed to prepare reply attachments",
+                    )
+                }
                 call.respondText(
                     buildJsonObject {
                         put("ok", true)

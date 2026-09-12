@@ -892,6 +892,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         localLocalServers = localLocalServers,
         agentRunsForLocalServers = swappableAgents,
         actionRunsForLocalServers = actionRuns,
+        localAttachments = chatAttachmentService,
     )
     remoteShellRef.set { remoteSession.shellEndpoint() }
     val agentRetention = DesktopAgentRetentionService(

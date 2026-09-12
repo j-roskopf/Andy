@@ -1108,6 +1108,9 @@ private fun ProjectCockpit(
             services.agentRuns.searchTranscripts(query)
                 .mapNotNull { hit ->
                     if (hit.taskId in excludeChatIds) return@mapNotNull null
+                    // This palette can only open project-scoped chats; a top-level Agents chat
+                    // (null projectId) would render but do nothing on select.
+                    if (hit.projectId == null) return@mapNotNull null
                     val supporting = listOfNotNull(hit.projectName, hit.snippet)
                         .joinToString(" · ")
                         .ifBlank { null }

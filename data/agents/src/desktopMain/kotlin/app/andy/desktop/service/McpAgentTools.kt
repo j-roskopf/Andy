@@ -44,6 +44,7 @@ import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -436,6 +437,34 @@ fun Server.registerAgentProjectTools(
         val id = str(args, "taskId") ?: error("taskId required")
         val events = agentRuns.events(id).value
         textResult(buildJsonArray { events.forEach { add(it.toWire()) } }.toString())
+    }
+
+    register(
+        name = "chat.search",
+        description = "Search transcript body text across chats (user/assistant text and tool titles)",
+        properties = mapOf(
+            "query" to buildJsonObject { put("type", "string") },
+        ),
+        required = listOf("query"),
+    ) { args ->
+        val query = str(args, "query") ?: error("query required")
+        val hits = agentRuns.searchTranscripts(query).toList()
+        textResult(
+            buildJsonArray {
+                hits.forEach { hit ->
+                    add(
+                        buildJsonObject {
+                            put("taskId", hit.taskId)
+                            hit.projectId?.let { put("projectId", it) }
+                            put("title", hit.title)
+                            hit.projectName?.let { put("projectName", it) }
+                            put("snippet", hit.snippet)
+                            put("atMillis", hit.atMillis)
+                        },
+                    )
+                }
+            }.toString(),
+        )
     }
 
     register(

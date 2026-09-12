@@ -150,11 +150,24 @@ private fun runActionsTomlRead(
         builder.redirectInput(ProcessBuilder.Redirect.PIPE)
     }
     val process = builder.start()
-    val stdout = process.inputStream.bufferedReader().readText()
-    val stderr = process.errorStream.bufferedReader().readText()
+    val stdoutSink = StringBuffer()
+    val stderrSink = StringBuffer()
+    val outReader = Thread { process.inputStream.bufferedReader().use { stdoutSink.append(it.readText()) } }
+    val errReader = Thread { process.errorStream.bufferedReader().use { stderrSink.append(it.readText()) } }
+    outReader.start()
+    errReader.start()
+    // Apply the timeout before blocking on output: a hung ssh/remote command must be destroyed
+    // after the wait window regardless of what its pipes emit, and draining both streams on
+    // separate threads avoids deadlocking when ssh fills the stderr pipe while stdout is read.
     val finished = process.waitFor(20, TimeUnit.SECONDS)
     if (!finished) {
         process.destroyForcibly()
+    }
+    outReader.join(5_000)
+    errReader.join(5_000)
+    val stdout = stdoutSink.toString()
+    val stderr = stderrSink.toString()
+    if (!finished) {
         return RemoteTomlRead(-1, stdout, stderr.ifBlank { "timed out" })
     }
     return RemoteTomlRead(process.exitValue(), stdout, stderr)
