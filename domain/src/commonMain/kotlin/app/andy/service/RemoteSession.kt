@@ -1,5 +1,6 @@
 package app.andy.service
 
+import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,8 @@ data class RemoteSessionState(
     val error: String? = null,
     /** Non-secret saved SSH targets from workspace prefs (passwords optional via OS keychain). */
     val savedTargets: List<String> = emptyList(),
+    /** Friendly display names keyed by SSH target; blank / missing falls back to the raw target. */
+    val targetAliases: Map<String, String> = emptyMap(),
     /**
      * Probed once per successful connect — Screen Sharing / VNC / screenshot tools on the
      * remote host. `null` while local or still connecting.
@@ -36,7 +39,40 @@ data class RemoteSessionState(
     val hostCapabilities: RemoteHostCapabilities? = null,
 ) {
     val isRemote: Boolean get() = status == RemoteSessionStatus.Connected
+
+    /** Sidebar / header label for [target], preferring a user-set alias when present. */
+    fun displayNameFor(target: String): String =
+        targetAliases[target]?.takeIf { it.isNotBlank() } ?: target
 }
+
+/** Outcome of the background `~/.andy/actions.toml` read for one saved SSH target. */
+enum class RemoteProjectScanStatus {
+    /** Never scanned this session — anything listed came from the workspace cache. */
+    Cached,
+    Scanning,
+    Ok,
+    /**
+     * No usable project list: host is down, refused a non-interactive `ssh` (needs a password
+     * Andy won't prompt for during a background scan), or its `actions.toml` failed to parse.
+     * `RemoteTargetProjects.error` carries the reason for the row tooltip.
+     */
+    Unavailable,
+}
+
+/**
+ * Projects found on a saved SSH remote that is *not* the active host, for the merged Projects
+ * list. These are display-only: opening one connects to [target] first, after which its real
+ * config arrives through [RemoteSessionService.remoteActionsConfig].
+ */
+data class RemoteTargetProjects(
+    val target: String,
+    val status: RemoteProjectScanStatus = RemoteProjectScanStatus.Cached,
+    val projects: List<ActionProject> = emptyList(),
+    val error: String? = null,
+)
+
+private val NoSavedTargetProjects: StateFlow<Map<String, RemoteTargetProjects>> =
+    MutableStateFlow(emptyMap<String, RemoteTargetProjects>()).asStateFlow()
 
 /**
  * Desktop SSH remote control plane: tunnel `andyd.sock` (+ tmux) to another machine and
@@ -44,6 +80,23 @@ data class RemoteSessionState(
  */
 interface RemoteSessionService {
     val state: StateFlow<RemoteSessionState>
+
+    /**
+     * Projects on saved SSH targets other than the connected one, keyed by target — the merge
+     * source for the Projects list when `WorkspaceState.mergeRemoteProjects` is on. Empty while
+     * the setting is off; the active host is never included (its projects are already the list).
+     */
+    val savedTargetProjects: StateFlow<Map<String, RemoteTargetProjects>>
+        get() = NoSavedTargetProjects
+
+    /**
+     * Re-read `~/.andy/actions.toml` on every saved target. No-op while the merge setting is off.
+     * Scans are non-interactive — a host that would need a password is reported
+     * [RemoteProjectScanStatus.Unreachable] rather than prompting.
+     *
+     * @param force bypasses the min-interval throttle that de-dupes UI-triggered refreshes.
+     */
+    suspend fun refreshSavedTargetProjects(force: Boolean = false) = Unit
 
     /**
      * Remote `~/.andy/actions.toml` projects while connected; `null` means use the local
@@ -69,6 +122,11 @@ interface RemoteSessionService {
     suspend fun reconnect(rememberPassword: Boolean = false): Result<Unit>
     suspend fun addSavedTarget(target: String)
     suspend fun removeSavedTarget(target: String)
+    /**
+     * Set or clear the sidebar display alias for a saved SSH [target]. Blank [alias] removes
+     * the override so the raw target shows again.
+     */
+    suspend fun renameSavedTargetAlias(target: String, alias: String)
     /** Persist project edits to the remote host's `~/.andy/actions.toml` while remoted. */
     suspend fun saveRemoteActionsConfig(config: ActionsConfig): Result<Unit>
 
@@ -110,6 +168,8 @@ object UnavailableRemoteSessionService : RemoteSessionService {
     override suspend fun addSavedTarget(target: String) = Unit
 
     override suspend fun removeSavedTarget(target: String) = Unit
+
+    override suspend fun renameSavedTargetAlias(target: String, alias: String) = Unit
 
     override suspend fun saveRemoteActionsConfig(config: ActionsConfig): Result<Unit> =
         Result.failure(IllegalStateException("SSH remote requires Andy Desktop on macOS or Linux."))

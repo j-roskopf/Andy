@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -67,7 +68,10 @@ import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSkill
+import app.andy.model.AgentAttachment
 import app.andy.model.AgentTaskDraft
+import app.andy.model.hasSendableAttachments
+import app.andy.model.metadataLabel
 import app.andy.model.withImportedVendorSession
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.GitBranchInfo
@@ -85,6 +89,7 @@ import app.andy.model.resolvePersistedTaskGoal
 import app.andy.model.toAutonomy
 import app.andy.model.withAlignedPermissions
 import app.andy.onImageFilesDropped
+import app.andy.readPlainText
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.ui.components.ChatComposerLayout
@@ -93,6 +98,7 @@ import app.andy.ui.components.ComposerModelChip
 import app.andy.ui.components.ComposerPermissionsChip
 import app.andy.ui.components.ComposerProviderChip
 import app.andy.ui.components.VoiceDictationButtonStyle
+import app.andy.ui.components.ChatTextAttachmentPreviewDialog
 import app.andy.ui.components.chatComposerDrawerItemsFromPaths
 import app.andy.ui.components.ChatSendButton
 import app.andy.ui.components.ChatVoiceDictationButton
@@ -108,7 +114,7 @@ import app.andy.ui.components.FieldChromeStyle
 import app.andy.ui.components.attachChatImages
 import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.insertTextAtCursor
-import app.andy.ui.components.onChatImagePaste
+import app.andy.ui.components.onChatComposerPaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.theme.Cyan
 import app.andy.ui.theme.AndyColors
@@ -122,6 +128,7 @@ import app.andy.ui.theme.TextSecondary
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 @Composable
 fun AgentTaskComposerPane(
@@ -145,9 +152,18 @@ fun AgentTaskComposerPane(
         if (!dictationActive) importingThread = false
     }
     CollectChatComposerInbox(active = dictationActive) { item ->
-        val (text, images) = applyChatComposerAttachment(form.state.promptValue, form.state.imagePaths, item)
-        form.state.promptValue = text
-        form.state.imagePaths = images
+        val applied = applyChatComposerAttachment(
+            currentText = form.state.promptValue,
+            currentImages = form.state.imagePaths,
+            currentAttachments = form.state.attachments,
+            item = item,
+        )
+        form.state.promptValue = applied.text
+        form.state.imagePaths = applied.images
+        form.state.attachments = applied.attachments
+        applied.largeTextToStage?.let { text ->
+            form.stageLargePaste(text)
+        }
     }
     LaunchedEffect(projectContext?.id, initialPrompt) {
         if (form.state.promptValue.text.isBlank() && !initialPrompt.isNullOrBlank()) {
@@ -322,6 +338,10 @@ private class AgentTaskComposerFormState(
     var promptValue by mutableStateOf(TextFieldValue(""))
     var skillMenuDismissed by mutableStateOf(false)
     var imagePaths by mutableStateOf<List<String>>(emptyList())
+    var attachments by mutableStateOf<List<AgentAttachment>>(emptyList())
+    var pendingAttachmentPastes by mutableIntStateOf(0)
+    var attachmentPasteError by mutableStateOf<String?>(null)
+    val attachmentDraftKey: String = "new-chat-${Random.nextLong().toString(16)}${Random.nextLong().toString(16)}"
     var imageDragActive by mutableStateOf(false)
     var agent by mutableStateOf(initialAgent)
     var localRuntime by mutableStateOf<LocalAgentRuntime?>(null)
@@ -362,6 +382,9 @@ private class AgentTaskComposerFormState(
     fun clearPrompt() {
         promptValue = TextFieldValue("")
         imagePaths = emptyList()
+        attachments = emptyList()
+        pendingAttachmentPastes = 0
+        attachmentPasteError = null
         skillMenuDismissed = false
         // Off for every new chat: carrying it over would silently make the next ordinary chat
         // vanish on close, and nothing was persisted to get it back.
@@ -474,7 +497,7 @@ private fun rememberAgentTaskComposerForm(
             (state.usesCustomModel && state.customModel.isNotBlank()) ||
                 (!state.usesCustomModel && !state.modelId.isNullOrBlank())
             ))
-    val canSubmit = (state.prompt.isNotBlank() || state.imagePaths.isNotEmpty()) &&
+    val canSubmit = (state.prompt.isNotBlank() || state.imagePaths.isNotEmpty() || hasSendableAttachments(state.attachments)) &&
         (!state.usesCustomModel || state.customModel.isNotBlank()) &&
         (state.budgetText.isBlank() || validBudget != null) &&
         selectedCliAvailable &&
@@ -639,6 +662,7 @@ private class AgentTaskComposerForm(
             fastMode = if (state.usesCustomModel) false else state.fastMode,
             openClawNewSession = state.openClawNewSession,
             imagePaths = state.imagePaths,
+            attachments = state.attachments,
             skills = selectedSkills,
             goal = state.prompt.resolvePersistedTaskGoal(supportsGoal),
             maxBudgetUsd = state.budgetText.toMaxBudgetUsd(),
@@ -684,6 +708,28 @@ private class AgentTaskComposerForm(
 
     fun selectMentionAt(index: Int) {
         mentionResults.getOrNull(index)?.let(::selectFileMention)
+    }
+
+    fun stageLargePaste(text: String) {
+        state.pendingAttachmentPastes++
+        state.attachmentPasteError = null
+        scope.launch {
+            val result = services.chatAttachments.stageText(
+                text = text,
+                draftKey = state.attachmentDraftKey,
+            )
+            state.pendingAttachmentPastes = (state.pendingAttachmentPastes - 1).coerceAtLeast(0)
+            result.onSuccess { attachment ->
+                state.attachments = state.attachments + attachment
+            }.onFailure { error ->
+                state.attachmentPasteError = error.message ?: "Failed to stage attachment"
+            }
+        }
+    }
+
+    fun removeAttachment(attachment: AgentAttachment) {
+        state.attachments = state.attachments.filterNot { it.id == attachment.id }
+        scope.launch { services.chatAttachments.discardStaged(attachment.id) }
     }
 }
 
@@ -743,6 +789,8 @@ private fun AgentChatComposer(
     onSubmit: () -> Unit,
 ) {
     val state = form.state
+    val clipboard = LocalClipboard.current
+    var previewAttachment by remember { mutableStateOf<AgentAttachment?>(null) }
     var agentMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
     var effortMenuExpanded by remember { mutableStateOf(false) }
@@ -790,6 +838,19 @@ private fun AgentChatComposer(
         },
         imagePaths = state.imagePaths,
         onRemoveImage = { path -> state.imagePaths = state.imagePaths.filterNot { it == path } },
+        attachments = state.attachments,
+        onRemoveAttachment = form::removeAttachment,
+        onPreviewAttachment = { previewAttachment = it },
+        pendingAttachmentLabels = List(state.pendingAttachmentPastes) { index ->
+            "pasted.txt" to {
+                if (index == 0 && state.pendingAttachmentPastes > 0) {
+                    state.pendingAttachmentPastes = (state.pendingAttachmentPastes - 1).coerceAtLeast(0)
+                }
+            }
+        },
+        attachmentErrors = state.attachmentPasteError?.let { error ->
+            listOf("pasted.txt" to error)
+        }.orEmpty(),
     )
     val modelLabel = when {
         !hasAvailableProvider -> "No provider"
@@ -928,11 +989,20 @@ private fun AgentChatComposer(
                                 if (canSubmit) onSubmit()
                                 true
                             }
-                            .onChatImagePaste(form.scope) { added ->
-                                if (!form.services.remoteSession.isRemote) {
-                                    state.imagePaths = attachChatImages(state.imagePaths, added)
-                                }
-                            },
+                            .onChatComposerPaste(
+                                scope = form.scope,
+                                readClipboardText = { clipboard.readPlainText() },
+                                onImagesAttached = { added ->
+                                    if (!form.services.remoteSession.isRemote) {
+                                        state.imagePaths = attachChatImages(state.imagePaths, added)
+                                    }
+                                },
+                                onSmallTextPaste = { pasted ->
+                                    state.promptValue = insertTextAtCursor(state.promptValue, pasted)
+                                    state.skillMenuDismissed = false
+                                },
+                                onLargeTextPaste = form::stageLargePaste,
+                            ),
                         textStyle = LocalTextStyle.current.copy(
                             color = TextPrimary,
                             fontFamily = DisplayFont,
@@ -948,7 +1018,8 @@ private fun AgentChatComposer(
                                 text = when {
                                     !hasAvailableProvider -> "Install a provider CLI to start a chat"
                                     state.imageDragActive -> "Release to attach images"
-                                    state.imagePaths.isNotEmpty() -> "Add a message, or send the attached images"
+                                    state.imagePaths.isNotEmpty() || state.attachments.isNotEmpty() ->
+                                        "Add a message, or send the attachments"
                                     else -> "Ask me anything…"
                                 },
                                 highlighted = state.imageDragActive,
@@ -1268,11 +1339,25 @@ private fun AgentChatComposer(
                     )
                 }
             },
-            footer = voiceError?.let { err ->
+            footer = if (voiceError != null || state.attachmentPasteError != null) {
                 {
-                    Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    voiceError?.let { err ->
+                        Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    }
+                    state.attachmentPasteError?.let { err ->
+                        Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                    }
                 }
+            } else {
+                null
             },
+        )
+    }
+    previewAttachment?.let { attachment ->
+        ChatTextAttachmentPreviewDialog(
+            label = attachment.displayName,
+            subtitle = attachment.metadataLabel(),
+            onDismiss = { previewAttachment = null },
         )
     }
 }

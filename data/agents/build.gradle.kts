@@ -129,6 +129,7 @@ kotlin {
             implementation(libs.ktor.server.sse)
             implementation(libs.ktor.server.double.receive)
             implementation(libs.ktor.server.websockets)
+            implementation(libs.ktor.server.compression)
             implementation(libs.web.push)
             implementation(libs.bouncycastle)
             implementation(libs.httpclient)
@@ -136,7 +137,7 @@ kotlin {
             implementation(libs.tomlkt)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
-            implementation(compose.ui)
+            implementation(libs.compose.ui)
         }
         desktopTest.dependencies {
             implementation(project(":agent-store"))

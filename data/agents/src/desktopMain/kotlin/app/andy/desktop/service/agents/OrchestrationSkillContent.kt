@@ -163,37 +163,73 @@ internal val ANDY_HANDOFF_SKILL: String =
 
     ## The handoff prompt
 
-    The receiving agent has zero context. Include:
+    The receiving agent has zero context. It cannot see this chat's transcript, plan
+    UI, or prior tool results. Anything the child must know must appear in the
+    prompt you pass to `chat.start`.
+
+    ### When a plan already exists (required)
+
+    If this conversation already produced an implementation plan, design doc, or
+    user-approved plan (assistant message, plan-mode entries, or similar), you
+    **must** include that plan **verbatim** under `## Plan`.
+
+    Rules:
+
+    - Copy the full plan text exactly — every section, code snippet, file path,
+      threshold, and checklist item.
+    - Do **not** paraphrase, compress, or rewrite it into `## Decisions` /
+      `## Acceptance criteria`. Those sections are for when there is no plan.
+    - Prefacing with a one-line "implement this plan exactly" is fine; replacing
+      the plan body with a summary is not.
+    - If the user said "implement this plan" / "exact plan" / similar, the Plan
+      section is the source of truth for the child.
+    - For long plans, write the full prompt to a temp file and pass that file's
+      contents into `chat.start` so nothing is truncated in a shell argument.
+
+    ### Prompt shape
 
     ```
     ## Task
-    [Imperative description.]
+    [Imperative description. If handing off a plan: "Implement the Plan below exactly."]
 
     ## Context
-    [Why this task exists, required context.]
+    [Why this task exists, required background. Keep short when ## Plan is present.]
+
+    ## Plan
+    [PASTE THE FULL APPROVED PLAN VERBATIM HERE — or omit this section only when
+     no plan exists in the parent conversation.]
 
     ## Relevant files
     - `path/to/file.ts` — [what it is and why it matters]
+    [Optional when ## Plan already lists files exhaustively; still include any
+     files the plan omitted that the child will touch.]
 
     ## Current state
-    [What's done, what works, what doesn't.]
+    [What's done, what works, what doesn't. Dirty worktree / overlapping edits.]
 
     ## What was tried
     - [Approach] — [why it failed or was abandoned]
 
     ## Decisions
-    - [Decision — rationale]
+    [Only when ## Plan is absent. Otherwise omit, or list only post-plan deltas
+     that are not already in ## Plan.]
 
     ## Acceptance criteria
-    - [ ] [Criterion]
+    [Only when ## Plan is absent or lacks a checklist. Otherwise omit — do not
+     duplicate a summarized version of the plan's criteria.]
 
     ## Constraints
     - [Must-not / must-preserve]
+    - Implement the ## Plan completely when present; do not stop after a partial slice.
     ```
 
     **Preserve task semantics.** Investigate-only → "DO NOT edit files." Fix →
     "implement the fix." Refactor → "refactor, not rewrite." Carry the user's
     exact intent.
+
+    **Anti-pattern:** turning a numbered implementation plan into bullet
+    "Decisions" and a shortened acceptance list. The child should receive the
+    same plan the user approved in the parent chat.
 
     ## Launch
 
@@ -201,7 +237,7 @@ internal val ANDY_HANDOFF_SKILL: String =
     2. Call `chat.start` with:
        - `agent`: resolved AgentKind
        - `title`: `[Handoff] ` + short summary
-       - `prompt`: the full briefing
+       - `prompt`: the full briefing (including verbatim `## Plan` when applicable)
        - omit `autonomy` so the receiver inherits this task's dial (Full stays Full),
          unless the handoff is investigate-only — then `autonomy: "ReadOnly"` +
          no-edits suffix

@@ -75,61 +75,71 @@ internal object MacOsGlobalHotKeyRegistrar : GlobalHotKeyRegistrar {
     override val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
     @Volatile private var loaded: Boolean? = null
-    private var handle: Int = -1
+    private val lock = Any()
+    @Volatile private var handle: Int = -1
 
     override fun register(spec: GlobalHotKeySpec?): Boolean {
-        _lastError.value = null
-        if (spec == null) {
-            unregister()
-            return true
-        }
-        if (!ensureLoaded()) {
-            _lastError.value = "macOS voice bridge unavailable"
-            return false
-        }
-        val mapped = CarbonHotKeyMapping.fromPackedKeyCode(
-            packedKeyCode = spec.packedKeyCode,
-            ctrl = spec.ctrl,
-            meta = spec.meta,
-            alt = spec.alt,
-            shift = spec.shift,
-        )
-        if (mapped == null) {
-            _lastError.value = "That key combination cannot be registered as a global hotkey"
-            unregister()
-            return false
-        }
-        return try {
-            val newHandle = MacOsGlobalHotKeyBridge.nativeRegisterHotKey(
-                mapped.virtualKeyCode,
-                mapped.carbonModifiers,
-            )
-            if (newHandle < 0) {
-                _lastError.value = "Failed to register global hotkey with macOS (status $newHandle)"
-                handle = -1
-                voiceDebugLog("GlobalHotKey: register failed status=$newHandle key=0x${mapped.virtualKeyCode.toString(16)} mods=0x${mapped.carbonModifiers.toString(16)}")
-                false
-            } else {
-                handle = newHandle
-                voiceDebugLog("GlobalHotKey: register requested handle=$newHandle key=0x${mapped.virtualKeyCode.toString(16)} mods=0x${mapped.carbonModifiers.toString(16)}")
-                true
+        synchronized(lock) {
+            _lastError.value = null
+            if (spec == null) {
+                unregisterLocked()
+                return true
             }
-        } catch (t: Throwable) {
-            _lastError.value = t.message ?: "Failed to register global hotkey"
-            handle = -1
-            voiceDebugLog("GlobalHotKey: register threw ${t.message}")
-            false
+            if (!ensureLoaded()) {
+                _lastError.value = "macOS voice bridge unavailable"
+                return false
+            }
+            val mapped = CarbonHotKeyMapping.fromPackedKeyCode(
+                packedKeyCode = spec.packedKeyCode,
+                ctrl = spec.ctrl,
+                meta = spec.meta,
+                alt = spec.alt,
+                shift = spec.shift,
+            )
+            if (mapped == null) {
+                _lastError.value = "That key combination cannot be registered as a global hotkey"
+                unregisterLocked()
+                return false
+            }
+            return try {
+                val newHandle = MacOsGlobalHotKeyBridge.nativeRegisterHotKey(
+                    mapped.virtualKeyCode,
+                    mapped.carbonModifiers,
+                )
+                if (newHandle < 0) {
+                    _lastError.value = "Failed to register global hotkey with macOS (status $newHandle)"
+                    handle = -1
+                    voiceDebugLog("GlobalHotKey: register failed status=$newHandle key=0x${mapped.virtualKeyCode.toString(16)} mods=0x${mapped.carbonModifiers.toString(16)}")
+                    false
+                } else {
+                    handle = newHandle
+                    voiceDebugLog("GlobalHotKey: register requested handle=$newHandle key=0x${mapped.virtualKeyCode.toString(16)} mods=0x${mapped.carbonModifiers.toString(16)}")
+                    true
+                }
+            } catch (t: Throwable) {
+                _lastError.value = t.message ?: "Failed to register global hotkey"
+                handle = -1
+                voiceDebugLog("GlobalHotKey: register threw ${t.message}")
+                false
+            }
         }
     }
 
     /**
      * Called from JNI on the AppKit main thread once Carbon has rejected the registration that
      * [register] kicked off. [status] is a negated OSStatus (or -1 when the handler failed).
+     * Ignores failures for a handle that is no longer current (stale async work).
      */
-    fun notifyRegisterFailed(status: Int) {
-        handle = -1
-        _lastError.value = "Failed to register global hotkey with macOS (status $status)"
-        voiceDebugLog("GlobalHotKey: register failed async status=$status")
+    fun notifyRegisterFailed(failedHandle: Int, status: Int) {
+        synchronized(lock) {
+            if (handle != failedHandle) {
+                voiceDebugLog("GlobalHotKey: ignoring stale register failure handle=$failedHandle status=$status current=$handle")
+                return
+            }
+            handle = -1
+            _lastError.value = "Failed to register global hotkey with macOS (status $status)"
+            voiceDebugLog("GlobalHotKey: register failed async status=$status")
+        }
     }
 
     /** Called from JNI on the AppKit main thread via [MacOsGlobalHotKeyBridge.dispatchHotKeyPressed]. */
@@ -146,7 +156,7 @@ internal object MacOsGlobalHotKeyRegistrar : GlobalHotKeyRegistrar {
         }
     }
 
-    private fun unregister() {
+    private fun unregisterLocked() {
         if (handle < 0 && loaded != true) return
         if (ensureLoaded()) {
             runCatching { MacOsGlobalHotKeyBridge.nativeUnregisterHotKey(handle) }
@@ -176,8 +186,8 @@ internal object MacOsGlobalHotKeyBridge {
 
     /** Static entry the async registration path invokes on failure — keep `@JvmStatic`. */
     @JvmStatic
-    fun dispatchRegisterFailed(status: Int) {
-        MacOsGlobalHotKeyRegistrar.notifyRegisterFailed(status)
+    fun dispatchRegisterFailed(handle: Int, status: Int) {
+        MacOsGlobalHotKeyRegistrar.notifyRegisterFailed(handle, status)
     }
 
     @JvmStatic

@@ -18,9 +18,19 @@ object SshAskpass {
         SshAskpassBroker.start()
         val sock = SshAskpassBroker.socketPath()?.absolutePath
             ?: error("SSH askpass broker failed to start")
+        return environmentEntriesFor(sock)
+    }
+
+    /**
+     * Same helper wiring pointed at a caller-owned socket. Background probes use this with a
+     * private responder so they answer from a saved credential without touching the interactive
+     * broker's per-target state (or its ability to open a dialog).
+     */
+    fun environmentEntriesFor(socketPath: String): Map<String, String> {
         // Touch helpers so paths exist before ssh runs.
         script
         pythonHelper
+        val sock = socketPath
         val env = linkedMapOf(
             "SSH_ASKPASS" to script.absolutePath,
             "SSH_ASKPASS_REQUIRE" to "force",

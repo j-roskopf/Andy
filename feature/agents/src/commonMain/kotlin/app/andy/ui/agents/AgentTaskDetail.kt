@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,15 +48,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -82,7 +91,10 @@ import app.andy.model.AgentUserInputOrigin
 import app.andy.model.AgentChangeSummary
 import app.andy.model.CONNECTION_STALL_RETRY_PROMPT
 import app.andy.model.IMPLEMENT_PLAN_PROMPT
+import app.andy.model.AgentAttachment
 import app.andy.model.AgentEvent
+import app.andy.model.hasSendableAttachments
+import app.andy.model.metadataLabel
 import app.andy.model.turnWorkedDurationMs
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentThreadChangeSnapshot
@@ -109,9 +121,11 @@ import app.andy.model.latestPlanHasPendingEntries
 import app.andy.model.looksLikePlanMode
 import app.andy.model.shouldShowConnectionStallBanner
 import app.andy.onImageFilesDropped
+import app.andy.readPlainText
 import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatComposerLayout
+import app.andy.ui.components.ChatFindBar
 import app.andy.ui.components.ComposerModelChip
 import app.andy.ui.components.ComposerPermissionsChip
 import app.andy.ui.components.ComposerProviderChip
@@ -138,7 +152,8 @@ import app.andy.ui.components.TextField
 import app.andy.ui.components.attachChatImages
 import app.andy.ui.components.attachImagesFromPicker
 import app.andy.ui.components.insertTextAtCursor
-import app.andy.ui.components.onChatImagePaste
+import app.andy.ui.components.ChatTextAttachmentPreviewDialog
+import app.andy.ui.components.onChatComposerPaste
 import app.andy.ui.components.fieldColors
 import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.theme.AndyColors
@@ -209,6 +224,11 @@ fun AgentTaskDetail(
     var toolSidePane by remember(task.id) { mutableStateOf<AgentToolSidePaneState?>(null) }
     var filePreviewPane by remember(task.id) { mutableStateOf<FileLinkPreviewState?>(null) }
     var toolSidePaneWidth by remember(task.id) { mutableStateOf(420f) }
+    var findVisible by remember(task.id) { mutableStateOf(false) }
+    var findQuery by remember(task.id) { mutableStateOf("") }
+    var findMatchIndex by remember(task.id) { mutableIntStateOf(0) }
+    var findMatchCount by remember(task.id) { mutableIntStateOf(0) }
+    var findFocusNonce by remember(task.id) { mutableIntStateOf(0) }
     var undoError by remember(task.id) { mutableStateOf<String?>(null) }
     var pendingConfirmation by remember(task.id) { mutableStateOf<PendingConfirmation?>(null) }
     val fileLinkRoots = remember(task.worktreePath, task.cwd, task.originDir) {
@@ -217,14 +237,53 @@ fun AgentTaskDetail(
     var followUpImagePaths by remember(task.id) {
         mutableStateOf(followUpDraftMemory?.get(task.id)?.imagePaths ?: emptyList())
     }
+    var followUpAttachments by remember(task.id) {
+        mutableStateOf(followUpDraftMemory?.get(task.id)?.attachments ?: emptyList())
+    }
+    var pendingAttachmentPastes by remember(task.id) { mutableIntStateOf(0) }
+    var attachmentPasteError by remember(task.id) { mutableStateOf<String?>(null) }
+    var previewAttachment by remember(task.id) { mutableStateOf<AgentAttachment?>(null) }
+    val followUpAttachmentDraftKey = remember(task.id) { "follow-up-${task.id}" }
     var followUpImageDragActive by remember(task.id) { mutableStateOf(false) }
-    LaunchedEffect(task.id, followUpValue, followUpImagePaths) {
-        followUpDraftMemory?.save(task.id, ChatFollowUpDraft(followUpValue, followUpImagePaths))
+    val stageFollowUpLargePaste: (String) -> Unit = { text ->
+        pendingAttachmentPastes++
+        attachmentPasteError = null
+        scope.launch {
+            val result = services.chatAttachments.stageText(
+                text = text,
+                draftKey = followUpAttachmentDraftKey,
+            )
+            pendingAttachmentPastes = (pendingAttachmentPastes - 1).coerceAtLeast(0)
+            result.onSuccess { attachment ->
+                followUpAttachments = followUpAttachments + attachment
+            }.onFailure { error ->
+                attachmentPasteError = error.message ?: "Failed to stage attachment"
+            }
+        }
+    }
+    val removeFollowUpAttachment: (AgentAttachment) -> Unit = { attachment ->
+        followUpAttachments = followUpAttachments.filterNot { it.id == attachment.id }
+        scope.launch { services.chatAttachments.discardStaged(attachment.id) }
+    }
+    LaunchedEffect(task.id, followUpValue, followUpImagePaths, followUpAttachments) {
+        followUpDraftMemory?.save(
+            task.id,
+            ChatFollowUpDraft(followUpValue, followUpImagePaths, followUpAttachments),
+        )
     }
     CollectChatComposerInbox(active = dictationActive) { item ->
-        val (text, images) = applyChatComposerAttachment(followUpValue, followUpImagePaths, item)
-        followUpValue = text
-        followUpImagePaths = images
+        val applied = applyChatComposerAttachment(
+            currentText = followUpValue,
+            currentImages = followUpImagePaths,
+            currentAttachments = followUpAttachments,
+            item = item,
+        )
+        followUpValue = applied.text
+        followUpImagePaths = applied.images
+        followUpAttachments = applied.attachments
+        applied.largeTextToStage?.let { text ->
+            stageFollowUpLargePaste(text)
+        }
     }
     var voiceError by remember(task.id) { mutableStateOf<String?>(null) }
     val voiceController = rememberVoiceDictationController(
@@ -242,8 +301,9 @@ fun AgentTaskDetail(
     var goalEditorOpen by remember(task.id) { mutableStateOf(false) }
     var goalEditorText by remember(task.id) { mutableStateOf(task.goal.orEmpty()) }
     val hasStagedImages = followUpImagePaths.isNotEmpty()
-    LaunchedEffect(hasStagedImages) {
-        if (hasStagedImages) scrollToLatestRequest++
+    val hasStagedAttachments = followUpAttachments.isNotEmpty()
+    LaunchedEffect(hasStagedImages, hasStagedAttachments) {
+        if (hasStagedImages || hasStagedAttachments) scrollToLatestRequest++
     }
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
     LaunchedEffect(task.id, task.status) {
@@ -281,6 +341,7 @@ fun AgentTaskDetail(
             interactive = terminalSessionActive,
             hasStagedImages = followUpImagePaths.isNotEmpty(),
             canReconnect = canReconnectTerminal,
+            hasStagedAttachments = hasStagedAttachments,
         )
     }
     val turnElapsedEnd = rememberElapsedEndMillis(task.id, task.finishedAtMillis, task)
@@ -298,7 +359,9 @@ fun AgentTaskDetail(
         workedHeadline(durationMs, success = task.status != AgentStatus.Error)
     }
     val followUp = followUpValue.text
-    val canSendFollowUp = followUp.isNotBlank() || followUpImagePaths.isNotEmpty()
+    val canSendFollowUp = followUp.isNotBlank() ||
+        followUpImagePaths.isNotEmpty() ||
+        hasSendableAttachments(followUpAttachments)
     val queueMode = workspaceState.agentMessageDeliveryMode == AgentMessageDeliveryMode.Queue
     val slashCommand = findActiveSlashCommand(followUp)
     val sessionCommands = remember(transcriptEvents) {
@@ -432,42 +495,71 @@ fun AgentTaskDetail(
     fun submitFollowUp() {
         if (!supportsResume || !canSendFollowUp) return
         val willQueue = task.isActive || (queueMode && task.queuedFollowUps.isNotEmpty())
-        fun sendOrQueue(message: String, skills: List<AgentSkill>) {
-            when {
-                queueMode && (task.isActive || task.queuedFollowUps.isNotEmpty()) ->
-                    services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
-                task.isActive ->
-                    services.agentRuns.queueFollowUp(task.id, message, followUpImagePaths, skills)
-                else ->
-                    services.agentRuns.resume(task.id, message, followUpImagePaths, skills)
-            }
-        }
+        val imagesSnapshot = followUpImagePaths
+        val attachmentsSnapshot = followUpAttachments
+        val skillsSnapshot = selectedSkills
+
         val goalCommand = if (AgentNativeSlashCommands.supportsGoal(task.agent)) followUp.parseAgentGoalCommand() else null
         val loopGoal = followUp.parseAndyLoopGoal()
-        val sentText = if (goalCommand != null) {
-            services.agentRuns.updateGoal(task.id, goalCommand.goal)
-            val remainder = goalCommand.remainingPrompt
-            if (remainder.isBlank()) {
-                followUpValue = TextFieldValue("")
-                followUpImagePaths = emptyList()
-                return
+        val sentText: String
+        val skillsForSend: List<AgentSkill>
+        when {
+            goalCommand != null -> {
+                services.agentRuns.updateGoal(task.id, goalCommand.goal)
+                val remainder = goalCommand.remainingPrompt
+                if (remainder.isBlank()) {
+                    followUpValue = TextFieldValue("")
+                    followUpImagePaths = emptyList()
+                    followUpAttachments = emptyList()
+                    attachmentPasteError = null
+                    return
+                }
+                sentText = remainder
+                skillsForSend = skillsSnapshot.filter { remainder.referencesSkill(it) }
             }
-            sendOrQueue(remainder, selectedSkills.filter { remainder.referencesSkill(it) })
-            remainder
-        } else {
-            val trimmed = followUp.trim()
-            if (loopGoal != null) {
-                services.agentRuns.updateGoal(task.id, loopGoal)
+            else -> {
+                val trimmed = followUp.trim()
+                if (loopGoal != null) {
+                    services.agentRuns.updateGoal(task.id, loopGoal)
+                }
+                sentText = trimmed
+                skillsForSend = skillsSnapshot
             }
-            sendOrQueue(trimmed, selectedSkills)
-            trimmed
         }
-        // Resume appends the user row synchronously — pass the text so the transcript can
-        // animate that row. Queued sends never hit the transcript, so skip entrance there.
-        pendingSendEntranceText = sentText.takeUnless { willQueue || it.isBlank() }
-        followUpValue = TextFieldValue("")
-        followUpImagePaths = emptyList()
-        scrollToLatestRequest++
+
+        scope.launch {
+            val result = if (willQueue) {
+                services.agentRuns.queueFollowUpPrepared(
+                    task.id,
+                    sentText,
+                    imagesSnapshot,
+                    skillsForSend,
+                    attachments = attachmentsSnapshot,
+                )
+            } else {
+                services.agentRuns.resumePrepared(
+                    task.id,
+                    sentText,
+                    imagesSnapshot,
+                    skillsForSend,
+                    attachments = attachmentsSnapshot,
+                )
+            }
+            if (result.isFailure) {
+                attachmentPasteError = result.exceptionOrNull()?.message
+                    ?: "Failed to prepare text attachment"
+                return@launch
+            }
+            // Resume appends the user row synchronously after materialize — pass the text so
+            // the transcript can animate that row. Queued sends never hit the transcript, so
+            // skip entrance there.
+            pendingSendEntranceText = sentText.takeUnless { willQueue || it.isBlank() }
+            followUpValue = TextFieldValue("")
+            followUpImagePaths = emptyList()
+            followUpAttachments = emptyList()
+            attachmentPasteError = null
+            scrollToLatestRequest++
+        }
     }
 
     LaunchedEffect(task.goal) {
@@ -546,7 +638,81 @@ fun AgentTaskDetail(
             confirmation.onConfirm()
         }
     }
-    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LaunchedEffect(findQuery) {
+        findMatchIndex = 0
+    }
+    LaunchedEffect(findMatchCount) {
+        if (findMatchCount == 0) {
+            findMatchIndex = 0
+        } else {
+            findMatchIndex = findMatchIndex.coerceIn(0, findMatchCount - 1)
+        }
+    }
+    val chatFocusRequester = remember(task.id) { FocusRequester() }
+    // Selecting a chat often leaves focus on the inbox list. Claim it here so shortcuts
+    // work without first clicking the composer.
+    LaunchedEffect(task.id, acpTask) {
+        if (!acpTask) return@LaunchedEffect
+        withFrameMillis { }
+        runCatching { chatFocusRequester.requestFocus() }
+    }
+    fun openChatFind() {
+        findVisible = true
+        findFocusNonce++
+    }
+    fun closeChatFind() {
+        findVisible = false
+        findQuery = ""
+        findMatchIndex = 0
+        findMatchCount = 0
+        // Return keyboard focus to the chat pane so Cmd/Ctrl+F keeps working.
+        runCatching { chatFocusRequester.requestFocus() }
+    }
+    fun findNext() {
+        if (findMatchCount <= 0) return
+        findMatchIndex = (findMatchIndex + 1) % findMatchCount
+    }
+    fun findPrevious() {
+        if (findMatchCount <= 0) return
+        findMatchIndex = (findMatchIndex - 1 + findMatchCount) % findMatchCount
+    }
+    Column(
+        modifier
+            .fillMaxSize()
+            .then(
+                if (acpTask && filePreviewPane == null) {
+                    Modifier
+                        .focusRequester(chatFocusRequester)
+                        .focusable()
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            val primary = event.isMetaPressed || event.isCtrlPressed
+                            when {
+                                primary && event.key == Key.F -> {
+                                    openChatFind()
+                                    true
+                                }
+                                findVisible && event.key == Key.Escape -> {
+                                    closeChatFind()
+                                    true
+                                }
+                                findVisible && primary && !event.isShiftPressed && event.key == Key.G -> {
+                                    findNext()
+                                    true
+                                }
+                                findVisible && primary && event.isShiftPressed && event.key == Key.G -> {
+                                    findPrevious()
+                                    true
+                                }
+                                else -> false
+                            }
+                        }
+                } else {
+                    Modifier
+                },
+            ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         val authRecovery = remember(task.errorMessage, task.agent) { task.providerAuthRecoveryOrNull() }
         task.errorMessage?.let { error ->
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -679,14 +845,32 @@ fun AgentTaskDetail(
                 .fillMaxWidth()
                 .heightIn(
                     min = when {
-                        hasStagedImages -> 120.dp
+                        hasStagedImages || hasStagedAttachments -> 120.dp
                         else -> 280.dp
                     },
                 )
                 .clipToBounds()
                 .onSizeChanged { size ->
                     chatPaneWidth = with(density) { size.width.toDp() }
-                },
+                }
+                .then(
+                    if (acpTask && filePreviewPane == null) {
+                        // Transcript clicks often don't move keyboard focus (list/sidebar keeps
+                        // it). Pull focus into this chat so Cmd/Ctrl+F is heard.
+                        Modifier.pointerInput(task.id) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (event.type == PointerEventType.Press) {
+                                        chatFocusRequester.requestFocus()
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Modifier
+                    },
+                ),
         ) {
             val terminalModifier = remember { Modifier.fillMaxSize() }
             val imagesStagedLatest = rememberUpdatedState(
@@ -710,6 +894,7 @@ fun AgentTaskDetail(
                         agentLabel = task.agent.cliName,
                         originalPrompt = task.prompt.ifBlank { task.title },
                         originalImagePaths = task.imagePaths,
+                        originalAttachments = task.attachments,
                         originalSkills = task.skills,
                         originalPromptAtMillis = task.createdAtMillis,
                         restoreScrollKey = task.id,
@@ -736,6 +921,9 @@ fun AgentTaskDetail(
                         onFileChangesUndo = ::requestUndoFileChanges,
                         knownTasks = knownAgentTasks,
                         currentTaskId = task.id,
+                        findQuery = if (findVisible) findQuery else "",
+                        activeFindMatchIndex = findMatchIndex,
+                        onFindMatchesChanged = { count -> findMatchCount = count },
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
                     if (filePreviewPane != null || toolSidePane != null) {
@@ -795,6 +983,23 @@ fun AgentTaskDetail(
                         .align(Alignment.TopEnd)
                         .padding(top = AndySpace.Space2, end = AndySpace.Space2)
                         .zIndex(2f),
+                )
+            }
+            if (acpTask && findVisible) {
+                ChatFindBar(
+                    query = findQuery,
+                    onQueryChange = { findQuery = it },
+                    matchIndex = findMatchIndex,
+                    matchCount = findMatchCount,
+                    onFindNext = { findNext() },
+                    onFindPrevious = { findPrevious() },
+                    onClose = { closeChatFind() },
+                    focusNonce = findFocusNonce,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2)
+                        .zIndex(3f),
                 )
             }
         }
@@ -962,10 +1167,24 @@ fun AgentTaskDetail(
                     },
                     imagePaths = followUpImagePaths,
                     onRemoveImage = { path -> followUpImagePaths = followUpImagePaths.filterNot { it == path } },
+                    attachments = followUpAttachments,
+                    onRemoveAttachment = removeFollowUpAttachment,
+                    onPreviewAttachment = { previewAttachment = it },
+                    pendingAttachmentLabels = List(pendingAttachmentPastes) { index ->
+                        "pasted.txt" to {
+                            if (index == 0 && pendingAttachmentPastes > 0) {
+                                pendingAttachmentPastes = (pendingAttachmentPastes - 1).coerceAtLeast(0)
+                            }
+                        }
+                    },
+                    attachmentErrors = attachmentPasteError?.let { error ->
+                        listOf("pasted.txt" to error)
+                    }.orEmpty(),
                 )
             } else {
                 emptyList()
             }
+            val clipboard = LocalClipboard.current
             val followUpModelLabel = task.model?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Auto"
             ChatComposerLayout(
                 modifier = Modifier
@@ -1069,9 +1288,18 @@ fun AgentTaskDetail(
                                     if (canSendFollowUp) submitFollowUp()
                                     true
                                 }
-                                .onChatImagePaste(scope) { added ->
-                                    followUpImagePaths = attachChatImages(followUpImagePaths, added)
-                                },
+                                .onChatComposerPaste(
+                                    scope = scope,
+                                    readClipboardText = { clipboard.readPlainText() },
+                                    onImagesAttached = { added ->
+                                        followUpImagePaths = attachChatImages(followUpImagePaths, added)
+                                    },
+                                    onSmallTextPaste = { pasted ->
+                                        followUpValue = insertTextAtCursor(followUpValue, pasted)
+                                        skillMenuDismissed = false
+                                    },
+                                    onLargeTextPaste = stageFollowUpLargePaste,
+                                ),
                             textStyle = LocalTextStyle.current.copy(
                                 color = TextPrimary,
                                 fontFamily = DisplayFont,
@@ -1086,7 +1314,8 @@ fun AgentTaskDetail(
                                 ComposerPlaceholderHint(
                                     text = when {
                                         followUpImageDragActive -> "Release to attach images"
-                                        followUpImagePaths.isNotEmpty() -> "Add a message, or send the attached images"
+                                        followUpImagePaths.isNotEmpty() || followUpAttachments.isNotEmpty() ->
+                                            "Add a message, or send the attachments"
                                         awaitingPlanConfirmation -> "Refine the plan, or implement above"
                                         else -> "Ask me anything…"
                                     },
@@ -1275,12 +1504,26 @@ fun AgentTaskDetail(
                         }
                     }
                 },
-                footer = voiceError?.let { err ->
+                footer = if (voiceError != null || attachmentPasteError != null) {
                     {
-                        Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                        voiceError?.let { err ->
+                            Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                        }
+                        attachmentPasteError?.let { err ->
+                            Text(err, color = Rust, fontFamily = MonoFont, fontSize = 11.sp)
+                        }
                     }
+                } else {
+                    null
                 },
             )
+            previewAttachment?.let { attachment ->
+                ChatTextAttachmentPreviewDialog(
+                    label = attachment.displayName,
+                    subtitle = attachment.metadataLabel(),
+                    onDismiss = { previewAttachment = null },
+                )
+            }
         }
     }
     }

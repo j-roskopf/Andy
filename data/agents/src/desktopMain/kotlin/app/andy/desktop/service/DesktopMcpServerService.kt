@@ -12,6 +12,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.plugins.doublereceive.*
+import io.ktor.server.plugins.compression.*
 import io.ktor.server.websocket.WebSockets
 import io.modelcontextprotocol.kotlin.sdk.*
 import io.modelcontextprotocol.kotlin.sdk.server.*
@@ -85,6 +86,7 @@ class DesktopMcpServerService(
     private var projectWorkflows: ProjectWorkflowService? = null
     private var automations: AutomationService? = null
     private var plugins: PluginService? = null
+    private var chatAttachments: ChatAttachmentService? = null
     private val hub = McpHubService()
 
     /**
@@ -99,11 +101,13 @@ class DesktopMcpServerService(
         projects: ProjectWorkflowService,
         automations: AutomationService = UnavailableAutomationService,
         plugins: PluginService = UnavailablePluginService,
+        chatAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
     ) {
         agentRuns = agents
         projectWorkflows = projects
         this.automations = automations
         this.plugins = plugins
+        this.chatAttachments = chatAttachments
         attentionHub.startWatching(agents)
         webPush.startWatching(attentionHub)
     }
@@ -226,6 +230,7 @@ class DesktopMcpServerService(
             val engine = embeddedServer(Netty, host = host, port = port) {
                 install(DoubleReceive)
                 install(WebSockets)
+                install(Compression)
                 installNetworkAccessSecurityHeaders()
                 install(NetworkAccessAuthPlugin) {
                     sessionStore = networkAccessSessions
@@ -270,6 +275,7 @@ class DesktopMcpServerService(
                     projectWorkflows = { projectWorkflows },
                     actionConfig = { actionConfig },
                     workspaceStore = { workspaceStore },
+                    chatAttachments = { chatAttachments },
                     push = webPush,
                     attention = attentionHub,
                     networkAccess = webConfig,
@@ -485,6 +491,7 @@ class DesktopMcpServerService(
                 projects,
                 callerTaskId = callerTaskId?.takeIf { it.isNotBlank() },
                 automations = automations ?: UnavailableAutomationService,
+                chatAttachments = chatAttachments ?: UnavailableChatAttachmentService,
             )
         }
         mcpServer.registerPluginTools(plugins ?: UnavailablePluginService)

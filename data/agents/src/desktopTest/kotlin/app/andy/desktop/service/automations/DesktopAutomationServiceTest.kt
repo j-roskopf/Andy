@@ -404,6 +404,7 @@ private class FakeAutomationAgentRuns : AgentRunService by UnavailableAgentRunSe
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         resumeCalls += taskId to followUp
         _tasks.value = _tasks.value.map { task ->

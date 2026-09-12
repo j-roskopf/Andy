@@ -10,6 +10,5 @@
             android:action="com.joetr.andy.action.VOICE_NEW_THREAD"
             android:targetPackage="com.joetr.andy"
             android:targetClass="com.joetr.andy.MainActivity" />
-        <categories android:name="android.shortcut.conversation" />
     </shortcut>
 </shortcuts>

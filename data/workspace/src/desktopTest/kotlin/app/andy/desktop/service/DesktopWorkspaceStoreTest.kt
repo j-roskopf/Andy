@@ -2,6 +2,7 @@ package app.andy.desktop.service
 
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentNotificationTiming
+import app.andy.model.CachedRemoteProject
 import app.andy.model.IntentDraft
 import app.andy.model.IntentMode
 import app.andy.model.SavedDockLayout
@@ -227,6 +228,14 @@ class DesktopWorkspaceStoreTest {
         DesktopWorkspaceStore(file).save(saved.copy(savedSshTargets = listOf("alice@box", "HostAlias")))
         assertEquals(listOf("alice@box", "HostAlias"), DesktopWorkspaceStore(file).load().savedSshTargets)
 
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                savedSshTargets = listOf("alice@box"),
+                sshTargetAliases = mapOf("alice@box" to "Garden"),
+            ),
+        )
+        assertEquals(mapOf("alice@box" to "Garden"), DesktopWorkspaceStore(file).load().sshTargetAliases)
+
         DesktopWorkspaceStore(file).save(saved.copy(hostScreenshotEnabled = true))
         assertEquals(true, DesktopWorkspaceStore(file).load().hostScreenshotEnabled)
         DesktopWorkspaceStore(file).save(saved.copy(hostScreenshotEnabled = false))
@@ -385,5 +394,59 @@ class DesktopWorkspaceStoreTest {
         val loadedAfterCorrupt = DesktopWorkspaceStore(file).load()
         assertEquals(emptyList(), loadedAfterCorrupt.savedDockLayouts)
         assertEquals("testing-saved-layouts", loadedAfterCorrupt.logSearch)
+    }
+
+    @Test
+    fun roundTripsMergedRemoteProjectPreferences() = runBlocking {
+        val file = createTempDirectory("andy-workspace-remote").toFile().resolve("workspace.properties")
+        val state = WorkspaceState(
+            mergeRemoteProjects = true,
+            remoteProjectCache = mapOf(
+                "joe@studio" to listOf(
+                    CachedRemoteProject("proj-andy", "Andy", "/Users/joe/Code/Andy"),
+                    CachedRemoteProject("proj-site", "Site", "/Users/joe/Code/site"),
+                ),
+                "joe@builder" to listOf(CachedRemoteProject("proj-tools", "Tools", "/srv/tools")),
+            ),
+        )
+        DesktopWorkspaceStore(file).save(state)
+        val loaded = DesktopWorkspaceStore(file).load()
+
+        assertEquals(true, loaded.mergeRemoteProjects)
+        assertEquals(state.remoteProjectCache, loaded.remoteProjectCache)
+    }
+
+    @Test
+    fun mergeSettingSurvivesAnUnrelatedUpdate() = runBlocking {
+        // Regression: every update() re-reads the file, so a field the store forgets to persist
+        // is silently reverted by the next unrelated workspace write.
+        val file = createTempDirectory("andy-workspace-remote-update").toFile().resolve("workspace.properties")
+        val store = DesktopWorkspaceStore(file)
+        store.save(WorkspaceState(mergeRemoteProjects = true))
+
+        store.update { it.copy(logSearch = "something else") }
+
+        assertEquals(true, DesktopWorkspaceStore(file).load().mergeRemoteProjects)
+    }
+
+    @Test
+    fun corruptRemoteProjectCacheFallsBackToEmpty() = runBlocking {
+        val file = createTempDirectory("andy-workspace-remote-corrupt").toFile().resolve("workspace.properties")
+        DesktopWorkspaceStore(file).save(
+            WorkspaceState(
+                mergeRemoteProjects = true,
+                remoteProjectCache = mapOf("joe@studio" to listOf(CachedRemoteProject("p", "P", "/p"))),
+            ),
+        )
+        file.writeText(
+            file.readText().lines().joinToString("\n") { line ->
+                if (line.startsWith("remoteProjectCache=")) "remoteProjectCache={not:valid-json..." else line
+            },
+        )
+
+        val loaded = DesktopWorkspaceStore(file).load()
+
+        assertEquals(emptyMap(), loaded.remoteProjectCache)
+        assertEquals(true, loaded.mergeRemoteProjects)
     }
 }

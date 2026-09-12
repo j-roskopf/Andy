@@ -273,7 +273,7 @@ class NetworkAccessClient(
     fun observeChat(chatId: String): Flow<ChatWsBatch> = flow {
         val token = sessionToken?.takeIf { it.isNotBlank() }
             ?: throw NetworkAccessException("Not signed in")
-        val url = "$root/ws/chats/${chatId.encodeURL()}?token=${token.encodeURL()}"
+        val url = networkAccessWebSocketUrl(root, "/ws/chats/${chatId.encodeURL()}?token=${token.encodeURL()}")
         client.webSocket(urlString = url) {
             for (frame in incoming) {
                 if (frame !is Frame.Text) continue
@@ -287,14 +287,15 @@ class NetworkAccessClient(
 
     /**
      * Host-pushed attention stream (Blocked / Done / Error). Same auth + URL style as [observeChat]
-     * (`https://…/ws/…` — Ktor upgrades; do not force `wss://` or Tailscale Serve TLS breaks).
+     * Uses an explicit WebSocket scheme so OkHttp performs an upgrade instead of accepting the
+     * web app's HTML fallback as a normal HTTP response.
      */
     fun observeAttention(
         onReady: suspend () -> Unit = {},
     ): Flow<ChatAttentionEvent> = flow {
         val token = sessionToken?.takeIf { it.isNotBlank() }
             ?: throw NetworkAccessException("Not signed in")
-        val url = "$root/ws/attention?token=${token.encodeURL()}"
+        val url = networkAccessWebSocketUrl(root, "/ws/attention?token=${token.encodeURL()}")
         try {
             client.webSocket(urlString = url) {
                 var ready = false
@@ -447,6 +448,15 @@ class NetworkAccessClient(
     override fun close() {
         client.close()
     }
+}
+
+internal fun networkAccessWebSocketUrl(root: String, path: String): String {
+    val webSocketRoot = when {
+        root.startsWith("https://", ignoreCase = true) -> "wss://${root.substringAfter("://")}"
+        root.startsWith("http://", ignoreCase = true) -> "ws://${root.substringAfter("://")}"
+        else -> root
+    }
+    return webSocketRoot.trimEnd('/') + "/" + path.trimStart('/')
 }
 
 data class ChatWsBatch(

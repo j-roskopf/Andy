@@ -74,6 +74,7 @@ import com.joetr.andy.mobile.data.networkaccess.latestPlanHasPendingEntries
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
+import com.joetr.andy.mobile.data.networkaccess.loadChatInitialDataConcurrently
 import com.joetr.andy.mobile.data.networkaccess.showImplementPlan
 import app.andy.ui.theme.Yellow
 import kotlinx.coroutines.delay
@@ -112,7 +113,6 @@ fun ChatScreen(
     val statusLabel = chat?.displayStatusLabel(hasPendingPlanEntries).orEmpty()
 
     suspend fun loadOnce() {
-        runCatching { client.getTranscriptSettings() }.onSuccess { transcriptPrefs = it }
         val detail = client.chatDetail(chatId)
         chat = detail.chat
         events = detail.events.coalesceStreams()
@@ -123,18 +123,28 @@ fun ChatScreen(
     LaunchedEffect(chatId) {
         expandedOverrides = emptySet()
         try {
-            loadOnce()
+            val initial = loadChatInitialDataConcurrently(
+                loadDetail = { client.chatDetail(chatId) },
+                loadSettings = { runCatching { client.getTranscriptSettings() }.getOrNull() },
+            )
+            chat = initial.detail.chat
+            events = initial.detail.events.coalesceStreams()
+            pendingInput = initial.detail.chat.userInputRequest
+            loading = false
+            initial.settings?.let { transcriptPrefs = it }
         } catch (e: Exception) {
             error = e.message
             loading = false
         }
-        // Prefer websocket; fall back to quiet polling if WS fails.
+        // The compressed REST snapshot paints the chat first. WebSocket then supplies live deltas
+        // without making the server serialize and send the full transcript twice at once.
         try {
             client.observeChat(chatId).collect { batch ->
-                batch.chat?.let { chat = it }
+                batch.chat?.let {
+                    chat = it
+                    error = null
+                }
                 if (batch.events.isNotEmpty()) {
-                    // The server sends replaceFrom to avoid duplicating history the client
-                    // already loaded over REST, and to coalesce rewritten/edited events.
                     val base = if (batch.replaceFrom != null) {
                         events.take(batch.replaceFrom)
                     } else {

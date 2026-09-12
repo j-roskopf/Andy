@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <stdint.h>
 #import <AVFoundation/AVFoundation.h>
 #import <Carbon/Carbon.h>
 #import <Foundation/Foundation.h>
@@ -17,10 +18,12 @@
 static JavaVM *g_jvm = NULL;
 static jclass g_bridge_class = NULL; // GlobalRef to MacOsGlobalHotKeyBridge
 static jmethodID g_hotkey_method = NULL; // static void dispatchHotKeyPressed()
-static jmethodID g_hotkey_failed_method = NULL; // static void dispatchRegisterFailed(int)
+static jmethodID g_hotkey_failed_method = NULL; // static void dispatchRegisterFailed(int, int)
 static EventHandlerRef g_hotkey_handler = NULL;
 static EventHotKeyRef g_hotkey_ref = NULL;
 static UInt32 g_hotkey_id = 1;
+/** Bumped on every register/unregister request; async work bails when stale. */
+static volatile int32_t g_hotkey_generation = 0;
 
 static void run_on_main_sync(void (^block)(void)) {
     if ([NSThread isMainThread]) {
@@ -171,7 +174,15 @@ static void andy_hotkey_invoke_java(void) {
 static void andy_hotkey_release_bridge(void) {
     if (g_bridge_class != NULL && g_jvm != NULL) {
         JNIEnv *mainEnv = NULL;
-        if ((*g_jvm)->GetEnv(g_jvm, (void **)&mainEnv, JNI_VERSION_1_8) == JNI_OK && mainEnv != NULL) {
+        jint getEnv = (*g_jvm)->GetEnv(g_jvm, (void **)&mainEnv, JNI_VERSION_1_8);
+        if (getEnv == JNI_EDETACHED) {
+            if ((*g_jvm)->AttachCurrentThread(g_jvm, (void **)&mainEnv, NULL) != JNI_OK) {
+                mainEnv = NULL;
+            }
+        } else if (getEnv != JNI_OK) {
+            mainEnv = NULL;
+        }
+        if (mainEnv != NULL) {
             (*mainEnv)->DeleteGlobalRef(mainEnv, g_bridge_class);
         }
     }
@@ -184,11 +195,16 @@ static void andy_hotkey_release_bridge(void) {
  * Registration now completes asynchronously, so OSStatus failures are pushed back to Kotlin
  * instead of returned. Takes explicit refs so the caller can report before tearing them down.
  */
-static void andy_hotkey_report_failure(jclass bridgeClass, jmethodID failedMethod, jint status) {
+static void andy_hotkey_report_failure(
+    jclass bridgeClass,
+    jmethodID failedMethod,
+    jint handle,
+    jint status
+) {
     if (g_jvm == NULL || bridgeClass == NULL || failedMethod == NULL) return;
     JNIEnv *env = NULL;
     if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_8) != JNI_OK || env == NULL) return;
-    (*env)->CallStaticVoidMethod(env, bridgeClass, failedMethod, status);
+    (*env)->CallStaticVoidMethod(env, bridgeClass, failedMethod, handle, status);
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
@@ -271,7 +287,7 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeRegisterHotKey
         env,
         localClass,
         "dispatchRegisterFailed",
-        "(I)V"
+        "(II)V"
     );
     if (failedMethod == NULL) {
         NSLog(@"andy-voice: GetStaticMethodID dispatchRegisterFailed failed");
@@ -281,7 +297,10 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeRegisterHotKey
     if (globalClass == NULL) return -1;
 
     // Allocated up front so the handle can be returned without waiting on the main queue.
+    // Generation invalidates any in-flight async Reg/Unreg so a late Reg cannot reinstall
+    // after Kotlin already asked to unregister (or registered a newer combo).
     jint handle = (jint)__atomic_fetch_add(&g_hotkey_id, 1, __ATOMIC_RELAXED);
+    int32_t generation = __atomic_add_fetch(&g_hotkey_generation, 1, __ATOMIC_SEQ_CST);
     jobject retainedClass = globalClass;
     jmethodID retainedMethod = method;
     jmethodID retainedFailedMethod = failedMethod;
@@ -289,6 +308,20 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeRegisterHotKey
     jint mods = carbonModifiers;
 
     run_on_main_async(^{
+        if (generation != g_hotkey_generation) {
+            // Stale — drop the GlobalRef we would have installed.
+            if (g_jvm != NULL && retainedClass != NULL) {
+                JNIEnv *dropEnv = NULL;
+                if ((*g_jvm)->GetEnv(g_jvm, (void **)&dropEnv, JNI_VERSION_1_8) == JNI_OK &&
+                    dropEnv != NULL) {
+                    (*dropEnv)->DeleteGlobalRef(dropEnv, retainedClass);
+                } else if ((*g_jvm)->AttachCurrentThread(g_jvm, (void **)&dropEnv, NULL) == JNI_OK &&
+                           dropEnv != NULL) {
+                    (*dropEnv)->DeleteGlobalRef(dropEnv, retainedClass);
+                }
+            }
+            return;
+        }
         if (g_hotkey_ref != NULL) {
             UnregisterEventHotKey(g_hotkey_ref);
             g_hotkey_ref = NULL;
@@ -301,7 +334,7 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeRegisterHotKey
 
         OSStatus handlerStatus = ensure_hotkey_handler();
         if (handlerStatus != noErr) {
-            andy_hotkey_report_failure(g_bridge_class, g_hotkey_failed_method, -1);
+            andy_hotkey_report_failure(g_bridge_class, g_hotkey_failed_method, handle, -1);
             andy_hotkey_release_bridge();
             return;
         }
@@ -318,17 +351,27 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeRegisterHotKey
             &g_hotkey_ref
         );
         NSLog(
-            @"andy-voice: RegisterEventHotKey status=%d key=0x%X mods=0x%X id=%u",
+            @"andy-voice: RegisterEventHotKey status=%d key=0x%X mods=0x%X id=%u gen=%d",
             (int)status,
             (unsigned)vKey,
             (unsigned)mods,
-            (unsigned)hotKeyId.id
+            (unsigned)hotKeyId.id,
+            (int)generation
         );
+        if (generation != g_hotkey_generation) {
+            // Unregister won the race after we registered — tear down immediately.
+            if (g_hotkey_ref != NULL) {
+                UnregisterEventHotKey(g_hotkey_ref);
+                g_hotkey_ref = NULL;
+            }
+            andy_hotkey_release_bridge();
+            return;
+        }
         if (status != noErr) {
             g_hotkey_ref = NULL;
             // Encode OSStatus as negative so Kotlin can surface it (avoid colliding with -1).
             jint reported = status > 0 ? -(jint)status : (status == 0 ? -1 : (jint)status);
-            andy_hotkey_report_failure(g_bridge_class, g_hotkey_failed_method, reported);
+            andy_hotkey_report_failure(g_bridge_class, g_hotkey_failed_method, handle, reported);
             andy_hotkey_release_bridge();
         }
     });
@@ -344,7 +387,9 @@ Java_app_andy_desktop_service_voice_MacOsGlobalHotKeyBridge_nativeUnregisterHotK
     (void)env;
     (void)cls;
     (void)handle;
+    int32_t generation = __atomic_add_fetch(&g_hotkey_generation, 1, __ATOMIC_SEQ_CST);
     run_on_main_async(^{
+        (void)generation;
         if (g_hotkey_ref != NULL) {
             UnregisterEventHotKey(g_hotkey_ref);
             g_hotkey_ref = NULL;

@@ -29,8 +29,10 @@ import app.andy.model.providerLoginRemoteInstructions
 import app.andy.model.WorkspaceState
 import app.andy.service.ActionConfigStore
 import app.andy.service.AgentRunService
+import app.andy.service.ChatAttachmentService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.WorkspaceStore
+import app.andy.desktop.service.parseAttachmentsArg
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -38,8 +40,8 @@ import io.ktor.server.application.call
 import io.ktor.server.http.content.staticResources
 import io.ktor.server.request.contentLength
 import io.ktor.server.request.receiveChannel
-import io.ktor.utils.io.core.readBytes
 import io.ktor.utils.io.readRemaining
+import kotlinx.io.readByteArray
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -65,6 +67,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -75,7 +78,7 @@ private const val WebChatMaxBodyBytes = 1_048_576L
 private suspend fun io.ktor.server.application.ApplicationCall.receiveBoundedText(maxBytes: Long): String? {
     if ((request.contentLength() ?: 0L) > maxBytes) return null
     val channel = receiveChannel()
-    val bytes = channel.readRemaining(maxBytes + 1).readBytes()
+    val bytes = channel.readRemaining(maxBytes + 1).readByteArray()
     if (bytes.size > maxBytes) return null
     return bytes.decodeToString()
 }
@@ -113,6 +116,7 @@ internal fun Application.installWebChatRoutes(
     projectWorkflows: () -> ProjectWorkflowService? = { null },
     actionConfig: () -> ActionConfigStore? = { null },
     workspaceStore: () -> WorkspaceStore? = { null },
+    chatAttachments: () -> ChatAttachmentService? = { null },
     push: WebPushService,
     attention: AttentionHub = AttentionHub(),
     networkAccess: NetworkAccessWebConfig = NetworkAccessWebConfig(),
@@ -437,14 +441,146 @@ internal fun Application.installWebChatRoutes(
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "message must be string")
                 }
                 val message = body.requiredString("message")?.trim().orEmpty()
-                if (message.isEmpty()) {
+                val attachments = when (val raw = body["attachments"]) {
+                    null, JsonNull -> emptyList()
+                    else -> runCatching {
+                        parseAttachmentsArg(mapOf("attachments" to raw))
+                    }.getOrElse {
+                        return@post call.respondJsonError(
+                            HttpStatusCode.BadRequest,
+                            it.message ?: "invalid attachments",
+                        )
+                    }
+                }
+                if (message.isEmpty() && attachments.isEmpty()) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "message required")
                 }
-                agents.resume(id, message)
+                // Await attachment materialization/upload so a missing or changed staging file is
+                // reported to the caller, letting the web client keep and retry the draft. The
+                // provider turn itself continues asynchronously.
+                val prepared = agents.resumePrepared(id, message, attachments = attachments)
+                prepared.exceptionOrNull()?.let { error ->
+                    return@post call.respondJsonError(
+                        HttpStatusCode.BadRequest,
+                        error.message ?: "failed to prepare reply attachments",
+                    )
+                }
                 call.respondText(
                     buildJsonObject {
                         put("ok", true)
                         put("id", id)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/attachments/begin") {
+                val attachments = chatAttachments()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "attachment service unavailable",
+                    )
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
+                val displayName = body.requiredString("displayName")?.trim().orEmpty()
+                val sha256 = body.requiredString("sha256")?.trim().orEmpty()
+                val byteCount = body["byteCount"]?.let { el ->
+                    (el as? JsonPrimitive)?.longOrNull
+                        ?: el.asJsonStringOrNull()?.toLongOrNull()
+                }
+                if (displayName.isEmpty() || sha256.isEmpty() || byteCount == null) {
+                    return@post call.respondJsonError(
+                        HttpStatusCode.BadRequest,
+                        "displayName, byteCount, and sha256 required",
+                    )
+                }
+                val session = attachments.beginUpload(
+                    displayName = displayName,
+                    byteCount = byteCount,
+                    sha256 = sha256,
+                    mediaType = body.requiredString("mediaType")?.trim()
+                        ?: "text/plain; charset=utf-8",
+                    draftKey = body.requiredString("draftKey")?.trim(),
+                ).getOrElse {
+                    return@post call.respondJsonError(HttpStatusCode.BadRequest, it.message ?: "begin failed")
+                }
+                call.respondText(
+                    buildJsonObject {
+                        put("uploadId", session.uploadId)
+                        put("displayName", session.displayName)
+                        put("expectedBytes", session.expectedBytes)
+                        put("expectedSha256", session.expectedSha256)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/attachments/{uploadId}/append") {
+                val attachments = chatAttachments()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "attachment service unavailable",
+                    )
+                val uploadId = call.parameters["uploadId"].orEmpty()
+                val body = call.receiveJsonObject()
+                    ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "invalid json")
+                val sequence = body["sequence"]?.let { el ->
+                    (el as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+                        ?: (el as? JsonPrimitive)?.longOrNull?.toInt()
+                } ?: return@post call.respondJsonError(HttpStatusCode.BadRequest, "sequence required")
+                val chunk = body.requiredString("base64Chunk").orEmpty()
+                if (chunk.isEmpty()) {
+                    return@post call.respondJsonError(HttpStatusCode.BadRequest, "base64Chunk required")
+                }
+                attachments.appendUploadChunk(uploadId, sequence, chunk).getOrElse {
+                    return@post call.respondJsonError(HttpStatusCode.BadRequest, it.message ?: "append failed")
+                }
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", true)
+                        put("uploadId", uploadId)
+                        put("sequence", sequence)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/attachments/{uploadId}/commit") {
+                val attachments = chatAttachments()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "attachment service unavailable",
+                    )
+                val uploadId = call.parameters["uploadId"].orEmpty()
+                val attachment = attachments.commitUpload(uploadId).getOrElse {
+                    return@post call.respondJsonError(HttpStatusCode.BadRequest, it.message ?: "commit failed")
+                }
+                call.respondText(
+                    buildJsonObject {
+                        put("id", attachment.id)
+                        put("displayName", attachment.displayName)
+                        put("kind", attachment.kind.name)
+                        put("mediaType", attachment.mediaType)
+                        put("byteCount", attachment.byteCount)
+                        attachment.lineCount?.let { put("lineCount", it) }
+                        put("sha256", attachment.sha256)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            }
+
+            post("/attachments/{uploadId}/cancel") {
+                val attachments = chatAttachments()
+                    ?: return@post call.respondJsonError(
+                        HttpStatusCode.ServiceUnavailable,
+                        "attachment service unavailable",
+                    )
+                val uploadId = call.parameters["uploadId"].orEmpty()
+                val cancelled = attachments.cancelUpload(uploadId)
+                call.respondText(
+                    buildJsonObject {
+                        put("ok", cancelled)
+                        put("uploadId", uploadId)
                     }.toString(),
                     ContentType.Application.Json,
                 )
@@ -660,7 +796,18 @@ internal fun Application.installWebChatRoutes(
                 val autonomyName = body.requiredString("autonomy")?.trim().orEmpty()
                 val title = body.requiredString("title")?.trim()
                 val projectId = body.requiredString("projectId")?.trim()?.takeIf { it.isNotBlank() }
-                if (prompt.isEmpty()) {
+                val attachments = when (val raw = body["attachments"]) {
+                    null, JsonNull -> emptyList()
+                    else -> runCatching {
+                        parseAttachmentsArg(mapOf("attachments" to raw))
+                    }.getOrElse {
+                        return@post call.respondJsonError(
+                            HttpStatusCode.BadRequest,
+                            it.message ?: "invalid attachments",
+                        )
+                    }
+                }
+                if (prompt.isEmpty() && attachments.isEmpty()) {
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, "prompt required")
                 }
                 if (agentName.isEmpty()) {
@@ -710,7 +857,8 @@ internal fun Application.installWebChatRoutes(
                     if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
                 }
                 val draft = AgentTaskDraft(
-                        title = title?.takeIf { it.isNotBlank() } ?: prompt.take(48),
+                        title = title?.takeIf { it.isNotBlank() }
+                            ?: prompt.take(48).ifBlank { attachments.firstOrNull()?.displayName.orEmpty() },
                         prompt = prompt,
                         agent = agent,
                         localRuntime = runtime,
@@ -718,6 +866,7 @@ internal fun Application.installWebChatRoutes(
                         directory = resolvedDirectory,
                         autonomy = autonomy,
                         model = model,
+                        attachments = attachments,
                     )
                 draft.localModelLaunchError()?.let { message ->
                     return@post call.respondJsonError(HttpStatusCode.BadRequest, message)

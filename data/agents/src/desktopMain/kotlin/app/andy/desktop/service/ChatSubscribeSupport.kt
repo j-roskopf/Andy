@@ -1,6 +1,8 @@
 package app.andy.desktop.service
 
 import app.andy.domain.excludingTemporary
+import app.andy.model.AgentAttachment
+import app.andy.model.AgentAttachmentKind
 import app.andy.model.AgentEvent
 import app.andy.model.AgentStatus
 import app.andy.service.AgentRunService
@@ -28,6 +30,12 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -99,6 +107,58 @@ internal fun parseImagePathsArg(args: Map<String, JsonElement>): List<String> {
         primitive.content
     }
     return validateImagePaths(paths)
+}
+
+/** Parses managed attachment descriptors (never bodies) from MCP chat tool args. */
+internal fun parseAttachmentsArg(args: Map<String, JsonElement>): List<AgentAttachment> {
+    val element = args["attachments"] ?: return emptyList()
+    val array = element as? JsonArray
+        ?: error("attachments must be an array of objects")
+    return array.mapIndexed { index, item ->
+        val obj = item as? JsonObject
+            ?: error("attachments[$index] must be an object")
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: error("attachments[$index].id required")
+        if (!id.matches(Regex("^[A-Za-z0-9._-]{1,128}$"))) {
+            error("attachments[$index].id is invalid")
+        }
+        val displayName = obj["displayName"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: error("attachments[$index].displayName required")
+        val byteCount = obj["byteCount"]?.jsonPrimitive?.longOrNull
+            ?: error("attachments[$index].byteCount required")
+        val sha256 = obj["sha256"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            ?: error("attachments[$index].sha256 required")
+        if (!sha256.matches(Regex("^[a-fA-F0-9]{64}$"))) {
+            error("attachments[$index].sha256 is invalid")
+        }
+        AgentAttachment(
+            id = id,
+            displayName = displayName,
+            kind = AgentAttachmentKind.entries.firstOrNull {
+                it.name.equals(obj["kind"]?.jsonPrimitive?.contentOrNull, ignoreCase = true)
+            } ?: AgentAttachmentKind.Text,
+            mediaType = obj["mediaType"]?.jsonPrimitive?.contentOrNull
+                ?: "text/plain; charset=utf-8",
+            byteCount = byteCount,
+            lineCount = obj["lineCount"]?.jsonPrimitive?.longOrNull?.takeIf { it > 0 },
+            sha256 = sha256.lowercase(),
+            // Inbound MCP/Web mutations must not select an arbitrary path — materialize from
+            // the managed staging id only. Persisted relativePath is set by the host after
+            // materialization.
+            relativePath = null,
+        )
+    }
+}
+
+internal fun attachmentDescriptorJson(attachment: AgentAttachment): JsonObject = buildJsonObject {
+    put("id", attachment.id)
+    put("displayName", attachment.displayName)
+    put("kind", attachment.kind.name)
+    put("mediaType", attachment.mediaType)
+    put("byteCount", attachment.byteCount)
+    attachment.lineCount?.let { put("lineCount", it) }
+    put("sha256", attachment.sha256)
+    attachment.relativePath?.let { put("relativePath", it) }
 }
 
 /**

@@ -11,7 +11,7 @@ import com.joetr.andy.R
 
 /**
  * Home-screen widget that starts the same voice-new-thread path as the launcher shortcut:
- * [MainActivity.ACTION_VOICE_NEW_THREAD] → system speech UI (or supplied text) → confirm Start.
+ * [MainActivity.ACTION_VOICE_NEW_THREAD] → system speech UI → confirm Start.
  */
 class VoiceThreadWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(

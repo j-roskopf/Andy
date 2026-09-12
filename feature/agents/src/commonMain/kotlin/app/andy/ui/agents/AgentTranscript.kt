@@ -49,12 +49,18 @@ import androidx.compose.material3.Text
 import app.andy.ui.components.ChatBubbleGroup
 import app.andy.ui.components.ChatBubbleSender
 import app.andy.ui.components.ChatBubbleVariant
+import app.andy.ui.components.ChatFindHighlight
+import app.andy.ui.components.ChatFindActiveRowWash
+import app.andy.ui.components.ChatFindRowWash
 import app.andy.ui.components.ChatMessageBubble
 import app.andy.ui.components.ChatMessageCopyAction
 import app.andy.ui.components.ChatMessageMetadata
+import app.andy.ui.components.LocalChatFindHighlight
 import app.andy.ui.components.PlatformLazyListScrollbar
 import app.andy.ui.components.TextButton
+import app.andy.ui.components.highlightFindMatches
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -107,7 +113,10 @@ import app.andy.domain.looksLikeFilePath
 import app.andy.domain.parseToolCallFileArguments
 import app.andy.domain.parseToolCallFileContent
 import app.andy.model.AcpToolCallPresentation
+import app.andy.model.AgentAttachment
 import app.andy.model.AgentEvent
+import app.andy.model.boundedUserMessagePreview
+import app.andy.model.metadataLabel
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSpawnPresentation
@@ -235,6 +244,7 @@ fun AgentTranscript(
     activePermissionRequestId: String? = null,
     originalPrompt: String? = null,
     originalImagePaths: List<String> = emptyList(),
+    originalAttachments: List<AgentAttachment> = emptyList(),
     originalSkills: List<AgentSkill> = emptyList(),
     /** Wall time for the launch prompt bubble when it is synthesized (not from [AgentEvent.UserMessage]). */
     originalPromptAtMillis: Long? = null,
@@ -267,6 +277,15 @@ fun AgentTranscript(
     knownTasks: List<AgentTask> = emptyList(),
     /** Current chat id so spawn resolution does not link a row back to itself. */
     currentTaskId: String? = null,
+    /**
+     * In-chat find query. When non-blank, matching rows highlight and
+     * [activeFindMatchIndex] scrolls into view.
+     */
+    findQuery: String = "",
+    /** Index into the match list derived from [findQuery] (clamped by this composable). */
+    activeFindMatchIndex: Int = 0,
+    /** Reports the current match count whenever [findQuery] or transcript content changes. */
+    onFindMatchesChanged: (matchCount: Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val compositionCounter = LocalTranscriptCompositionCounter.current
@@ -295,7 +314,13 @@ fun AgentTranscript(
             .filter { it.id !in alreadyLinked }
         withLinkedChildSpawnItems(base, children)
     }
-    val originalPromptVisible = shouldDisplayOriginalPrompt(events, originalPrompt, originalImagePaths, originalSkills)
+    val originalPromptVisible = shouldDisplayOriginalPrompt(
+        events,
+        originalPrompt,
+        originalImagePaths,
+        originalSkills,
+        originalAttachments,
+    )
     val latestTaskResultItemIndex = displayItems.indexOfLast { item ->
         item is TranscriptDisplayItem.Event && item.event is AgentEvent.TaskResult
     }
@@ -342,6 +367,28 @@ fun AgentTranscript(
     var expandedToolKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedToolGroups by remember(taskId) { mutableStateOf(setOf<String>()) }
     var expandedThinkingKeys by remember(taskId) { mutableStateOf(setOf<String>()) }
+    val findMatches = remember(
+        displayItems,
+        findQuery,
+        originalPrompt,
+        originalPromptVisible,
+    ) {
+        findChatMatches(
+            displayItems = displayItems,
+            query = findQuery,
+            originalPrompt = originalPrompt,
+            originalPromptVisible = originalPromptVisible,
+        )
+    }
+    val onFindMatchesChangedLatest = rememberUpdatedState(onFindMatchesChanged)
+    LaunchedEffect(findMatches) {
+        onFindMatchesChangedLatest.value(findMatches.size)
+    }
+    val activeFindMatch = findMatches.getOrNull(
+        activeFindMatchIndex.coerceIn(0, (findMatches.size - 1).coerceAtLeast(0)),
+    ).takeIf { findMatches.isNotEmpty() && findQuery.trim().isNotEmpty() }
+    val findMatchKeys = remember(findMatches) { findMatches.map { it.itemKey }.toSet() }
+    val findExpandKeys = remember(activeFindMatch) { chatFindExpandKeys(activeFindMatch) }
     fun setActivityExpanded(
         key: String,
         expanded: Boolean,
@@ -358,6 +405,11 @@ fun AgentTranscript(
             },
         )
     }
+    fun activityExpanded(
+        key: String,
+        overrides: Set<String>,
+        autoExpand: Boolean,
+    ): Boolean = key in findExpandKeys || transcriptActivityExpanded(key, overrides, autoExpand)
     // Desktop wheel/trackpad often never sets isScrollInProgress. Emit ticks without Compose
     // state so each wheel event does not recompose the whole transcript. Keep a single slot and
     // DROP_OLDEST so a fast fling cannot queue dozens of settle waits.
@@ -466,6 +518,21 @@ fun AgentTranscript(
                 anchorKey = listState.firstVisibleAnchorKey(),
             )
         }.distinctUntilChanged().collect { memory.save(id, it) }
+    }
+    LaunchedEffect(activeFindMatch, rowKeys, scrollInitialized, findExpandKeys) {
+        val match = activeFindMatch ?: return@LaunchedEffect
+        if (!scrollInitialized) return@LaunchedEffect
+        stickToBottom = false
+        // Let force-expanded thinking/tool content compose before scrolling so the hit
+        // isn't still behind AnimatedVisibility.
+        if (findExpandKeys.isNotEmpty()) {
+            withFrameMillis { }
+            withFrameMillis { }
+        }
+        val listIndex = rowKeys.indexOf(match.itemKey).takeIf { it >= 0 } ?: return@LaunchedEffect
+        listState.runProgrammaticScroll(programmaticScroll) {
+            scrollToItem(listIndex.coerceIn(0, (layoutInfo.totalItemsCount - 1).coerceAtLeast(0)))
+        }
     }
     DisposableEffect(taskId, listState, scrollInitialized, stickToBottom) {
         onDispose {
@@ -652,46 +719,64 @@ fun AgentTranscript(
                 }
                 if (originalPromptVisible) {
                     item(key = "original-prompt", contentType = "message") {
-                        SelectionContainer {
-                            val originalTimestamp = originalPromptAtMillis
-                                ?.takeIf { it > 0L }
-                                ?.let(::formatDisplayTime)
-                            val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
-                            ChatMessageBubble(
-                                sender = ChatBubbleSender.User,
-                                testTag = "user-message-bubble",
-                                metadata = if (originalTimestamp != null || originalCopyText != null) {
-                                    {
-                                        ChatMessageMetadata(
-                                            timestamp = originalTimestamp,
-                                            footer = originalCopyText?.let { prompt ->
-                                                { ChatMessageCopyAction(prompt) }
-                                            },
-                                        )
-                                    }
-                                } else {
-                                    null
-                                },
+                        val promptFind = findQuery.trim().takeIf { it.isNotEmpty() }?.let { query ->
+                            ChatFindHighlight(
+                                query = query,
+                                activeRange = activeFindMatch
+                                    ?.takeIf { it.itemKey == "original-prompt" }
+                                    ?.range,
+                            )
+                        }
+                        val promptWash = when {
+                            activeFindMatch?.itemKey == "original-prompt" -> ChatFindActiveRowWash
+                            "original-prompt" in findMatchKeys -> ChatFindRowWash
+                            else -> Color.Transparent
+                        }
+                        CompositionLocalProvider(LocalChatFindHighlight provides promptFind) {
+                            SelectionContainer(
+                                Modifier.background(promptWash),
                             ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                        if (!isSkillOnlyMessage(prompt, originalSkills)) {
-                                            ChatUserText(prompt)
+                                val originalTimestamp = originalPromptAtMillis
+                                    ?.takeIf { it > 0L }
+                                    ?.let(::formatDisplayTime)
+                                val originalCopyText = originalPrompt?.takeIf { it.isNotBlank() }
+                                ChatMessageBubble(
+                                    sender = ChatBubbleSender.User,
+                                    testTag = "user-message-bubble",
+                                    metadata = if (originalTimestamp != null || originalCopyText != null) {
+                                        {
+                                            ChatMessageMetadata(
+                                                timestamp = originalTimestamp,
+                                                footer = originalCopyText?.let { prompt ->
+                                                    { ChatMessageCopyAction(prompt) }
+                                                },
+                                            )
                                         }
-                                    }
-                                    ChatAttachedImages(originalImagePaths)
-                                    if (originalSkills.isNotEmpty()) {
-                                        DisableSelection {
-                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                originalSkills.forEach { skill ->
-                                                    Text(
-                                                        "/${skill.name}",
-                                                        color = Cyan,
-                                                        fontFamily = MonoFont,
-                                                        fontSize = 11.sp,
-                                                        textDecoration = TextDecoration.Underline,
-                                                        modifier = Modifier.clickable { onSkillOpen(skill) },
-                                                    )
+                                    } else {
+                                        null
+                                    },
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
+                                            if (!isSkillOnlyMessage(prompt, originalSkills)) {
+                                                ChatUserText(boundedUserMessagePreview(prompt))
+                                            }
+                                        }
+                                        ChatAttachedTextAttachments(originalAttachments)
+                                        ChatAttachedImages(originalImagePaths)
+                                        if (originalSkills.isNotEmpty()) {
+                                            DisableSelection {
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    originalSkills.forEach { skill ->
+                                                        Text(
+                                                            "/${skill.name}",
+                                                            color = Cyan,
+                                                            fontFamily = MonoFont,
+                                                            fontSize = 11.sp,
+                                                            textDecoration = TextDecoration.Underline,
+                                                            modifier = Modifier.clickable { onSkillOpen(skill) },
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -717,119 +802,143 @@ fun AgentTranscript(
                     val isUserMessage = item is TranscriptDisplayItem.Event &&
                         item.event is AgentEvent.UserMessage &&
                         !(item.event as AgentEvent.UserMessage).text.isSilentConnectionRecoveryPrompt()
-                    SelectionContainer(
-                        modifier = Modifier
-                            .then(
-                                if (isUserMessage) {
-                                    Modifier.userMessageSendEnter(
-                                        play = itemKey == sendEntranceKey,
-                                        onFinished = {
-                                            if (sendEntranceKey == itemKey) sendEntranceKey = null
-                                        },
-                                    )
-                                } else {
-                                    Modifier
-                                },
-                            )
-                            .testTag("transcript-row-$itemKey"),
-                    ) {
-                        when (item) {
-                            is TranscriptDisplayItem.Event -> {
-                                val bubbleGroup = transcriptChatBubbleGroup(displayItems, itemIndex)
-                                TranscriptEvent(
-                                event = item.event,
-                                eventKey = transcriptEventKey(item.index, item.event),
-                                bubbleGroup = bubbleGroup,
-                                streamPlainText = isActive &&
-                                    item.event is AgentEvent.AssistantText &&
-                                    (item.event as AgentEvent.AssistantText).isStreamDelta,
-                                toolExpanded = transcriptActivityExpanded(
-                                    transcriptEventKey(item.index, item.event),
-                                    expandedToolKeys,
-                                    autoExpandToolSections,
-                                ),
-                                thinkingExpanded = transcriptActivityExpanded(
-                                    transcriptEventKey(item.index, item.event),
-                                    expandedThinkingKeys,
-                                    autoExpandThinkingSections,
-                                ),
-                                agentLabel = agentLabel,
-                                completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
-                                awaitingPlanConfirmation = awaitingPlanConfirmation &&
-                                    itemIndex == latestPlanUpdateItemIndex,
-                                activePermissionRequestId = activePermissionRequestId,
-                                onToolExpandedChange = { key, expanded ->
-                                    setActivityExpanded(
-                                        key,
-                                        expanded,
+                    val rowFind = findQuery.trim().takeIf { it.isNotEmpty() }?.let { query ->
+                        val activeOnThisRow = activeFindMatch?.takeIf { match ->
+                            match.itemKey == itemKey &&
+                                (match.nestedEventKey == null || match.nestedEventKey == itemKey)
+                        }
+                        ChatFindHighlight(
+                            query = query,
+                            activeRange = activeOnThisRow?.range,
+                        )
+                    }
+                    val rowWash = when {
+                        activeFindMatch?.itemKey == itemKey -> ChatFindActiveRowWash
+                        itemKey in findMatchKeys -> ChatFindRowWash
+                        else -> Color.Transparent
+                    }
+                    CompositionLocalProvider(LocalChatFindHighlight provides rowFind) {
+                        SelectionContainer(
+                            modifier = Modifier
+                                .background(rowWash)
+                                .then(
+                                    if (isUserMessage) {
+                                        Modifier.userMessageSendEnter(
+                                            play = itemKey == sendEntranceKey,
+                                            onFinished = {
+                                                if (sendEntranceKey == itemKey) sendEntranceKey = null
+                                            },
+                                        )
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .testTag("transcript-row-$itemKey"),
+                        ) {
+                            when (item) {
+                                is TranscriptDisplayItem.Event -> {
+                                    val eventKey = transcriptEventKey(item.index, item.event)
+                                    val bubbleGroup = transcriptChatBubbleGroup(displayItems, itemIndex)
+                                    TranscriptEvent(
+                                    event = item.event,
+                                    eventKey = eventKey,
+                                    bubbleGroup = bubbleGroup,
+                                    streamPlainText = isActive &&
+                                        item.event is AgentEvent.AssistantText &&
+                                        (item.event as AgentEvent.AssistantText).isStreamDelta,
+                                    toolExpanded = activityExpanded(
+                                        eventKey,
                                         expandedToolKeys,
                                         autoExpandToolSections,
-                                    ) { expandedToolKeys = it }
-                                },
-                                onThinkingExpandedChange = { key, expanded ->
-                                    setActivityExpanded(
-                                        key,
-                                        expanded,
+                                    ),
+                                    thinkingExpanded = activityExpanded(
+                                        eventKey,
                                         expandedThinkingKeys,
                                         autoExpandThinkingSections,
-                                    ) { expandedThinkingKeys = it }
-                                },
-                                onSkillOpen = onSkillOpen,
-                                onToolFileOpen = onToolFileOpen,
-                                onFileChangesReview = onFileChangesReview,
-                                onFileChangesUndo = onFileChangesUndo,
-                                knownTasks = knownTasks,
-                                currentTaskId = currentTaskId,
-                                autoExpandThinkingSections = autoExpandThinkingSections,
-                                autoExpandToolSections = autoExpandToolSections,
-                            )
-                            }
-                            is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
-                                events = item.events,
-                                startIndex = item.startIndex,
-                                expanded = transcriptActivityExpanded(
-                                    transcriptDisplayItemKey(item),
-                                    expandedToolGroups,
-                                    autoExpandToolSections,
-                                ),
-                                onExpandedChange = { expanded ->
-                                    val key = transcriptDisplayItemKey(item)
-                                    setActivityExpanded(
-                                        key,
-                                        expanded,
+                                    ),
+                                    forceExpandInstant = eventKey in findExpandKeys,
+                                    agentLabel = agentLabel,
+                                    completedContent = if (itemIndex == latestTaskResultItemIndex) completedContent else null,
+                                    awaitingPlanConfirmation = awaitingPlanConfirmation &&
+                                        itemIndex == latestPlanUpdateItemIndex,
+                                    activePermissionRequestId = activePermissionRequestId,
+                                    onToolExpandedChange = { key, expanded ->
+                                        setActivityExpanded(
+                                            key,
+                                            expanded,
+                                            expandedToolKeys,
+                                            autoExpandToolSections,
+                                        ) { expandedToolKeys = it }
+                                    },
+                                    onThinkingExpandedChange = { key, expanded ->
+                                        setActivityExpanded(
+                                            key,
+                                            expanded,
+                                            expandedThinkingKeys,
+                                            autoExpandThinkingSections,
+                                        ) { expandedThinkingKeys = it }
+                                    },
+                                    onSkillOpen = onSkillOpen,
+                                    onToolFileOpen = onToolFileOpen,
+                                    onFileChangesReview = onFileChangesReview,
+                                    onFileChangesUndo = onFileChangesUndo,
+                                    knownTasks = knownTasks,
+                                    currentTaskId = currentTaskId,
+                                    autoExpandThinkingSections = autoExpandThinkingSections,
+                                    autoExpandToolSections = autoExpandToolSections,
+                                )
+                                }
+                                is TranscriptDisplayItem.ToolCalls -> CompactToolCallsBlock(
+                                    events = item.events,
+                                    startIndex = item.startIndex,
+                                    expanded = activityExpanded(
+                                        transcriptDisplayItemKey(item),
                                         expandedToolGroups,
                                         autoExpandToolSections,
-                                    ) { expandedToolGroups = it }
-                                },
-                                expandedToolKeys = expandedToolKeys,
-                                expandedThinkingKeys = expandedThinkingKeys,
-                                autoExpandThinkingSections = autoExpandThinkingSections,
-                                autoExpandToolSections = autoExpandToolSections,
-                                onToolExpandedChange = { key, expanded ->
-                                    setActivityExpanded(
-                                        key,
-                                        expanded,
-                                        expandedToolKeys,
-                                        autoExpandToolSections,
-                                    ) { expandedToolKeys = it }
-                                },
-                                onThinkingExpandedChange = { key, expanded ->
-                                    setActivityExpanded(
-                                        key,
-                                        expanded,
-                                        expandedThinkingKeys,
-                                        autoExpandThinkingSections,
-                                    ) { expandedThinkingKeys = it }
-                                },
-                                onToolFileOpen = onToolFileOpen,
-                                knownTasks = knownTasks,
-                                currentTaskId = currentTaskId,
-                            )
-                            is TranscriptDisplayItem.ChildSpawns -> LinkedChildChatsBlock(
-                                children = item.tasks,
-                                knownTasks = knownTasks,
-                                currentTaskId = currentTaskId,
-                            )
+                                    ),
+                                    forceExpandInstant = itemKey in findExpandKeys,
+                                    onExpandedChange = { expanded ->
+                                        val key = transcriptDisplayItemKey(item)
+                                        setActivityExpanded(
+                                            key,
+                                            expanded,
+                                            expandedToolGroups,
+                                            autoExpandToolSections,
+                                        ) { expandedToolGroups = it }
+                                    },
+                                    expandedToolKeys = expandedToolKeys,
+                                    expandedThinkingKeys = expandedThinkingKeys,
+                                    findExpandKeys = findExpandKeys,
+                                    findQuery = findQuery,
+                                    activeFindMatch = activeFindMatch?.takeIf { it.itemKey == itemKey },
+                                    autoExpandThinkingSections = autoExpandThinkingSections,
+                                    autoExpandToolSections = autoExpandToolSections,
+                                    onToolExpandedChange = { key, expanded ->
+                                        setActivityExpanded(
+                                            key,
+                                            expanded,
+                                            expandedToolKeys,
+                                            autoExpandToolSections,
+                                        ) { expandedToolKeys = it }
+                                    },
+                                    onThinkingExpandedChange = { key, expanded ->
+                                        setActivityExpanded(
+                                            key,
+                                            expanded,
+                                            expandedThinkingKeys,
+                                            autoExpandThinkingSections,
+                                        ) { expandedThinkingKeys = it }
+                                    },
+                                    onToolFileOpen = onToolFileOpen,
+                                    knownTasks = knownTasks,
+                                    currentTaskId = currentTaskId,
+                                )
+                                is TranscriptDisplayItem.ChildSpawns -> LinkedChildChatsBlock(
+                                    children = item.tasks,
+                                    knownTasks = knownTasks,
+                                    currentTaskId = currentTaskId,
+                                )
+                            }
                         }
                     }
                 }
@@ -941,12 +1050,18 @@ fun shouldDisplayOriginalPrompt(
     originalPrompt: String?,
     originalImagePaths: List<String>,
     originalSkills: List<AgentSkill> = emptyList(),
+    originalAttachments: List<AgentAttachment> = emptyList(),
 ): Boolean {
     val prompt = originalPrompt?.trim().orEmpty()
     val recordedInTranscript = events.filterIsInstance<AgentEvent.UserMessage>().any { event ->
-        userMessageMatchesOriginalPrompt(event, prompt, originalImagePaths, originalSkills)
+        userMessageMatchesOriginalPrompt(event, prompt, originalImagePaths, originalSkills, originalAttachments)
     }
-    return !recordedInTranscript && (prompt.isNotBlank() || originalImagePaths.isNotEmpty() || originalSkills.isNotEmpty())
+    return !recordedInTranscript && (
+        prompt.isNotBlank() ||
+            originalImagePaths.isNotEmpty() ||
+            originalSkills.isNotEmpty() ||
+            originalAttachments.isNotEmpty()
+        )
 }
 
 /** Launch turns are stored for the CLI with image hints while [originalPrompt] stays user-facing. */
@@ -955,6 +1070,7 @@ internal fun userMessageMatchesOriginalPrompt(
     prompt: String,
     imagePaths: List<String>,
     skills: List<AgentSkill> = emptyList(),
+    attachments: List<AgentAttachment> = emptyList(),
 ): Boolean {
     val text = event.text.trim()
     val resolvedSkills = skills.ifEmpty { event.skills }
@@ -964,7 +1080,9 @@ internal fun userMessageMatchesOriginalPrompt(
         prompt.isNotBlank() && resolvedSkills.isNotEmpty() && text == promptWithSkillHints(prompt, resolvedSkills) -> true
         prompt.isNotBlank() && resolvedSkills.isNotEmpty() &&
             stripCliSkillHints(text) == prompt && event.skills.map { it.path } == resolvedSkills.map { it.path } -> true
-        prompt.isBlank() && imagePaths.isNotEmpty() && event.imagePaths == imagePaths -> true
+        prompt.isBlank() && imagePaths.isNotEmpty() && event.imagePaths == imagePaths &&
+            attachments.isEmpty() && event.attachments.isEmpty() -> true
+        prompt.isBlank() && attachments.isNotEmpty() && event.attachments.map { it.id } == attachments.map { it.id } -> true
         else -> false
     }
 }
@@ -972,7 +1090,14 @@ internal fun userMessageMatchesOriginalPrompt(
 /** User-facing transcript text; strips CLI-only skill hints and redundant slash-only prose. */
 internal fun userMessageDisplayText(event: AgentEvent.UserMessage): String {
     val stripped = stripCliSkillHints(event.text).trim()
-    return if (isSkillOnlyMessage(stripped, event.skills)) "" else stripped
+    val prose = if (isSkillOnlyMessage(stripped, event.skills)) "" else stripped
+    return if (prose.isBlank()) prose else boundedUserMessagePreview(prose)
+}
+
+/** Full user prose for copy actions — never bounded for display layout. */
+internal fun userMessageCopyText(event: AgentEvent.UserMessage): String? {
+    val stripped = stripCliSkillHints(event.text).trim()
+    return stripped.takeIf { it.isNotBlank() && !isSkillOnlyMessage(stripped, event.skills) }
 }
 
 /** True when the transcript viewport is pinned to the live edge (end of the forward list). */
@@ -1148,6 +1273,8 @@ private fun TranscriptEvent(
     currentTaskId: String? = null,
     autoExpandThinkingSections: Boolean = false,
     autoExpandToolSections: Boolean = false,
+    /** Find navigation: expand without AnimatedVisibility so the hit is visible immediately. */
+    forceExpandInstant: Boolean = false,
 ) {
     when (event) {
         is AgentEvent.SessionStarted -> Unit
@@ -1164,8 +1291,13 @@ private fun TranscriptEvent(
                 // While tokens are still arriving, render plain text. Full GFM reparse on every
                 // delta thrash-measures the row and makes detached scroll compensation flicker.
                 if (streamPlainText) {
+                    val find = LocalChatFindHighlight.current
                     Text(
-                        text = visibleText,
+                        text = if (find?.isActive == true) {
+                            highlightFindMatches(visibleText, find.query, find.activeRange)
+                        } else {
+                            AnnotatedString(visibleText)
+                        },
                         color = TextPrimary,
                         fontSize = 14.sp,
                         lineHeight = 21.sp,
@@ -1180,12 +1312,12 @@ private fun TranscriptEvent(
             text = event.text,
             expanded = thinkingExpanded,
             onExpandedChange = { expanded -> onThinkingExpandedChange(eventKey, expanded) },
-            animateExpansion = !autoExpandThinkingSections,
+            animateExpansion = !forceExpandInstant && !autoExpandThinkingSections,
         )
         is AgentEvent.UserMessage -> {
             if (event.text.isSilentConnectionRecoveryPrompt()) return
             val displayText = userMessageDisplayText(event)
-            val copyText = displayText.takeIf { it.isNotBlank() }
+            val copyText = userMessageCopyText(event)
                 ?: event.skills.takeIf { it.isNotEmpty() }?.joinToString(" ") { "/${it.name}" }
             val timestamp = event.atMillis.takeIf { it > 0L }?.let(::formatDisplayTime)
             ChatMessageBubble(
@@ -1207,6 +1339,7 @@ private fun TranscriptEvent(
                     if (displayText.isNotBlank()) {
                         ChatUserText(displayText)
                     }
+                    ChatAttachedTextAttachments(event.attachments)
                     ChatAttachedImages(event.imagePaths)
                     if (event.skills.isNotEmpty()) {
                         DisableSelection {
@@ -1234,7 +1367,7 @@ private fun TranscriptEvent(
                 ),
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
-                animateExpansion = !autoExpandToolSections,
+                animateExpansion = !forceExpandInstant && !autoExpandToolSections,
                 knownTasks = knownTasks,
                 currentTaskId = currentTaskId,
             )
@@ -1242,7 +1375,7 @@ private fun TranscriptEvent(
             ToolBlock(
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
-                animateExpansion = !autoExpandToolSections,
+                animateExpansion = !forceExpandInstant && !autoExpandToolSections,
                 marker = "▸",
                 name = event.toolName,
                 summary = event.summary,
@@ -1259,7 +1392,7 @@ private fun TranscriptEvent(
             ToolBlock(
                 expanded = toolExpanded,
                 onExpandedChange = { expanded -> onToolExpandedChange(eventKey, expanded) },
-                animateExpansion = !autoExpandToolSections,
+                animateExpansion = !forceExpandInstant && !autoExpandToolSections,
                 marker = if (event.isError) "✗" else "✓",
                 name = event.toolName,
                 summary = event.summary,
@@ -1511,8 +1644,13 @@ private fun ThinkingStep(
 
 @Composable
 private fun ChatUserText(text: String) {
+    val find = LocalChatFindHighlight.current
     Text(
-        text,
+        text = if (find?.isActive == true) {
+            highlightFindMatches(text, find.query, find.activeRange)
+        } else {
+            AnnotatedString(text)
+        },
         color = TextPrimary,
         fontFamily = DisplayFont,
         fontSize = 14.sp,
@@ -1588,6 +1726,51 @@ private fun AgentCompletion(
             }
         }
         if (event.success) completedContent?.invoke()
+    }
+}
+
+@Composable
+fun ChatAttachedTextAttachments(
+    attachments: List<AgentAttachment>,
+    modifier: Modifier = Modifier,
+) {
+    if (attachments.isEmpty()) return
+    Column(
+        modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        attachments.forEach { attachment ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(AndyRadius.Control))
+                    .background(AndyColors.Neutral900.copy(alpha = AndyOverlay.Medium))
+                    .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Control))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LucideIcon(Lucide.FileText, TextSecondary.copy(alpha = 0.85f), Modifier.size(14.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        attachment.displayName,
+                        color = TextPrimary,
+                        fontFamily = DisplayFont,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        attachment.metadataLabel(),
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1857,6 +2040,9 @@ private fun CompactToolCallsBlock(
     onExpandedChange: (Boolean) -> Unit,
     expandedToolKeys: Set<String>,
     expandedThinkingKeys: Set<String>,
+    findExpandKeys: Set<String> = emptySet(),
+    findQuery: String = "",
+    activeFindMatch: ChatFindMatch? = null,
     autoExpandThinkingSections: Boolean,
     autoExpandToolSections: Boolean,
     onToolExpandedChange: (String, Boolean) -> Unit,
@@ -1864,6 +2050,7 @@ private fun CompactToolCallsBlock(
     onToolFileOpen: (ToolCallFileContent) -> Unit,
     knownTasks: List<AgentTask> = emptyList(),
     currentTaskId: String? = null,
+    forceExpandInstant: Boolean = false,
 ) {
     // isAgentSpawn runs several regex passes over each event's summary/detail. Classifying
     // once per composition (memoized on `events`) instead of on every recomposition — e.g.
@@ -1894,7 +2081,7 @@ private fun CompactToolCallsBlock(
             sources = classification.spawnSources,
             expanded = expanded,
             onExpandedChange = onExpandedChange,
-            animateExpansion = !autoExpandToolSections,
+            animateExpansion = !forceExpandInstant && !autoExpandToolSections,
             knownTasks = knownTasks,
             currentTaskId = currentTaskId,
         )
@@ -1902,12 +2089,13 @@ private fun CompactToolCallsBlock(
     }
 
     val headlineColor = if (classification.hasError) Red.copy(alpha = 0.9f) else TextSecondary
+    val findQueryTrimmed = findQuery.trim()
 
     TranscriptExpandableRow(
         headline = classification.headline,
         expanded = expanded,
         onExpandedChange = onExpandedChange,
-        animateExpansion = !autoExpandToolSections,
+        animateExpansion = !forceExpandInstant && !autoExpandToolSections,
         headlineColor = headlineColor,
         indent = TranscriptAsideIndent,
     ) {
@@ -1918,56 +2106,74 @@ private fun CompactToolCallsBlock(
             events.forEachIndexed { offset, event ->
                 val eventKey = transcriptEventKey(startIndex + offset, event)
                 val isSpawn = classification.spawnFlags[offset]
-                when (event) {
-                    is AgentEvent.Thinking -> ThinkingStep(
-                        text = event.text,
-                        expanded = transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandThinkingSections),
-                        onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
-                        animateExpansion = !autoExpandThinkingSections,
+                val nestedExpanded = eventKey in findExpandKeys || when (event) {
+                    is AgentEvent.Thinking ->
+                        transcriptActivityExpanded(eventKey, expandedThinkingKeys, autoExpandThinkingSections)
+                    is AgentEvent.ToolCall, is AgentEvent.ToolResult ->
+                        transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections)
+                    else -> false
+                }
+                val nestedInstant = eventKey in findExpandKeys
+                val nestedFind = findQueryTrimmed.takeIf { it.isNotEmpty() }?.let { query ->
+                    ChatFindHighlight(
+                        query = query,
+                        activeRange = activeFindMatch
+                            ?.takeIf { it.nestedEventKey == eventKey }
+                            ?.range,
                     )
-                    is AgentEvent.ToolCall -> if (isSpawn) {
-                        val source = AgentSpawnPresentation.spawnSources(listOf(event)).singleOrNull()
-                            ?: AgentSpawnPresentation.SpawnSource(event.toolName, event.summary, event.detail)
-                        SpawnedAgentLine(
-                            spawn = AgentSpawnPresentation.parse(source.toolName, source.summary, source.detail),
-                            indent = TranscriptAsideContentIndent,
-                            knownTasks = knownTasks,
-                            currentTaskId = currentTaskId,
+                }
+                CompositionLocalProvider(LocalChatFindHighlight provides nestedFind) {
+                    when (event) {
+                        is AgentEvent.Thinking -> ThinkingStep(
+                            text = event.text,
+                            expanded = nestedExpanded,
+                            onExpandedChange = { value -> onThinkingExpandedChange(eventKey, value) },
+                            animateExpansion = !nestedInstant && !autoExpandThinkingSections,
                         )
-                    } else {
-                        ToolBlock(
-                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
-                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                            animateExpansion = !autoExpandToolSections,
-                            marker = "▸",
-                            name = event.toolName,
-                            summary = event.summary,
-                            detail = event.detail,
-                            kind = event.kind,
-                            locations = event.locations,
-                            images = event.images,
-                            color = TextSecondary,
-                            forceVisible = event.state == AgentToolState.Failed,
-                            indent = TranscriptAsideContentIndent,
-                            onToolFileOpen = onToolFileOpen,
-                        )
+                        is AgentEvent.ToolCall -> if (isSpawn) {
+                            val source = AgentSpawnPresentation.spawnSources(listOf(event)).singleOrNull()
+                                ?: AgentSpawnPresentation.SpawnSource(event.toolName, event.summary, event.detail)
+                            SpawnedAgentLine(
+                                spawn = AgentSpawnPresentation.parse(source.toolName, source.summary, source.detail),
+                                indent = TranscriptAsideContentIndent,
+                                knownTasks = knownTasks,
+                                currentTaskId = currentTaskId,
+                            )
+                        } else {
+                            ToolBlock(
+                                expanded = nestedExpanded,
+                                onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                                animateExpansion = !nestedInstant && !autoExpandToolSections,
+                                marker = "▸",
+                                name = event.toolName,
+                                summary = event.summary,
+                                detail = event.detail,
+                                kind = event.kind,
+                                locations = event.locations,
+                                images = event.images,
+                                color = TextSecondary,
+                                forceVisible = event.state == AgentToolState.Failed,
+                                indent = TranscriptAsideContentIndent,
+                                onToolFileOpen = onToolFileOpen,
+                            )
+                        }
+                        is AgentEvent.ToolResult -> if (event.isError || !isSpawn) {
+                            ToolBlock(
+                                expanded = nestedExpanded,
+                                onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
+                                animateExpansion = !nestedInstant && !autoExpandToolSections,
+                                marker = if (event.isError) "✗" else "✓",
+                                name = event.toolName,
+                                summary = event.summary,
+                                detail = event.detail,
+                                color = if (event.isError) Red else TextSecondary,
+                                forceVisible = event.isError,
+                                indent = TranscriptAsideContentIndent,
+                                onToolFileOpen = onToolFileOpen,
+                            )
+                        }
+                        else -> Unit
                     }
-                    is AgentEvent.ToolResult -> if (event.isError || !isSpawn) {
-                        ToolBlock(
-                            expanded = transcriptActivityExpanded(eventKey, expandedToolKeys, autoExpandToolSections),
-                            onExpandedChange = { value -> onToolExpandedChange(eventKey, value) },
-                            animateExpansion = !autoExpandToolSections,
-                            marker = if (event.isError) "✗" else "✓",
-                            name = event.toolName,
-                            summary = event.summary,
-                            detail = event.detail,
-                            color = if (event.isError) Red else TextSecondary,
-                            forceVisible = event.isError,
-                            indent = TranscriptAsideContentIndent,
-                            onToolFileOpen = onToolFileOpen,
-                        )
-                    }
-                    else -> Unit
                 }
             }
         }

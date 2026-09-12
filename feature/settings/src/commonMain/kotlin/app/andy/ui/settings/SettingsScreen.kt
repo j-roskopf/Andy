@@ -118,12 +118,15 @@ import app.andy.service.NetworkLoginCodeRefreshLeadMillis
 import app.andy.service.networkLoginCodeCountdownLabel
 import app.andy.service.OrchestrationPreferencesService
 import app.andy.service.ProxyService
+import app.andy.service.RemoteProjectScanStatus
+import app.andy.service.RemoteSessionService
 import app.andy.service.RetentionSweepResult
 import app.andy.service.RuntimeBundleService
 import app.andy.service.RuntimeBundleSnapshot
 import app.andy.service.RuntimeBundleState
 import app.andy.service.UnavailableAgentRetentionService
 import app.andy.service.UnavailableOrchestrationPreferencesService
+import app.andy.service.UnavailableRemoteSessionService
 import app.andy.service.UnavailableRuntimeBundleService
 import app.andy.service.UnavailableUpdateService
 import app.andy.service.UnavailableVoiceSetupService
@@ -231,11 +234,20 @@ fun SettingsScreen(
     ) {
         when (category) {
             DesktopSettingsCategory.Appearance -> AppearancePanel(workspaceState, onUpdateWorkspace)
-            DesktopSettingsCategory.Navigation -> NavigationPanel(
-                workspace = workspaceState,
-                update = onUpdateWorkspace,
-                destinations = services.capabilities.destinations,
-            )
+            DesktopSettingsCategory.Navigation -> {
+                NavigationPanel(
+                    workspace = workspaceState,
+                    update = onUpdateWorkspace,
+                    destinations = services.capabilities.destinations,
+                )
+                if (services.remoteSession !is UnavailableRemoteSessionService) {
+                    RemoteProjectsPanel(
+                        workspaceState = workspaceState,
+                        onUpdateWorkspace = onUpdateWorkspace,
+                        remoteSession = services.remoteSession,
+                    )
+                }
+            }
             DesktopSettingsCategory.Live -> LivePanel(workspaceState, onUpdateWorkspace)
             DesktopSettingsCategory.Agents -> {
                 if (services.orchestrationPreferences !is UnavailableOrchestrationPreferencesService) {
@@ -3002,6 +3014,68 @@ private fun PluginsPanel(services: AndyServices) {
                     fontSize = 12.sp,
                     fontFamily = MonoFont,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteProjectsPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    remoteSession: RemoteSessionService,
+) {
+    val scope = rememberCoroutineScope()
+    val session by remoteSession.state.collectAsState()
+    val scanned by remoteSession.savedTargetProjects.collectAsState()
+    val enabled = workspaceState.mergeRemoteProjects
+    val scanning = scanned.values.any { it.status == RemoteProjectScanStatus.Scanning }
+    val projectCount = scanned.values.sumOf { it.projects.size }
+    val unavailable = scanned.values.filter { it.status == RemoteProjectScanStatus.Unavailable }
+
+    SettingsGroup(
+        title = "Projects from other hosts",
+        description = "Show every host's projects in one list, badged with where they live. " +
+            "Opening one switches Andy to that host first — including back to this computer " +
+            "while you are connected to a remote.",
+    ) {
+        SettingsToggleRow(
+            label = "Show projects from saved SSH hosts",
+            checked = enabled,
+            description = "Reads each saved host's ~/.andy/actions.toml in the background, reusing a live " +
+                "connection or the password saved in your keychain. Scans never open a prompt — a host " +
+                "Andy has no credentials for is listed as unavailable until you connect to it once.",
+            onCheckedChange = { checked ->
+                onUpdateWorkspace { it.copy(mergeRemoteProjects = checked) }
+            },
+        )
+        if (enabled) {
+            Text(
+                when {
+                    session.savedTargets.isEmpty() ->
+                        "No saved SSH hosts yet — add one from the Local/Remote switcher at the bottom of the sidebar."
+                    scanning -> "Scanning ${session.savedTargets.size} host(s)…"
+                    else -> "$projectCount project(s) from ${scanned.size} host(s)."
+                },
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 12.sp,
+            )
+            unavailable.forEach { host ->
+                Text(
+                    "${session.displayNameFor(host.target)}: ${host.error ?: "unavailable"}",
+                    color = Rust,
+                    fontFamily = MonoFont,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+            }
+            Button(
+                onClick = { scope.launch { remoteSession.refreshSavedTargetProjects(force = true) } },
+                enabled = !scanning && session.savedTargets.isNotEmpty(),
+                colors = primaryButtonColors(),
+            ) {
+                Text(if (scanning) "Scanning…" else "Rescan hosts")
             }
         }
     }

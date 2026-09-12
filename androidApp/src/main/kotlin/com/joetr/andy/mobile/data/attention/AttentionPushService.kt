@@ -87,10 +87,13 @@ class AttentionPushService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                persistSession(this, baseUrl, token, hostName)
                 hostLabel = hostName
-                startAsForeground(combinedStatus())
-                connect(baseUrl, token)
+                startAttentionSession(
+                    scope = scope,
+                    persist = { persistSession(this, baseUrl, token, hostName) },
+                    startForeground = { startAsForeground(combinedStatus()) },
+                    connect = { connect(baseUrl, token) },
+                )
                 return START_STICKY
             }
             else -> {
@@ -521,4 +524,17 @@ class AttentionPushService : Service() {
 
         private data class Session(val baseUrl: String, val token: String, val hostName: String)
     }
+}
+
+internal fun startAttentionSession(
+    scope: CoroutineScope,
+    persist: suspend () -> Unit,
+    startForeground: () -> Unit,
+    connect: () -> Unit,
+): Job {
+    // Android dispatches Service.onStartCommand on Main. Start the required foreground state and
+    // network listener immediately; encrypted persistence can safely finish on the service's IO scope.
+    startForeground()
+    connect()
+    return scope.launch { persist() }
 }

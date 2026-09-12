@@ -148,11 +148,17 @@ fun main() {
             consumePendingOpen()
         }
         fun openMicPrivacySettings() {
-            runCatching {
-                ProcessBuilder(
-                    "open",
-                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-                ).start()
+            // Prefer the modern Settings pane; fall back to the legacy Security URL.
+            val urls = listOf(
+                "x-apple.systempreferences:com.apple.Settings.PrivacySecurity.extension?Privacy_Microphone",
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            )
+            for (url in urls) {
+                val started = runCatching {
+                    ProcessBuilder("open", url).start()
+                    true
+                }.getOrDefault(false)
+                if (started) break
             }
         }
         var voiceOverlayStopRequest by remember { mutableStateOf(0) }
@@ -162,11 +168,16 @@ fun main() {
             voiceOverlayBlocker = blocker
             voiceOverlayRecording = blocker == null
             voiceOverlayOpen = true
+            // Overlay is an Andy window — keep Carbon unregistered while it is up.
+            andyWindowFocused = true
         }
         fun closeVoiceOverlay() {
             voiceOverlayOpen = false
             voiceOverlayRecording = false
             voiceOverlayBlocker = null
+            // Overlay was an Andy window; keep Carbon off until the main WindowAdapter
+            // reports deactivation (avoids briefly re-arming while Andy is still key).
+            andyWindowFocused = true
         }
         fun handleVoiceNewThreadHotKey() {
             // Never open/close windows synchronously inside a key or Carbon callback —
@@ -615,6 +626,24 @@ fun main() {
                     }
                 },
             ) {
+                DisposableEffect(window) {
+                    val listener = object : java.awt.event.WindowAdapter() {
+                        override fun windowActivated(event: java.awt.event.WindowEvent) {
+                            andyWindowFocused = true
+                        }
+
+                        override fun windowDeactivated(event: java.awt.event.WindowEvent) {
+                            // Only clear when the overlay is still the open Andy surface;
+                            // closing sets andyWindowFocused=true in closeVoiceOverlay.
+                            if (voiceOverlayOpen) {
+                                andyWindowFocused = false
+                            }
+                        }
+                    }
+                    window.addWindowListener(listener)
+                    andyWindowFocused = true
+                    onDispose { window.removeWindowListener(listener) }
+                }
                 AndyTheme {
                     VoiceNewThreadOverlayContent(
                         services = services,

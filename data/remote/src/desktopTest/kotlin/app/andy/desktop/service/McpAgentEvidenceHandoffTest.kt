@@ -345,6 +345,7 @@ private class FakeEvidenceAgentRunService : AgentRunService by UnavailableAgentR
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
     ) {
         resumeCalls += ResumeCall(taskId, followUp, contextBundleIds, imagePaths)
     }

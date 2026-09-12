@@ -1017,6 +1017,7 @@ class WebChatHttpServerTest {
             skills: List<app.andy.model.AgentSkill>,
             contextBundleIds: List<String>,
             provenance: app.andy.model.AgentContextualProvenance?,
+        attachments: List<app.andy.model.AgentAttachment>,
         ) {
             lastResume = taskId to followUp
             _tasks.value = _tasks.value.map { task ->

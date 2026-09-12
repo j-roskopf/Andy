@@ -3,24 +3,30 @@ package app.andy.desktop.service.remote
 import app.andy.desktop.service.DesktopActionConfigStore
 import app.andy.desktop.service.CommandRunner
 import app.andy.desktop.service.DesktopLocalServerService
-import app.andy.service.WorkspaceStore
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.model.ActionsConfig
 import app.andy.service.ActionRunService
 import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
+import app.andy.service.ChatAttachmentService
 import app.andy.service.CommandResult
 import app.andy.service.LocalServerService
 import app.andy.service.RemoteHostCapabilities
+import app.andy.service.RemoteProjectScanStatus
 import app.andy.service.RemoteScreenAvailability
 import app.andy.service.RemoteSessionService
 import app.andy.service.RemoteSessionState
 import app.andy.service.RemoteSessionStatus
 import app.andy.service.RemoteShellEndpoint
+import app.andy.service.RemoteTargetProjects
+import app.andy.service.UnavailableChatAttachmentService
+import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +58,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
+/** Floor between background project scans, so tab switches don't fan out ssh on every focus. */
+private const val ScanMinIntervalMillis = 30_000L
+
 /**
  * SSH-tunnels remote `andyd.sock` + `tmux -L andy` into local temp sockets, capability-gates
  * the remote daemon, then swaps [SwappableAgentBackend] / automations onto a remote
@@ -71,17 +80,29 @@ class DesktopRemoteSessionService(
     private val localLocalServers: LocalServerService? = null,
     private val agentRunsForLocalServers: AgentRunService? = null,
     private val actionRunsForLocalServers: ActionRunService? = null,
+    private val localAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
 ) : RemoteSessionService {
     private val json = Json { ignoreUnknownKeys = true }
     private val mutex = Mutex()
     private val _state = MutableStateFlow(
-        RemoteSessionState(savedTargets = workspaceStore.state?.value?.savedSshTargets.orEmpty()),
+        RemoteSessionState(
+            savedTargets = workspaceStore.state?.value?.savedSshTargets.orEmpty(),
+            targetAliases = workspaceStore.state?.value?.sshTargetAliases.orEmpty(),
+        ),
     )
     override val state: StateFlow<RemoteSessionState> = _state.asStateFlow()
     private val _remoteActionsConfig = MutableStateFlow<ActionsConfig?>(null)
     override val remoteActionsConfig: StateFlow<ActionsConfig?> = _remoteActionsConfig.asStateFlow()
     private val _portForwards = MutableStateFlow<Map<Int, Int>>(emptyMap())
     override val portForwards: StateFlow<Map<Int, Int>> = _portForwards.asStateFlow()
+    private val _savedTargetProjects = MutableStateFlow<Map<String, RemoteTargetProjects>>(emptyMap())
+    override val savedTargetProjects: StateFlow<Map<String, RemoteTargetProjects>> =
+        _savedTargetProjects.asStateFlow()
+    private val projectScanner = RemoteProjectScanner()
+    private val scanMutex = Mutex()
+    private var scanJob: Job? = null
+    @Volatile
+    private var lastScanAtMillis = 0L
 
     private val tunnel = AtomicReference<TunnelHandles?>(null)
     private val remoteClient = AtomicReference<McpAgentRunClient?>(null)
@@ -104,8 +125,28 @@ class DesktopRemoteSessionService(
 
     init {
         scope.launch {
+            var lastScanKey: Pair<Boolean, List<String>>? = null
             workspaceStore.state?.collect { ws ->
-                _state.update { it.copy(savedTargets = ws.savedSshTargets) }
+                _state.update {
+                    it.copy(
+                        savedTargets = ws.savedSshTargets,
+                        targetAliases = ws.sshTargetAliases,
+                    )
+                }
+                // Paint the merged list from the last scan immediately, then refresh behind it.
+                val scanKey = ws.mergeRemoteProjects to ws.savedSshTargets
+                if (scanKey == lastScanKey) return@collect
+                lastScanKey = scanKey
+                if (!ws.mergeRemoteProjects) {
+                    _savedTargetProjects.value = emptyMap()
+                    return@collect
+                }
+                val connected = _state.value.target?.takeIf { _state.value.isRemote }
+                _savedTargetProjects.value = RemoteProjectScanner.seedFromCache(
+                    ws.remoteProjectCache,
+                    ws.savedSshTargets,
+                ).filterKeys { it != connected }
+                refreshSavedTargetProjects(force = true)
             }
         }
         Runtime.getRuntime().addShutdownHook(
@@ -146,7 +187,10 @@ class DesktopRemoteSessionService(
         if (warm != null) {
             if (warm.isAlive()) {
                 val result = runCatching { activateWarm(trimmed, warm) }
-                if (result.isSuccess) return Result.success(Unit)
+                if (result.isSuccess) {
+                    rescanAfterSessionChange()
+                    return Result.success(Unit)
+                }
                 destroyWarm(trimmed)
             } else {
                 destroyWarm(trimmed)
@@ -198,6 +242,7 @@ class DesktopRemoteSessionService(
         }
         SshAskpassBroker.clearActiveTarget()
         SshProcess.debugLog("connect OK target=$trimmed")
+        rescanAfterSessionChange()
         Result.success(Unit)
     }
 
@@ -255,10 +300,29 @@ class DesktopRemoteSessionService(
             }
         }
         workspaceStore.update { current ->
-            current.copy(savedSshTargets = current.savedSshTargets.filterNot { it == trimmed })
+            current.copy(
+                savedSshTargets = current.savedSshTargets.filterNot { it == trimmed },
+                sshTargetAliases = current.sshTargetAliases - trimmed,
+            )
         }
         SshAskpassBroker.forget(trimmed)
         runCatching { SshCredentialStore.delete(trimmed) }
+    }
+
+    override suspend fun renameSavedTargetAlias(target: String, alias: String) {
+        val trimmed = target.trim()
+        if (trimmed.isEmpty()) return
+        val label = alias.trim()
+        workspaceStore.update { current ->
+            if (trimmed !in current.savedSshTargets) return@update current
+            // Blank or identical to the SSH target clears the override.
+            val aliases = if (label.isEmpty() || label == trimmed) {
+                current.sshTargetAliases - trimmed
+            } else {
+                current.sshTargetAliases + (trimmed to label)
+            }
+            current.copy(sshTargetAliases = aliases)
+        }
     }
 
     private suspend fun connectLocked(target: String) = withContext(Dispatchers.IO) {
@@ -324,6 +388,7 @@ class DesktopRemoteSessionService(
         val client = McpAgentRunClient(
             scope = scope,
             socketPath = localAndyd,
+            localAttachments = localAttachments,
         )
         client.attachLocalTerminalBridge(attachBridge)
         client.setSshProbeTarget(target, controlPath)
@@ -466,6 +531,87 @@ class DesktopRemoteSessionService(
         remoteTerminalTaskIdsJob = null
         attachBridge.setForwardedTmuxSocket(null)
         attachBridge.setRemoteTerminalTaskIds(emptyList())
+    }
+
+    /**
+     * Kicks off a scan round and returns — results land on [savedTargetProjects] as each host
+     * answers, so a sleeping laptop never holds up the rest of the list.
+     */
+    override suspend fun refreshSavedTargetProjects(force: Boolean) {
+        if (!isSupportedPlatform()) return
+        val ws = workspaceStore.state?.value ?: runCatching { workspaceStore.load() }.getOrNull() ?: return
+        if (!ws.mergeRemoteProjects) {
+            _savedTargetProjects.value = emptyMap()
+            return
+        }
+        val now = System.currentTimeMillis()
+        scanMutex.withLock {
+            val running = scanJob
+            if (running?.isActive == true) {
+                // A forced round follows a connect/disconnect, so its answer supersedes whatever
+                // the in-flight round was about to publish for the old active host.
+                if (!force) return
+                running.cancel()
+            }
+            if (!force && now - lastScanAtMillis < ScanMinIntervalMillis) return
+            lastScanAtMillis = now
+            scanJob = scope.launch { scanSavedTargets(ws.savedSshTargets) }
+        }
+    }
+
+    private suspend fun scanSavedTargets(savedTargets: List<String>) {
+        // The connected host's projects already *are* the list — never duplicate it as a remote row.
+        val activeTarget = _state.value.target?.takeIf { _state.value.isRemote }
+        val targets = savedTargets.filter { it != activeTarget }
+        if (targets.isEmpty()) {
+            _savedTargetProjects.value = emptyMap()
+            return
+        }
+        val before = _savedTargetProjects.value
+        _savedTargetProjects.value = targets.associateWith { target ->
+            before[target]?.copy(status = RemoteProjectScanStatus.Scanning)
+                ?: RemoteTargetProjects(target, RemoteProjectScanStatus.Scanning)
+        }
+        val scanned = withContext(Dispatchers.IO) {
+            targets
+                .map { target -> async { projectScanner.scan(target, controlPathFor(target)) } }
+                .awaitAll()
+        }.associateBy { it.target }
+        // The user can switch the merge off mid-round; don't publish a list nobody asked for.
+        if (workspaceStore.state?.value?.mergeRemoteProjects == false) {
+            _savedTargetProjects.value = emptyMap()
+            return
+        }
+        _savedTargetProjects.value = targets.associateWith { target ->
+            val fresh = scanned[target] ?: return@associateWith before[target] ?: RemoteTargetProjects(target)
+            // A host that went quiet keeps showing what it had, greyed, rather than vanishing.
+            if (fresh.status == RemoteProjectScanStatus.Ok) {
+                fresh
+            } else {
+                fresh.copy(projects = before[target]?.projects.orEmpty())
+            }
+        }
+        runCatching {
+            workspaceStore.update { current ->
+                current.copy(
+                    remoteProjectCache = RemoteProjectScanner.updatedCache(
+                        previous = current.remoteProjectCache,
+                        scanned = scanned,
+                        savedTargets = current.savedSshTargets,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Live ControlMaster for [target] when it is active or warm — lets the scan skip re-auth. */
+    private fun controlPathFor(target: String): File? =
+        tunnel.get()?.takeIf { it.target == target }?.controlPath
+            ?: warmByTarget[target]?.handles?.controlPath
+
+    /** Connecting / disconnecting moves which host owns the main list, so re-scan the rest. */
+    private fun rescanAfterSessionChange() {
+        scope.launch { runCatching { refreshSavedTargetProjects(force = true) } }
     }
 
     private fun destroyWarm(target: String) {
@@ -621,6 +767,7 @@ class DesktopRemoteSessionService(
                 hostCapabilities = null,
             )
         }
+        rescanAfterSessionChange()
     }
 
     private fun teardownTunnelOnly() {

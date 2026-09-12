@@ -1406,8 +1406,8 @@ internal class ShellState(
             )
         }
         scope.launch {
-            // Preserve saved SSH targets written by RemoteSessionService so a sidebar toggle
-            // (or any other ShellState save) does not wipe the Host list.
+            // Preserve saved SSH targets / aliases written by RemoteSessionService so a sidebar
+            // toggle (or any other ShellState save) does not wipe the Host list.
             val committed = services.workspaceStore.update { current ->
                 val targets =
                     if (updated.savedSshTargets != previous.savedSshTargets) {
@@ -1415,10 +1415,33 @@ internal class ShellState(
                     } else {
                         current.savedSshTargets
                     }
-                updated.copy(savedSshTargets = targets)
+                val aliases =
+                    if (updated.sshTargetAliases != previous.sshTargetAliases) {
+                        updated.sshTargetAliases
+                    } else {
+                        current.sshTargetAliases
+                    }
+                // The remote project scanner writes the cache straight to the store; ShellState only
+                // holds a load-time snapshot, so preserve the store's copy unless this save changed it.
+                val remoteProjectCache =
+                    if (updated.remoteProjectCache != previous.remoteProjectCache) {
+                        updated.remoteProjectCache
+                    } else {
+                        current.remoteProjectCache
+                    }
+                updated.copy(
+                    savedSshTargets = targets,
+                    sshTargetAliases = aliases,
+                    remoteProjectCache = remoteProjectCache,
+                )
             }
-            if (workspaceState.savedSshTargets != committed.savedSshTargets) {
-                workspaceState = workspaceState.copy(savedSshTargets = committed.savedSshTargets)
+            if (workspaceState.savedSshTargets != committed.savedSshTargets ||
+                workspaceState.sshTargetAliases != committed.sshTargetAliases
+            ) {
+                workspaceState = workspaceState.copy(
+                    savedSshTargets = committed.savedSshTargets,
+                    sshTargetAliases = committed.sshTargetAliases,
+                )
             }
         }
     }

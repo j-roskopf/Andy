@@ -33,6 +33,18 @@ enum class EditorSyntaxTheme(val id: String, val label: String) {
     }
 }
 
+/**
+ * A project seen on a saved SSH remote during the last scan, cached so the merged Projects list
+ * has something to draw before (or without) a fresh `ssh`. Runbook actions and notes are not
+ * cached — those load for real once that host is connected.
+ */
+@Serializable
+data class CachedRemoteProject(
+    val id: String,
+    val name: String,
+    val contextDir: String = "",
+)
+
 @Serializable
 data class WorkspaceState(
     val selectedSdkPath: String? = null,
@@ -203,6 +215,22 @@ data class WorkspaceState(
      * optional passwords live in the OS keychain (`Andy SSH`), not in this file.
      */
     val savedSshTargets: List<String> = emptyList(),
+    /**
+     * Friendly display names keyed by SSH target (`user@host` / config Host). Shown in the
+     * sidebar Host list; blank / missing falls back to the raw target string.
+     */
+    val sshTargetAliases: Map<String, String> = emptyMap(),
+    /**
+     * When true, the Projects list also shows projects that live on saved SSH remotes, badged
+     * with their host. Opening one connects to that host first. Off by default — it costs a
+     * background `ssh` read of each saved host's `~/.andy/actions.toml`.
+     */
+    val mergeRemoteProjects: Boolean = false,
+    /**
+     * Last successful remote project scan keyed by SSH target, so the merged list paints
+     * immediately at launch instead of waiting on SSH. Display fields only.
+     */
+    val remoteProjectCache: Map<String, List<CachedRemoteProject>> = emptyMap(),
     /**
      * Physical iOS CMIO `uniqueID` keyed by device UDID, remembered across reconnects so the
      * native screen-capture lookup can skip re-resolving it from the CoreMediaIO device list

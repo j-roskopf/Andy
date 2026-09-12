@@ -2,6 +2,7 @@ package app.andy.desktop.service.remote
 
 import app.andy.desktop.service.McpAgentRunClient
 import app.andy.desktop.service.agents.DesktopAgentRunService
+import app.andy.model.AgentAttachment
 import app.andy.model.AgentChangeSummary
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentContextualProvenance
@@ -23,6 +24,7 @@ import app.andy.model.ProjectBuildPairDraft
 import app.andy.model.ProjectSpecDraft
 import app.andy.model.ProjectTaskKind
 import app.andy.model.ProjectWorkflowState
+import app.andy.model.TranscriptSearchHit
 import app.andy.model.WorktreeBaseOption
 import app.andy.model.WorktreeDeleteOutcome
 import app.andy.model.WorktreeMergeOutcome
@@ -32,6 +34,7 @@ import app.andy.service.CommandResult
 import app.andy.service.ProjectWorkflowService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -171,7 +174,21 @@ class SwappableAgentBackend(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
-    ) = runs().resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance)
+        attachments: List<AgentAttachment>,
+    ) = runs().resume(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+
+    override suspend fun resumePrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+        attachments: List<AgentAttachment>,
+    ): Result<Unit> = runs().resumePrepared(
+        taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments,
+    )
+
     override fun reattachSession(taskId: String) = runs().reattachSession(taskId)
     override fun canReattachSession(taskId: String): Boolean = runs().canReattachSession(taskId)
     override val terminalSessionsRevision: StateFlow<Long> get() = runs().terminalSessionsRevision
@@ -191,7 +208,21 @@ class SwappableAgentBackend(
         skills: List<AgentSkill>,
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
-    ) = runs().queueFollowUp(taskId, followUp, imagePaths, skills, contextBundleIds, provenance)
+        attachments: List<AgentAttachment>,
+    ) = runs().queueFollowUp(taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments)
+
+    override suspend fun queueFollowUpPrepared(
+        taskId: String,
+        followUp: String,
+        imagePaths: List<String>,
+        skills: List<AgentSkill>,
+        contextBundleIds: List<String>,
+        provenance: AgentContextualProvenance?,
+        attachments: List<AgentAttachment>,
+    ): Result<Unit> = runs().queueFollowUpPrepared(
+        taskId, followUp, imagePaths, skills, contextBundleIds, provenance, attachments,
+    )
+
     override fun removeQueuedFollowUp(taskId: String, queueIndex: Int) =
         runs().removeQueuedFollowUp(taskId, queueIndex)
     override fun sendQueuedFollowUp(taskId: String, queueIndex: Int) =
@@ -212,6 +243,7 @@ class SwappableAgentBackend(
     override fun archive(taskId: String) = runs().archive(taskId)
     override fun unarchive(taskId: String) = runs().unarchive(taskId)
     override fun events(taskId: String): StateFlow<List<AgentEvent>> = runs().events(taskId)
+    override fun searchTranscripts(query: String): Flow<TranscriptSearchHit> = runs().searchTranscripts(query)
     override fun interactiveResumeCommand(taskId: String): String? = runs().interactiveResumeCommand(taskId)
     override fun providerAppContinuationLabel(taskId: String): String? =
         runs().providerAppContinuationLabel(taskId)

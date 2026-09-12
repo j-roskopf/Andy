@@ -23,4 +23,23 @@ class CommandPaletteItemTest {
         assertEquals("Projects", item.group)
         assertEquals("Andy", item.label)
     }
+
+    @Test
+    fun filterMatchesLabelAndKeywords() {
+        val items = listOf(
+            CommandPaletteItem("chat:1", "OAuth", "Chats", keywords = listOf("refresh token")),
+            CommandPaletteItem("chat:2", "Unrelated", "Chats"),
+        )
+        val filtered = filterCommandPaletteItems(items, "refresh")
+        assertEquals(listOf("chat:1"), filtered.map { it.id })
+    }
+
+    @Test
+    fun excludedChatIdsFromSyncResults() {
+        val sync = listOf(
+            CommandPaletteItem("project:p", "Proj", "Projects"),
+            CommandPaletteItem("chat:abc", "Title", "Chats"),
+        )
+        assertEquals(setOf("abc"), commandPaletteExcludedChatIds(sync))
+    }
 }

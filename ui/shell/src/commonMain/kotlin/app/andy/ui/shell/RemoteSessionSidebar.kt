@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,11 +28,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,7 +90,8 @@ internal fun hostPhaseOf(session: RemoteSessionState, busy: Boolean): HostPhase 
 /** Collapsed-header suffix — names the host, never the failure. */
 internal fun hostHeaderDetail(session: RemoteSessionState, phase: HostPhase): String = when {
     phase == HostPhase.Switching -> "Switching…"
-    session.status == RemoteSessionStatus.Connected -> session.target ?: "Remote"
+    session.status == RemoteSessionStatus.Connected ->
+        session.target?.let { session.displayNameFor(it) } ?: "Remote"
     session.status == RemoteSessionStatus.Error -> "Not connected"
     else -> "Local"
 }
@@ -133,7 +148,12 @@ internal fun RemoteSessionSidebarControls(
     val headerDetail = hostHeaderDetail(session, phase)
 
     if (!expanded) {
-        HostRail(phase = phase, target = session.target, modifier = modifier)
+        HostRail(
+            phase = phase,
+            target = session.target,
+            aliases = session.targetAliases,
+            modifier = modifier,
+        )
         return
     }
 
@@ -182,8 +202,10 @@ internal fun RemoteSessionSidebarControls(
 
         session.savedTargets.forEach { saved ->
             val selected = session.isRemote && session.target == saved
+            val alias = session.targetAliases[saved]?.takeIf { it.isNotBlank() }
             HostRow(
-                label = saved,
+                label = alias ?: saved,
+                supporting = alias?.let { saved },
                 selected = selected,
                 enabled = !switching,
                 // Removing the host you are sitting on would strand the panel mid-session.
@@ -191,6 +213,9 @@ internal fun RemoteSessionSidebarControls(
                     null
                 } else {
                     { scope.launch { remoteSession.removeSavedTarget(saved) } }
+                },
+                onRename = { next ->
+                    scope.launch { remoteSession.renameSavedTargetAlias(saved, next) }
                 },
                 onClick = {
                     if (!selected) {
@@ -283,9 +308,13 @@ private fun ConnectionCard(
         // While connected the header and the selected list row already name the host;
         // only the transitional states need it spelled out here.
         session.target?.takeIf { phase != HostPhase.Connected }?.let { target ->
-            Tooltip(target, modifier = Modifier.fillMaxWidth()) {
+            val display = session.displayNameFor(target)
+            Tooltip(
+                if (display != target) "$display · $target" else target,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(
-                    target,
+                    display,
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 11.sp,
@@ -442,16 +471,39 @@ private fun HostRow(
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    supporting: String? = null,
     onRemove: (() -> Unit)? = null,
+    onRename: ((String) -> Unit)? = null,
 ) {
     val tokens = andyTokens()
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(label) { mutableStateOf(TextFieldValue(label)) }
+    var editorHadFocus by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
     val background = when {
         selected -> tokens.accentMuted
         hovered && enabled -> AndyColors.SurfaceHover
         else -> Color.Transparent
     }
+
+    fun finishEditing(commit: Boolean) {
+        if (!editing) return
+        val updated = draft.text.trim()
+        if (commit) {
+            // Empty clears the alias so the raw SSH target shows again.
+            onRename?.invoke(updated)
+        }
+        draft = TextFieldValue(if (commit) updated.ifEmpty { supporting ?: label } else label)
+        editing = false
+        editorHadFocus = false
+    }
+
+    LaunchedEffect(editing) {
+        if (editing) focusRequester.requestFocus()
+    }
+
     Row(
         Modifier
             .fillMaxWidth()
@@ -459,7 +511,7 @@ private fun HostRow(
             .clip(AndyShape.Interactive)
             .background(background)
             .clickable(
-                enabled = enabled,
+                enabled = enabled && !editing,
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick,
@@ -469,33 +521,124 @@ private fun HostRow(
         horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
         HostDot(phase = if (selected) HostPhase.Connected else HostPhase.Local)
-        Text(
-            label,
-            color = if (selected) TextPrimary else TextSecondary,
-            fontFamily = MonoFont,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        // Reserved so the label never reflows as the remove affordance fades in.
-        Box(Modifier.size(HostRowIconBox), contentAlignment = Alignment.Center) {
-            if (onRemove != null && hovered && enabled) {
-                Box(
-                    Modifier
-                        .size(HostRowIconBox)
-                        .clip(AndyShape.Interactive)
-                        .clickable(onClick = onRemove)
-                        .semantics { contentDescription = "Remove $label" },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    LucideIcon(
-                        path = Lucide.X,
-                        tint = AndyColors.TextTertiary,
-                        modifier = Modifier.size(HostRowIcon),
-                    )
+        if (editing) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            editorHadFocus = true
+                        } else if (editorHadFocus) {
+                            finishEditing(commit = true)
+                        }
+                    }
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.Enter, Key.NumPadEnter -> {
+                                finishEditing(commit = true)
+                                true
+                            }
+                            Key.Escape -> {
+                                finishEditing(commit = false)
+                                true
+                            }
+                            else -> false
+                        }
+                    },
+                textStyle = TextStyle(
+                    color = TextPrimary,
+                    fontFamily = MonoFont,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                ),
+                singleLine = true,
+                cursorBrush = SolidColor(tokens.accent),
+                decorationBox = { inner ->
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                        if (draft.text.isEmpty()) {
+                            Text(
+                                supporting ?: "Alias",
+                                color = AndyColors.TextTertiary,
+                                fontFamily = MonoFont,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+        } else {
+            val labelContent = @Composable {
+                Text(
+                    label,
+                    color = if (selected) TextPrimary else TextSecondary,
+                    fontFamily = MonoFont,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Box(Modifier.weight(1f)) {
+                if (supporting != null) {
+                    Tooltip(supporting, modifier = Modifier.fillMaxWidth()) { labelContent() }
+                } else {
+                    labelContent()
                 }
+            }
+        }
+        // Reserved so the label never reflows as rename / remove affordances fade in.
+        if (onRename != null) {
+            HostRowIconButton(
+                visible = (hovered || editing) && enabled,
+                path = Lucide.Pencil,
+                contentDescription = "Rename $label",
+                onClick = {
+                    draft = TextFieldValue(
+                        text = label,
+                        selection = TextRange(0, label.length),
+                    )
+                    editing = true
+                },
+            )
+        }
+        HostRowIconButton(
+            visible = onRemove != null && hovered && enabled && !editing,
+            path = Lucide.X,
+            contentDescription = "Remove $label",
+            onClick = { onRemove?.invoke() },
+        )
+    }
+}
+
+@Composable
+private fun HostRowIconButton(
+    visible: Boolean,
+    path: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Box(Modifier.size(HostRowIconBox), contentAlignment = Alignment.Center) {
+        if (visible) {
+            Box(
+                Modifier
+                    .size(HostRowIconBox)
+                    .clip(AndyShape.Interactive)
+                    .clickable(onClick = onClick)
+                    .semantics { this.contentDescription = contentDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                LucideIcon(
+                    path = path,
+                    tint = AndyColors.TextTertiary,
+                    modifier = Modifier.size(HostRowIcon),
+                )
             }
         }
     }
@@ -581,9 +724,15 @@ private fun HostDot(phase: HostPhase, modifier: Modifier = Modifier) {
 
 /** Collapsed rail: one mark, full host in the tooltip. */
 @Composable
-private fun HostRail(phase: HostPhase, target: String?, modifier: Modifier = Modifier) {
+private fun HostRail(
+    phase: HostPhase,
+    target: String?,
+    aliases: Map<String, String>,
+    modifier: Modifier = Modifier,
+) {
+    val display = target?.let { aliases[it]?.takeIf { name -> name.isNotBlank() } ?: it }
     val tooltip = when (phase) {
-        HostPhase.Connected -> target?.let { "Connected · $it" } ?: "Connected"
+        HostPhase.Connected -> display?.let { "Connected · $it" } ?: "Connected"
         HostPhase.Switching -> "Switching host…"
         HostPhase.Failed -> "Not connected"
         HostPhase.Local -> "Local host"

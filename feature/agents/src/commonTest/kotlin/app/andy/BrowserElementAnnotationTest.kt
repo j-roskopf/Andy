@@ -61,7 +61,7 @@ class BrowserElementAnnotationTest {
 
     @Test
     fun applyAttachmentAppendsTextAndMergesImages() {
-        val (text, images) = applyChatComposerAttachment(
+        val applied = applyChatComposerAttachment(
             currentText = TextFieldValue("existing", TextRange(0)),
             currentImages = listOf("/tmp/a.png"),
             item = ChatComposerAttachment(
@@ -69,7 +69,7 @@ class BrowserElementAnnotationTest {
                 text = "note",
             ),
         )
-        assertEquals("existing\n\nnote", text.text)
-        assertEquals(listOf("/tmp/a.png", "/tmp/b.png"), images)
+        assertEquals("existing\n\nnote", applied.text.text)
+        assertEquals(listOf("/tmp/a.png", "/tmp/b.png"), applied.images)
     }
 }

@@ -98,6 +98,9 @@ fun AndyMobileApp(
     val initialTab = repository.selectedTab.value
     val backStack = rememberNavBackStack(MobileNavKey.Tabs(initialTab))
 
+    /** Prompt parked while the user picks a host from the voice no-host screen. */
+    var parkedVoicePrompt by remember { mutableStateOf<String?>(null) }
+
     var screenFullScreen by remember { mutableStateOf(true) }
     var screenKeyboardOpen by remember { mutableStateOf(false) }
 
@@ -177,6 +180,7 @@ fun AndyMobileApp(
             sessionManager.restoreFromStoredSession()
             // Still open NewChat even without a host — screen redirects to Hosts/Projects.
         }
+        parkedVoicePrompt = null
         navigateReplaceSession(
             MobileNavKey.NewChat(
                 initialPrompt = pending.prompt,
@@ -212,10 +216,24 @@ fun AndyMobileApp(
         val hosts by repository.hosts.collectAsStateWithLifecycle()
         val selectedId by repository.selectedHostId.collectAsStateWithLifecycle()
         val selectedHost = hosts.firstOrNull { it.id == selectedId } ?: hosts.firstOrNull()
-        val sessionClient = sessionManager.client
+        val sessionGraph by sessionManager.session.collectAsStateWithLifecycle()
+        val sessionClient = sessionGraph?.networkAccessClient
         // Activity-scoped so project list / expand state survives Chat pushes that
         // temporarily remove the Tabs entry from composition.
         val projectsVm: ProjectsViewModel = viewModel(factory = graph.factory<ProjectsViewModel>())
+
+        // After "Choose host", restore the voice NewChat once a session is available.
+        LaunchedEffect(sessionGraph, selectedHost?.id, parkedVoicePrompt) {
+            val prompt = parkedVoicePrompt ?: return@LaunchedEffect
+            if (sessionGraph == null || selectedHost == null) return@LaunchedEffect
+            parkedVoicePrompt = null
+            navigateReplaceSession(
+                MobileNavKey.NewChat(
+                    initialPrompt = prompt,
+                    fromVoice = true,
+                ),
+            )
+        }
 
         NavDisplay(
             backStack = backStack,
@@ -342,7 +360,10 @@ fun AndyMobileApp(
                                         viewModel = projectsVm,
                                         onClientReady = { client ->
                                             sessionManager.adoptClient(client)
-                                            val token = client.sessionToken
+                                        },
+                                        onConnectionReady = {
+                                            val client = sessionManager.client
+                                            val token = client?.sessionToken
                                             val host = selectedHost
                                             if (host != null && !token.isNullOrBlank()) {
                                                 AttentionPushService.start(
@@ -445,6 +466,7 @@ fun AndyMobileApp(
                                     )
                                     androidx.compose.material3.TextButton(
                                         onClick = {
+                                            parkedVoicePrompt = route.initialPrompt
                                             backStack.removeLastOrNull()
                                             ensureTabs(MobileTab.Hosts)
                                         },

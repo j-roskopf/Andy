@@ -28,10 +28,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="com.joetr.andy.action.VOICE_NEW_THREAD" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
+            <!-- Voice widget/shortcut use an explicit component; no exported action filter
+                 so third-party apps cannot inject EXTRA_TEXT into a new thread. -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
