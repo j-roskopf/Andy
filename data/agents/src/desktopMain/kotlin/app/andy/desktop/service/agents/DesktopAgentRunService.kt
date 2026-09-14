@@ -4299,14 +4299,16 @@ class DesktopAgentRunService(
             workspace.lmStudioBaseUrl,
             workspace.lmStudioBearerToken,
             workspace.openRouterBaseUrl,
-            OpenRouterCredentialStore.isPresent().toString(),
+            // Use the maintained flow, not a fresh keychain read: this signature is rebuilt on a
+            // 750 ms poll and must not spawn `security`/`secret-tool` on every tick.
+            _openRouterKeyPresent.value.toString(),
         ).joinToString("\u0000")
 
     override suspend fun refreshProviderQuotas() {
         ready.await()
         quotaRefreshMutex.withLock {
             val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
-            val fetched = withContext(Dispatchers.IO) {
+            val (fetched, freshOpenRouter) = withContext(Dispatchers.IO) {
                 val fromCli = _cliStatuses.value.mapNotNull { status ->
                     status.binaryPath?.let { binary ->
                         quotaProbe.query(status.kind, binary, _quotaAccess.value, workspace.openRouterBaseUrl)
@@ -4318,10 +4320,13 @@ class DesktopAgentRunService(
                     access = _quotaAccess.value,
                     openRouterBaseUrl = workspace.openRouterBaseUrl,
                 )
-                fromCli + listOfNotNull(openRouter)
+                (fromCli + listOfNotNull(openRouter)) to (openRouter != null)
             }
-            if (fetched.isNotEmpty()) {
-                _providerQuotas.update { current -> current + fetched.toMap() }
+            _providerQuotas.update { current ->
+                val merged = if (fetched.isNotEmpty()) current + fetched.toMap() else current
+                // A replaced key or a failed probe must not leave the previous credential's usage
+                // on screen, so drop the OpenRouter entry whenever no fresh quota came back.
+                if (freshOpenRouter) merged else merged - AgentKind.OpenRouter
             }
         }
     }
