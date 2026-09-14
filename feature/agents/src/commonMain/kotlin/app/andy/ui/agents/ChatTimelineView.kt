@@ -70,6 +70,8 @@ internal data class TimelineListEntry(
     val showTurnLabel: Boolean,
     val row: TimelineRow? = null,
     val summaryText: String? = null,
+    /** False when an active search does not match this entry (dims it without hiding the turn). */
+    val matchesSearch: Boolean = true,
 )
 
 @Composable
@@ -91,8 +93,10 @@ fun ChatTimelineView(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    val entries = remember(model, axis) { timelineListEntries(model, axis) }
     val filtering = searchQuery.isNotBlank()
+    val entries = remember(model, axis, matchingKeys, filtering) {
+        timelineListEntries(model, axis, if (filtering) matchingKeys else null)
+    }
 
     LaunchedEffect(brushedKeys, entries) {
         if (brushedKeys.isEmpty()) return@LaunchedEffect
@@ -133,7 +137,7 @@ fun ChatTimelineView(
                 val selected = row != null && row.key == selectedRowKey
                 val brushed = row != null && row.key in brushedKeys
                 val brushActive = brushedKeys.isNotEmpty()
-                val matches = !filtering || row == null || row.key in matchingKeys
+                val matches = !filtering || entry.matchesSearch
                 TimelineRowLine(
                     entry = entry,
                     selected = selected,
@@ -317,7 +321,11 @@ private fun TimelineBadge(kind: TimelineRowKind, label: String) {
     )
 }
 
-internal fun timelineListEntries(model: TimelineModel, axis: TimelineAxis): List<TimelineListEntry> {
+internal fun timelineListEntries(
+    model: TimelineModel,
+    axis: TimelineAxis,
+    matchingKeys: Set<String>? = null,
+): List<TimelineListEntry> {
     if (model.rows.isEmpty()) return emptyList()
     return when (axis) {
         TimelineAxis.Turns -> {
@@ -325,22 +333,30 @@ internal fun timelineListEntries(model: TimelineModel, axis: TimelineAxis): List
             val out = ArrayList<TimelineListEntry>()
             model.turns.forEach { turn ->
                 val rows = byTurn[turn.number].orEmpty()
+                // Turns normally omits call/assistant rows. With an active search, surface the
+                // omitted rows whose text matched so the query has visible results instead of
+                // only its turn summary.
+                val visible = rows.filter { row ->
+                    row.kind == TimelineRowKind.System || row.kind == TimelineRowKind.User ||
+                        (matchingKeys != null && row.key in matchingKeys)
+                }
                 var first = true
-                rows.filter { it.kind == TimelineRowKind.System || it.kind == TimelineRowKind.User }
-                    .forEach { row ->
-                        out += TimelineListEntry(
-                            key = row.key,
-                            turnNumber = turn.number,
-                            showTurnLabel = first,
-                            row = row,
-                        )
-                        first = false
-                    }
+                visible.forEach { row ->
+                    out += TimelineListEntry(
+                        key = row.key,
+                        turnNumber = turn.number,
+                        showTurnLabel = first,
+                        row = row,
+                        matchesSearch = matchingKeys == null || row.key in matchingKeys,
+                    )
+                    first = false
+                }
                 out += TimelineListEntry(
                     key = "turn-summary-${turn.number}",
                     turnNumber = turn.number,
                     showTurnLabel = first,
                     summaryText = turnSummaryLabel(turn),
+                    matchesSearch = matchingKeys == null || rows.any { it.key in matchingKeys },
                 )
             }
             out
@@ -355,6 +371,7 @@ internal fun timelineListEntries(model: TimelineModel, axis: TimelineAxis): List
                     turnNumber = row.turnNumber,
                     showTurnLabel = show,
                     row = row,
+                    matchesSearch = matchingKeys == null || row.key in matchingKeys,
                 )
             }
         }

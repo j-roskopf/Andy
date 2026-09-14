@@ -75,4 +75,16 @@ class ChatTimelineViewTest {
         assertTrue("tool-t1" in brushed)
         assertFalse("tool-t2" in brushed)
     }
+
+    @Test
+    fun turnsAxisSurfacesHiddenRowsMatchedBySearch() {
+        val model = buildChatTimeline(sampleEvents)
+        val matching = timelineFilterRows(model, "README")
+        assertTrue(matching.isNotEmpty())
+        val entries = timelineListEntries(model, TimelineAxis.Turns, matching)
+        // The hidden tool row matched by the query is now visible and not dimmed.
+        assertTrue(entries.any { it.row?.key in matching && it.matchesSearch })
+        // Turns with no match stay listed but dimmed.
+        assertTrue(entries.any { !it.matchesSearch })
+    }
 }

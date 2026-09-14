@@ -4440,7 +4440,9 @@ class DesktopAgentRunService(
         val trimmed = key.trim()
         if (trimmed.isEmpty()) return@withContext CommandResult.failure("API key is blank")
         OpenRouterCredentialStore.save(trimmed)
-        if (!OpenRouterCredentialStore.isPresent()) {
+        // A failed write when replacing an existing key leaves the old secret readable, so verify
+        // the stored value actually matches the new one rather than just that some key exists.
+        if (OpenRouterCredentialStore.load() != trimmed) {
             return@withContext CommandResult.failure("Could not save OpenRouter API key to the OS keychain")
         }
         // Await catalog refresh so composer_options / localModelBackends see OpenRouter as ready

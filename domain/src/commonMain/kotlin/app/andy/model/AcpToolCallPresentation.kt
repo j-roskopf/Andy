@@ -109,7 +109,9 @@ object AcpToolCallPresentation {
             locations = mergedLocations,
         )
         val mergedState = mergeToolState(previous.state, incoming.state)
-        val startedAtMillis = previous.startedAtMillis ?: previous.atMillis
+        // Preserve a real start only when one was observed; a terminal-only previous row has no
+        // start, so repeated terminal updates stay approximate instead of fabricating zero-duration.
+        val startedAtMillis = previous.startedAtMillis ?: incoming.startedAtMillis
         val isTerminal = mergedState == AgentToolState.Completed || mergedState == AgentToolState.Failed
         val endedAtMillis = previous.endedAtMillis ?: incoming.endedAtMillis ?: if (isTerminal) incoming.atMillis else null
         return incoming.copy(
