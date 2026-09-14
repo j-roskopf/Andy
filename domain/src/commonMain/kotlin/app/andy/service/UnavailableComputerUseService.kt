@@ -4,6 +4,7 @@ import app.andy.model.ComputerAction
 import app.andy.model.ComputerActionResult
 import app.andy.model.ComputerActionVerdict
 import app.andy.model.ComputerUseActionLogEntry
+import app.andy.model.ComputerUseArmRequest
 import app.andy.model.ComputerUseCapabilities
 import app.andy.model.ComputerUseHudState
 import app.andy.model.ComputerUsePermissionStatus
@@ -21,6 +22,8 @@ object UnavailableComputerUseService : ComputerUseService {
     override val hud: StateFlow<ComputerUseHudState?> = _hud.asStateFlow()
     private val _actionLog = MutableStateFlow<List<ComputerUseActionLogEntry>>(emptyList())
     override val actionLog: StateFlow<List<ComputerUseActionLogEntry>> = _actionLog.asStateFlow()
+    override val pendingArm: StateFlow<ComputerUseArmRequest?> =
+        MutableStateFlow<ComputerUseArmRequest?>(null).asStateFlow()
 
     override suspend fun capabilities() = ComputerUseCapabilities(
         platform = ComputerUsePlatform.Unsupported,
@@ -35,7 +38,10 @@ object UnavailableComputerUseService : ComputerUseService {
         attended: Boolean,
         profileId: String?,
         wallClockCapSeconds: Int?,
+        ownerTaskId: String?,
     ) = ComputerUseArmResult.Denied("Computer use is unavailable in this runtime.")
+
+    override fun decideArm(requestId: String, accepted: Boolean) = Unit
 
     override suspend fun releaseControl(sessionId: String?) =
         ComputerActionResult(ComputerActionVerdict.Denied, "Computer use unavailable")
@@ -55,5 +61,8 @@ object UnavailableComputerUseService : ComputerUseService {
         ComputerActionResult(ComputerActionVerdict.Denied, "Computer use unavailable")
 
     override suspend fun confirmPendingAction() =
+        ComputerActionResult(ComputerActionVerdict.Denied, "Computer use unavailable")
+
+    override suspend fun discardPendingAction() =
         ComputerActionResult(ComputerActionVerdict.Denied, "Computer use unavailable")
 }

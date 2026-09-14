@@ -285,9 +285,8 @@ Java_app_andy_desktop_service_computeruse_MacOsComputerUseNative_nativeDumpTree(
             return;
         }
         NSString *eid = [NSString stringWithFormat:@"%lu", (unsigned long)nextId++];
-        /* Retain element for later actuation. */
+        /* The dictionary owns the element; the prior copy-rule retain is balanced by ARC. */
         g_elements[eid] = (__bridge id)el;
-        CFRetain(el);
 
         NSString *lab = label;
         if (lab != nil && lab.length > kLabelMax) {
@@ -711,5 +710,120 @@ Java_app_andy_desktop_service_computeruse_MacOsComputerUseNative_nativeElementMe
         secure ? @"true" : @"false",
         (int)frame.origin.x, (int)frame.origin.y,
         (int)frame.size.width, (int)frame.size.height];
+    return (*env)->NewStringUTF(env, json.UTF8String);
+}
+
+static pid_t find_app_pid(NSString *appName) {
+    for (NSRunningApplication *app in [[NSWorkspace sharedWorkspace] runningApplications]) {
+        NSString *name = app.localizedName ?: @"";
+        NSString *bundle = app.bundleIdentifier ?: @"";
+        if ([name caseInsensitiveCompare:appName] == NSOrderedSame ||
+            [bundle caseInsensitiveCompare:appName] == NSOrderedSame) {
+            return app.processIdentifier;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Focused application + whether its focused control is a secure field. Used to keep synthetic
+ * (coordinate / focus) input inside the armed scope instead of trusting global focus.
+ */
+JNIEXPORT jstring JNICALL
+Java_app_andy_desktop_service_computeruse_MacOsComputerUseNative_nativeFocusedAppInfo(
+    JNIEnv *env, jclass cls) {
+    (void)cls;
+    AXUIElementRef system = AXUIElementCreateSystemWide();
+    if (system == NULL) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"no-system\"}");
+    }
+    AXUIElementSetMessagingTimeout(system, 5.0);
+    CFTypeRef appRef = NULL;
+    AXError err = AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute, &appRef);
+    CFRelease(system);
+    if (err != kAXErrorSuccess || appRef == NULL) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"no-focus\"}");
+    }
+    AXUIElementRef app = (AXUIElementRef)appRef;
+    pid_t pid = 0;
+    AXUIElementGetPid(app, &pid);
+    NSString *name = ax_str(app, kAXTitleAttribute) ?: @"";
+    NSString *bundle = @"";
+    NSRunningApplication *ra = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (ra != nil) {
+        if (name.length == 0 && ra.localizedName != nil) name = ra.localizedName;
+        if (ra.bundleIdentifier != nil) bundle = ra.bundleIdentifier;
+    }
+    BOOL secure = NO;
+    CFTypeRef focusRef = NULL;
+    if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &focusRef) == kAXErrorSuccess &&
+        focusRef != NULL) {
+        AXUIElementRef focus = (AXUIElementRef)focusRef;
+        NSString *role = ax_str(focus, kAXRoleAttribute) ?: @"";
+        NSString *subrole = ax_str(focus, kAXSubroleAttribute) ?: @"";
+        secure = [role isEqualToString:@"AXSecureTextField"] ||
+            [subrole isEqualToString:@"AXSecureTextField"];
+        CFRelease(focusRef);
+    }
+    CFRelease(appRef);
+    NSString *json = [NSString stringWithFormat:
+        @"{\"app\":\"%@\",\"bundleId\":\"%@\",\"pid\":%d,\"secure\":%@}",
+        escape_json(name), escape_json(bundle), (int)pid, secure ? @"true" : @"false"];
+    return (*env)->NewStringUTF(env, json.UTF8String);
+}
+
+/*
+ * Union of an app's on-screen, layer-0 window frames in logical screen points (top-left origin),
+ * used to crop a scoped screenshot so only authorized windows leave the machine.
+ */
+JNIEXPORT jstring JNICALL
+Java_app_andy_desktop_service_computeruse_MacOsComputerUseNative_nativeAppWindowBounds(
+    JNIEnv *env, jclass cls, jstring jAppName) {
+    (void)cls;
+    const char *cname = (*env)->GetStringUTFChars(env, jAppName, NULL);
+    NSString *appName = [NSString stringWithUTF8String:cname];
+    (*env)->ReleaseStringUTFChars(env, jAppName, cname);
+    pid_t pid = find_app_pid(appName);
+    if (pid <= 0) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"no-app\"}");
+    }
+    CFArrayRef list = CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID);
+    if (list == NULL) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"no-windows\"}");
+    }
+    BOOL found = NO;
+    CGFloat minX = 0, minY = 0, maxX = 0, maxY = 0;
+    CFIndex count = CFArrayGetCount(list);
+    for (CFIndex i = 0; i < count; i++) {
+        NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(list, i);
+        NSNumber *owner = info[(id)kCGWindowOwnerPID];
+        NSNumber *layer = info[(id)kCGWindowLayer];
+        if (owner == nil || owner.intValue != pid) continue;
+        if (layer != nil && layer.intValue != 0) continue;
+        CGRect b = CGRectZero;
+        if (!CGRectMakeWithDictionaryRepresentation((CFDictionaryRef)info[(id)kCGWindowBounds], &b)) {
+            continue;
+        }
+        if (b.size.width <= 1 || b.size.height <= 1) continue;
+        if (!found) {
+            minX = b.origin.x; minY = b.origin.y;
+            maxX = b.origin.x + b.size.width; maxY = b.origin.y + b.size.height;
+            found = YES;
+        } else {
+            minX = MIN(minX, b.origin.x);
+            minY = MIN(minY, b.origin.y);
+            maxX = MAX(maxX, b.origin.x + b.size.width);
+            maxY = MAX(maxY, b.origin.y + b.size.height);
+        }
+    }
+    CFRelease(list);
+    if (!found) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"no-windows\"}");
+    }
+    NSString *json = [NSString stringWithFormat:
+        @"{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+        (int)minX, (int)minY, (int)(maxX - minX), (int)(maxY - minY)];
     return (*env)->NewStringUTF(env, json.UTF8String);
 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -26,6 +27,7 @@ import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.fillMaxSize
 import app.andy.desktop.service.DesktopAgentAttentionCoordinator
 import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
@@ -45,6 +47,7 @@ import app.andy.desktop.service.voice.desktopGlobalHotKeyRegistrar
 import app.andy.desktop.voice.VoiceNewThreadBlocker
 import app.andy.desktop.voice.VoiceNewThreadOverlayContent
 import app.andy.desktop.voice.voiceNewThreadBlocker
+import app.andy.ui.agents.ComputerUseGlobalHud
 import app.andy.ui.components.ActiveVoiceDictationShortcut
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.theme.AndyTheme
@@ -119,6 +122,7 @@ fun main() {
         var voiceOverlayBlocker by remember { mutableStateOf<VoiceNewThreadBlocker?>(null) }
         var voiceOverlayRecording by remember { mutableStateOf(false) }
         val computerUseHud by services.computerUse.hud.collectAsState()
+        val computerUseArm by services.computerUse.pendingArm.collectAsState()
         val hotKeyRegistrar = remember { desktopGlobalHotKeyRegistrar }
         // Presenter *attach* must stay blocked while *any* Andy window is being live-resized,
         // pop-outs included: opening an overlay from the EDT while the main thread is inside a
@@ -686,6 +690,33 @@ fun main() {
                             open(AndyDestination.Settings)
                         },
                         onOpenMicPrivacySettings = { openMicPrivacySettings() },
+                    )
+                }
+            }
+        }
+        // Global, always-on-top computer-use surface — independent of the task-detail pane,
+        // so arming approvals, deferred high-consequence confirmations, and Stop stay visible
+        // even when the user is on another destination or Andy is behind another app.
+        if (computerUseHud != null || computerUseArm != null) {
+            Window(
+                onCloseRequest = { services.computerUse.panic("hud closed") },
+                visible = true,
+                title = "Andy — Computer Use",
+                undecorated = true,
+                transparent = true,
+                alwaysOnTop = true,
+                resizable = false,
+                state = rememberWindowState(
+                    position = WindowPosition.Aligned(Alignment.TopEnd),
+                    width = 288.dp,
+                    height = 360.dp,
+                ),
+                icon = appIcon,
+            ) {
+                AndyTheme {
+                    ComputerUseGlobalHud(
+                        services = services,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }

@@ -104,6 +104,18 @@ internal object MacOsComputerUseNative {
         return runCatching { nativeElementMeta(elementId) }.getOrDefault("""{"error":"unavailable"}""")
     }
 
+    /** Focused application + whether its focused control is a secure field. */
+    fun focusedAppInfo(): String {
+        if (!ensureLoaded()) return """{"error":"unavailable"}"""
+        return runCatching { nativeFocusedAppInfo() }.getOrDefault("""{"error":"unavailable"}""")
+    }
+
+    /** Union of an app's on-screen window frames, as `{x,y,w,h}` logical points. */
+    fun appWindowBounds(appName: String): String {
+        if (!ensureLoaded()) return """{"error":"unavailable"}"""
+        return runCatching { nativeAppWindowBounds(appName) }.getOrDefault("""{"error":"unavailable"}""")
+    }
+
     private fun loadLibrary() = runCatching {
         val resourcePath = resourcePath() ?: error("No macOS computer-use bridge for this platform")
         val target = File(System.getProperty("user.home"), ".andy/computer-use/native/$resourcePath")
@@ -154,4 +166,6 @@ internal object MacOsComputerUseNative {
     @JvmStatic private external fun nativeDisplayGeometry(): String
     @JvmStatic private external fun nativeFocusElement(elementId: String): Boolean
     @JvmStatic private external fun nativeElementMeta(elementId: String): String
+    @JvmStatic private external fun nativeFocusedAppInfo(): String
+    @JvmStatic private external fun nativeAppWindowBounds(appName: String): String
 }

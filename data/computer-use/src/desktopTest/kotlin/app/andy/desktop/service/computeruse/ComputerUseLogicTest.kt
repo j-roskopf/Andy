@@ -203,3 +203,68 @@ class ComputerUseProfileStoreTest {
         assertTrue(err != null && err.contains("denylist"))
     }
 }
+
+class ComputerUseFocusGuardTest {
+    private val chromeScope = app.andy.model.ComputerUseScope(appNames = listOf("Google Chrome"))
+
+    @Test
+    fun parsesFocusedAppInfo() {
+        val info = parseFocusedAppInfo(
+            """{"app":"Google Chrome","bundleId":"com.google.Chrome","pid":42,"secure":false}""",
+        )
+        assertEquals("Google Chrome", info.app)
+        assertEquals("com.google.Chrome", info.bundleId)
+        assertEquals(42, info.pid)
+        assertFalse(info.secure)
+    }
+
+    @Test
+    fun allowsFocusedAppInsideScope() {
+        val denial = focusedTargetDenial(
+            chromeScope,
+            FocusedAppInfo(app = "Google Chrome", bundleId = "com.google.Chrome"),
+        )
+        assertEquals(null, denial)
+    }
+
+    @Test
+    fun deniesFocusedAppOutsideScope() {
+        val denial = focusedTargetDenial(chromeScope, FocusedAppInfo(app = "Preview"))
+        assertTrue(denial != null && denial.contains("outside the armed scope"))
+    }
+
+    @Test
+    fun deniesDenylistedFocusedApp() {
+        val denial = focusedTargetDenial(chromeScope, FocusedAppInfo(app = "Terminal"))
+        assertTrue(denial != null && denial.contains("denylist"))
+    }
+
+    @Test
+    fun deniesSecureFocusedField() {
+        val denial = focusedTargetDenial(
+            chromeScope,
+            FocusedAppInfo(app = "Google Chrome", secure = true),
+        )
+        assertTrue(denial != null && denial.contains("secure"))
+    }
+
+    @Test
+    fun unknownFocusFailsClosedForScopedButNotWholeDesktop() {
+        assertTrue(focusedTargetDenial(chromeScope, FocusedAppInfo()) != null)
+        assertEquals(
+            null,
+            focusedTargetDenial(
+                app.andy.model.ComputerUseScope(wholeDesktop = true),
+                FocusedAppInfo(),
+            ),
+        )
+    }
+
+    @Test
+    fun parsesAppWindowBounds() {
+        val bounds = parseAppWindowBounds("""{"x":10,"y":20,"w":300,"h":200}""")
+        assertEquals(AppWindowBounds(10, 20, 300, 200), bounds)
+        assertEquals(null, parseAppWindowBounds("""{"error":"no-windows"}"""))
+        assertEquals(null, parseAppWindowBounds("""{"x":0,"y":0,"w":0,"h":0}"""))
+    }
+}

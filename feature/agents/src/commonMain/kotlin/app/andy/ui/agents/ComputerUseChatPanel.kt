@@ -31,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,11 +52,13 @@ import androidx.compose.ui.unit.sp
 import app.andy.currentTimeMillis
 import app.andy.model.ComputerUseHudState
 import app.andy.service.AndyServices
+import app.andy.ui.components.Button
 import app.andy.ui.components.Card
 import app.andy.ui.components.CardElevation
 import app.andy.ui.components.HoverTooltip
 import app.andy.ui.components.Lucide
 import app.andy.ui.components.LucideIcon
+import app.andy.ui.components.TextButton
 import app.andy.ui.theme.AndyColors
 import app.andy.ui.theme.AndyShape
 import app.andy.ui.theme.AndySpace
@@ -65,6 +68,7 @@ import app.andy.ui.theme.Rust
 import app.andy.ui.theme.TextPrimary
 import app.andy.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val ComputerUseCardWidth = 248.dp
 
@@ -81,13 +85,7 @@ internal fun ComputerUseChatPanel(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var elapsedSec by remember(state.sessionId) { mutableStateOf(0L) }
-    LaunchedEffect(state.sessionId, state.startedAtEpochMs) {
-        while (true) {
-            elapsedSec = ((currentTimeMillis() - state.startedAtEpochMs) / 1000).coerceAtLeast(0)
-            delay(500)
-        }
-    }
+    val elapsedSec = rememberElapsedSeconds(state.startedAtEpochMs)
     val log by services.computerUse.actionLog.collectAsState()
     val entries = log.ifEmpty { state.actions }.takeLast(12)
 
@@ -316,3 +314,125 @@ private fun ComputerUseIconButton(
         LucideIcon(path, tint, Modifier.size(14.dp))
     }
 }
+
+/** Ticking elapsed seconds since [startedAtEpochMs]. */
+@Composable
+private fun rememberElapsedSeconds(startedAtEpochMs: Long): Long {
+    var elapsed by remember(startedAtEpochMs) { mutableStateOf(0L) }
+    LaunchedEffect(startedAtEpochMs) {
+        while (true) {
+            elapsed = ((currentTimeMillis() - startedAtEpochMs) / 1000).coerceAtLeast(0)
+            delay(500)
+        }
+    }
+    return elapsed
+}
+
+/**
+ * Global always-on-top computer-use surface, independent of the task-detail pane.
+ * Renders the pending arm approval, the deferred high-consequence confirmation, and the
+ * live session HUD with its Stop control.
+ */
+@Composable
+fun ComputerUseGlobalHud(
+    services: AndyServices,
+    modifier: Modifier = Modifier,
+) {
+    val pendingArm by services.computerUse.pendingArm.collectAsState()
+    val hud by services.computerUse.hud.collectAsState()
+    val log by services.computerUse.actionLog.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(
+        modifier = modifier.padding(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        horizontalAlignment = Alignment.End,
+    ) {
+        pendingArm?.let { arm ->
+            ComputerUseDialogCard(
+                title = "Allow computer use?",
+                body = "An agent wants to control " +
+                    arm.scope.appNames.joinToString().ifBlank { "the whole desktop" } +
+                    ". Approve for this run?",
+                confirmLabel = "Allow",
+                dismissLabel = "Deny",
+                onConfirm = { services.computerUse.decideArm(arm.requestId, true) },
+                onDismiss = { services.computerUse.decideArm(arm.requestId, false) },
+                testTag = "computer-use-arm",
+            )
+        }
+        val state = hud
+        if (state != null) {
+            val elapsedSec = rememberElapsedSeconds(state.startedAtEpochMs)
+            state.pendingConfirmation?.let { reason ->
+                ComputerUseDialogCard(
+                    title = "Confirm action",
+                    body = reason,
+                    confirmLabel = "Confirm",
+                    dismissLabel = "Cancel",
+                    onConfirm = { coroutineScope.launch { services.computerUse.confirmPendingAction() } },
+                    onDismiss = { coroutineScope.launch { services.computerUse.discardPendingAction() } },
+                    testTag = "computer-use-confirm",
+                )
+            }
+            ComputerUseExpandedCard(
+                scopeLabel = state.scopeAppNames.joinToString().ifBlank { "whole desktop" },
+                elapsedSec = elapsedSec,
+                entries = log.ifEmpty { state.actions }.takeLast(12).map { it.summary },
+                showTuckControl = false,
+                onTuck = {},
+                onStop = { services.computerUse.panic("hud stop") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComputerUseDialogCard(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    dismissLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    testTag: String,
+) {
+    Card(
+        modifier = Modifier
+            .width(ComputerUseCardWidth)
+            .testTag(testTag),
+        elevation = CardElevation.Med,
+        shape = AndyShape.Menu,
+        backgroundColor = AndyColors.SurfaceRaised,
+        contentPadding = PaddingValues(AndySpace.Space3),
+        verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        Text(
+            title,
+            color = Rust,
+            fontFamily = DisplayFont,
+            fontWeight = FontWeight.Medium,
+            fontSize = 13.sp,
+            lineHeight = 17.sp,
+        )
+        Text(
+            body,
+            color = TextPrimary,
+            fontFamily = DisplayFont,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+        ) {
+            TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                Text(dismissLabel, fontSize = 12.sp)
+            }
+            Button(onClick = onConfirm, modifier = Modifier.weight(1f)) {
+                Text(confirmLabel, fontSize = 12.sp)
+            }
+        }
+    }
+}
+

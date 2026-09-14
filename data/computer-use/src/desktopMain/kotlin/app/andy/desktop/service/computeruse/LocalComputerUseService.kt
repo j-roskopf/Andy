@@ -4,6 +4,7 @@ import app.andy.model.ComputerAction
 import app.andy.model.ComputerActionResult
 import app.andy.model.ComputerActionVerdict
 import app.andy.model.ComputerUseActionLogEntry
+import app.andy.model.ComputerUseArmRequest
 import app.andy.model.ComputerUseCapabilities
 import app.andy.model.ComputerUseHudState
 import app.andy.model.ComputerUsePermissionStatus
@@ -14,13 +15,13 @@ import app.andy.model.HostAccessibilityTree
 import app.andy.model.HostElementBounds
 import app.andy.model.HostElementKind
 import app.andy.model.HostScreenshotResult
-import app.andy.service.ComputerUseArmGate
 import app.andy.service.ComputerUseArmResult
 import app.andy.service.ComputerUseService
 import app.andy.service.WorkspaceStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -51,6 +53,7 @@ data class ComputerUseSession(
     val attended: Boolean,
     val startedAtEpochMs: Long,
     val wallClockCapSeconds: Int,
+    val ownerTaskId: String? = null,
     val extraHighConsequenceLabels: List<String> = emptyList(),
 )
 
@@ -60,18 +63,24 @@ data class ComputerUseSession(
 class LocalComputerUseService(
     private val workspaceStore: WorkspaceStore,
     private val scope: CoroutineScope,
-    private val armGate: ComputerUseArmGate = InMemoryComputerUseArmGate(),
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val headless: Boolean = isHeadlessJvm(),
     private val platform: ComputerUsePlatform = detectComputerUsePlatform(),
+    /** How long an attended arm request waits for an explicit user decision before denying. */
+    private val armDecisionTimeoutMillis: Long = 120_000,
 ) : ComputerUseService {
     private val mutex = Mutex()
     private val sessionRef = AtomicReference<ComputerUseSession?>(null)
     private var disarmJob: Job? = null
     private var pendingAction: ComputerAction? = null
+    private var pendingReason: String? = null
+    private val armDecisions = Channel<Boolean>(Channel.CONFLATED)
 
     private val _hud = MutableStateFlow<ComputerUseHudState?>(null)
     override val hud: StateFlow<ComputerUseHudState?> = _hud.asStateFlow()
+
+    private val _pendingArm = MutableStateFlow<ComputerUseArmRequest?>(null)
+    override val pendingArm: StateFlow<ComputerUseArmRequest?> = _pendingArm.asStateFlow()
 
     private val _actionLog = MutableStateFlow<List<ComputerUseActionLogEntry>>(emptyList())
     override val actionLog: StateFlow<List<ComputerUseActionLogEntry>> = _actionLog.asStateFlow()
@@ -153,6 +162,7 @@ class LocalComputerUseService(
                     masterSwitchEnabled = master,
                     armed = session != null,
                     sessionId = session?.id,
+                    ownerTaskId = session?.ownerTaskId,
                     scopeAppNames = session?.scope?.appNames.orEmpty(),
                     attended = session?.attended ?: true,
                     accessibilitySettingsUrl =
@@ -169,6 +179,7 @@ class LocalComputerUseService(
         attended: Boolean,
         profileId: String?,
         wallClockCapSeconds: Int?,
+        ownerTaskId: String?,
     ): ComputerUseArmResult {
         val caps = capabilities()
         if (!caps.masterSwitchEnabled) {
@@ -198,14 +209,27 @@ class LocalComputerUseService(
             ?: 600
 
         if (attended) {
+            val existing = _pendingArm.value
+            if (existing != null) {
+                return ComputerUseArmResult.Denied(
+                    "An arming request is already awaiting user approval (${existing.requestId}).",
+                )
+            }
             val requestId = UUID.randomUUID().toString()
-            val accepted = withContext(Dispatchers.Main.immediate) {
-                // Fall through to default accept path when no UI gate is listening.
-                armGate.offer(requestId, scope) { }
-                true // Phase 1: auto-accept once HUD is shown; HUD stop / panic disarms.
+            _pendingArm.value = ComputerUseArmRequest(
+                requestId = requestId,
+                scope = scope,
+                requestedAtEpochMs = clock(),
+                ownerTaskId = ownerTaskId,
+            )
+            while (armDecisions.tryReceive().isSuccess) { /* drop stale decisions */ }
+            val accepted = try {
+                withTimeoutOrNull(armDecisionTimeoutMillis) { armDecisions.receive() } ?: false
+            } finally {
+                if (_pendingArm.value?.requestId == requestId) _pendingArm.value = null
             }
             if (!accepted) {
-                return ComputerUseArmResult.Denied("User declined computer-use arming.")
+                return ComputerUseArmResult.Denied("Computer-use arming was not approved by the user.")
             }
         }
 
@@ -215,6 +239,7 @@ class LocalComputerUseService(
             attended = attended,
             startedAtEpochMs = clock(),
             wallClockCapSeconds = capSeconds,
+            ownerTaskId = ownerTaskId,
             extraHighConsequenceLabels = profile?.highConsequenceLabels.orEmpty(),
         )
         mutex.withLock {
@@ -224,6 +249,13 @@ class LocalComputerUseService(
             scheduleAutoDisarm(session)
         }
         return ComputerUseArmResult.Armed(session.id)
+    }
+
+    override fun decideArm(requestId: String, accepted: Boolean) {
+        val pending = _pendingArm.value ?: return
+        if (pending.requestId == requestId) {
+            armDecisions.trySend(accepted)
+        }
     }
 
     override suspend fun releaseControl(sessionId: String?): ComputerActionResult {
@@ -273,27 +305,45 @@ class LocalComputerUseService(
     }
 
     override suspend fun screenshot(appName: String?): HostScreenshotResult {
-        requireArmed()
+        val session = requireArmed()
         return withContext(Dispatchers.IO) {
             val displays = parseDisplays(MacOsComputerUseNative.displayGeometryJson())
-            val union = CoordinateSpace.unionBounds(displays)
+            val target = appName ?: session.scope.appNames.firstOrNull()
+            val rect: HostRect? = if (target != null) {
+                resolveTargetApp(session, target)
+                parseAppWindowBounds(MacOsComputerUseNative.appWindowBounds(target))?.let {
+                    HostRect(it.x, it.y, it.width, it.height)
+                } ?: CoordinateSpace.unionBounds(displays)
+            } else {
+                if (!session.scope.wholeDesktop) {
+                    error("No app in scope — pass appName or arm with a scoped app set")
+                }
+                CoordinateSpace.unionBounds(displays)
+            }
             val bytes = MacOsComputerUseNative.capturePng(
-                x = union?.x ?: 0,
-                y = union?.y ?: 0,
-                w = union?.width ?: 0,
-                h = union?.height ?: 0,
+                x = rect?.x ?: 0,
+                y = rect?.y ?: 0,
+                w = rect?.width ?: 0,
+                h = rect?.height ?: 0,
             ) ?: error(
                 "Screen capture failed. Grant Screen Recording to Andy in System Settings " +
                     "→ Privacy & Security → Screen Recording, then restart Andy.",
             )
+            val persist = workspaceStore.state?.value?.computerUsePersistScreenshots == true
+            val savedPath = if (persist) {
+                ComputerUseScreenshotStore.save(bytes, session.id, clock())
+            } else {
+                null
+            }
             val primary = displays.firstOrNull { it.primary } ?: displays.firstOrNull()
             HostScreenshotResult(
                 pngBase64 = Base64.getEncoder().encodeToString(bytes),
                 scaleFactor = primary?.scale ?: 1.0,
-                originX = union?.x ?: 0,
-                originY = union?.y ?: 0,
-                width = union?.width ?: 0,
-                height = union?.height ?: 0,
+                originX = rect?.x ?: 0,
+                originY = rect?.y ?: 0,
+                width = rect?.width ?: 0,
+                height = rect?.height ?: 0,
+                savedPath = savedPath,
                 untrusted = true,
             )
         }
@@ -320,6 +370,8 @@ class LocalComputerUseService(
                 )
             }
             pendingAction = action
+            pendingReason = consequence
+            publishHud(session)
             return ComputerActionResult(
                 verdict = ComputerActionVerdict.NeedsConfirmation,
                 message = consequence,
@@ -328,6 +380,8 @@ class LocalComputerUseService(
             )
         }
 
+        pendingAction = null
+        pendingReason = null
         val result = withContext(Dispatchers.IO) { perform(session, action) }
         appendLog(result, action)
         return result
@@ -337,16 +391,30 @@ class LocalComputerUseService(
         val action = pendingAction
             ?: return ComputerActionResult(ComputerActionVerdict.Failed, "No pending action")
         pendingAction = null
+        pendingReason = null
+        sessionRef.get()?.let { publishHud(it) }
         return act(action, confirmHighConsequence = true)
+    }
+
+    override suspend fun discardPendingAction(): ComputerActionResult {
+        val had = pendingAction != null
+        pendingAction = null
+        pendingReason = null
+        sessionRef.get()?.let { publishHud(it) }
+        return ComputerActionResult(
+            ComputerActionVerdict.Succeeded,
+            if (had) "Pending high-consequence action discarded" else "No pending action",
+        )
     }
 
     private suspend fun perform(session: ComputerUseSession, action: ComputerAction): ComputerActionResult {
         return when (action) {
             is ComputerAction.Tap -> performTap(session, action)
-            is ComputerAction.InputText -> performInputText(action)
-            is ComputerAction.PressKey -> performPressKey(action)
-            is ComputerAction.Scroll -> performScroll(action)
+            is ComputerAction.InputText -> performInputText(session, action)
+            is ComputerAction.PressKey -> performPressKey(session, action)
+            is ComputerAction.Scroll -> performScroll(session, action)
             is ComputerAction.Drag -> {
+                focusDenial(session)?.let { return deny(it) }
                 MacOsComputerUseNative.drag(
                     action.startX, action.startY, action.endX, action.endY, action.durationMs,
                 )
@@ -362,14 +430,12 @@ class LocalComputerUseService(
             if (meta.secure) {
                 return deny("Refusing to activate a secure field")
             }
-            if (!session.scope.wholeDesktop) {
-                // Element path is nearly scope-enforced (§5); still check denylist on label/app.
-            }
             val raw = MacOsComputerUseNative.pressElement(elementId)
             return parseActionResult(raw, elementId)
         }
         val x = action.x ?: return deny("tap requires element_id or x,y")
         val y = action.y ?: return deny("tap requires element_id or x,y")
+        focusDenial(session)?.let { return deny(it) }
         MacOsComputerUseNative.click(x, y)
         return ComputerActionResult(
             ComputerActionVerdict.Unverified,
@@ -377,7 +443,7 @@ class LocalComputerUseService(
         )
     }
 
-    private fun performInputText(action: ComputerAction.InputText): ComputerActionResult {
+    private fun performInputText(session: ComputerUseSession, action: ComputerAction.InputText): ComputerActionResult {
         val elementId = action.elementId
         if (elementId != null) {
             val meta = parseElementMeta(MacOsComputerUseNative.elementMeta(elementId))
@@ -393,6 +459,7 @@ class LocalComputerUseService(
                 elementId = elementId,
             )
         }
+        focusDenial(session)?.let { return deny(it) }
         MacOsComputerUseNative.typeText(action.text)
         return ComputerActionResult(
             ComputerActionVerdict.Unverified,
@@ -400,8 +467,9 @@ class LocalComputerUseService(
         )
     }
 
-    private fun performPressKey(action: ComputerAction.PressKey): ComputerActionResult {
+    private fun performPressKey(session: ComputerUseSession, action: ComputerAction.PressKey): ComputerActionResult {
         val code = macKeyCode(action.key) ?: return deny("Unknown key: ${action.key}")
+        focusDenial(session)?.let { return deny(it) }
         val mods = action.modifiers.map { it.lowercase() }.toSet()
         MacOsComputerUseNative.pressKey(
             keyCode = code,
@@ -413,19 +481,24 @@ class LocalComputerUseService(
         return ComputerActionResult(ComputerActionVerdict.Succeeded, "Pressed ${action.key}")
     }
 
-    private fun performScroll(action: ComputerAction.Scroll): ComputerActionResult {
+    private fun performScroll(session: ComputerUseSession, action: ComputerAction.Scroll): ComputerActionResult {
         val elementId = action.elementId
         val (x, y) = if (elementId != null) {
             val meta = parseElementMeta(MacOsComputerUseNative.elementMeta(elementId))
             val b = meta.bounds ?: return deny("Element has no bounds for scroll")
             b.x + b.width / 2 to b.y + b.height / 2
         } else {
+            focusDenial(session)?.let { return deny(it) }
             (action.x ?: return deny("scroll requires element_id or x,y")) to
                 (action.y ?: return deny("scroll requires element_id or x,y"))
         }
         MacOsComputerUseNative.scroll(x, y, action.deltaX, action.deltaY)
         return ComputerActionResult(ComputerActionVerdict.Succeeded, "Scrolled at $x,$y")
     }
+
+    /** Denial reason when global focus is outside the armed scope or in a secure field. */
+    private fun focusDenial(session: ComputerUseSession): String? =
+        focusedTargetDenial(session.scope, parseFocusedAppInfo(MacOsComputerUseNative.focusedAppInfo()))
 
     private fun evaluateConsequence(session: ComputerUseSession, action: ComputerAction): String? {
         when (action) {
@@ -497,6 +570,7 @@ class LocalComputerUseService(
         disarmJob?.cancel()
         disarmJob = null
         pendingAction = null
+        pendingReason = null
         val previous = sessionRef.getAndSet(null)
         if (previous != null) {
             appendLogUnlocked(
@@ -513,7 +587,9 @@ class LocalComputerUseService(
             scopeAppNames = session.scope.appNames,
             attended = session.attended,
             startedAtEpochMs = session.startedAtEpochMs,
+            ownerTaskId = session.ownerTaskId,
             actions = _actionLog.value.takeLast(30),
+            pendingConfirmation = pendingReason,
         )
     }
 
@@ -541,24 +617,6 @@ class LocalComputerUseService(
 
     private fun deny(message: String) =
         ComputerActionResult(ComputerActionVerdict.Denied, message)
-}
-
-internal class InMemoryComputerUseArmGate : ComputerUseArmGate {
-    private val pending = mutableMapOf<String, (Boolean) -> Unit>()
-
-    override suspend fun awaitDecision(requestId: String): Boolean = true
-
-    override fun offer(requestId: String, scope: ComputerUseScope, onDecide: (Boolean) -> Unit) {
-        pending[requestId] = onDecide
-    }
-
-    override fun cancel(requestId: String) {
-        pending.remove(requestId)
-    }
-
-    fun decide(requestId: String, accepted: Boolean) {
-        pending.remove(requestId)?.invoke(accepted)
-    }
 }
 
 internal data class ElementMeta(

@@ -33,10 +33,22 @@ data class ComputerUseCapabilities(
     val masterSwitchEnabled: Boolean = false,
     val armed: Boolean = false,
     val sessionId: String? = null,
+    /** Task/run id that owns the armed session (requests from other runs are rejected). */
+    val ownerTaskId: String? = null,
     val scopeAppNames: List<String> = emptyList(),
     val attended: Boolean = true,
     val accessibilitySettingsUrl: String? = null,
     val screenRecordingSettingsUrl: String? = null,
+)
+
+/** A pending attended arm request awaiting explicit user approval in the HUD. */
+@Serializable
+data class ComputerUseArmRequest(
+    val requestId: String,
+    val scope: ComputerUseScope,
+    val requestedAtEpochMs: Long,
+    /** Task/run id that requested arming; only this run may drive the session. */
+    val ownerTaskId: String? = null,
 )
 
 /** App set a computer-use session may drive. */
@@ -123,6 +135,8 @@ data class HostScreenshotResult(
     val originY: Int,
     val width: Int,
     val height: Int,
+    /** Absolute path when the capture was persisted to disk (opt-in). */
+    val savedPath: String? = null,
     val untrusted: Boolean = true,
 )
 
@@ -185,7 +199,11 @@ data class ComputerUseHudState(
     val scopeAppNames: List<String>,
     val attended: Boolean,
     val startedAtEpochMs: Long,
+    /** Task/run id that owns this session; other runs cannot drive it. */
+    val ownerTaskId: String? = null,
     val actions: List<ComputerUseActionLogEntry> = emptyList(),
+    /** Non-null while a high-consequence action awaits user confirmation. */
+    val pendingConfirmation: String? = null,
     val lastError: String? = null,
 )
 

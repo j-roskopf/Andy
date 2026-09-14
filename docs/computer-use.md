@@ -800,4 +800,16 @@ Resolved during Phase 1 implementation:
 - Grant profiles live in `workspace.properties` as a JSON blob
   (`computerUseProfilesJson`).
 - Capture uses `screencapture(1)` on macOS 15+ (CGWindowListCreateImage removed).
+- Attended arming blocks on an explicit user approval in the HUD
+  (`pendingArm` → `decideArm`); it denies on timeout and no longer auto-accepts.
+- Sessions are bound to the requesting run (`ownerTaskId`); other MCP
+  connections cannot drive an armed session.
+- High-consequence actions expose a real confirmation path (HUD Confirm/Cancel
+  and `computer_confirm_action` / `computer_discard_action`).
+- Synthetic (coordinate/focus) input validates the focused app against the armed
+  scope, the denylist, and secure-field state before injecting.
+- Scoped screenshots crop to the authorized app's on-screen windows.
+- The HUD is a global always-on-top window, not just the task-detail pane.
+- Opt-in screenshot persistence writes under
+  `~/.andy/computer-use/screenshots` (capped at 200 files).
 

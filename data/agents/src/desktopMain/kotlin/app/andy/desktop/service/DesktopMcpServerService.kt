@@ -494,7 +494,7 @@ class DesktopMcpServerService(
             )
         )
 
-        registerTools(mcpServer)
+        registerTools(mcpServer, callerTaskId?.takeIf { it.isNotBlank() })
         hub.registerFederatedTools(mcpServer)
         val agents = agentRuns
         val projects = projectWorkflows
@@ -515,7 +515,7 @@ class DesktopMcpServerService(
 
     private suspend fun resolveAndroidTarget(explicit: String?): String = targets.resolveAndroid(explicit)
 
-    private fun registerTools(mcpServer: Server) {
+    private fun registerTools(mcpServer: Server, callerTaskId: String?) {
         mcpServer.registerTool("list_devices", "List connected Android devices/emulators and iOS simulators/physical devices") { args ->
             val androidList = devices.listDevices()
             val iosList = targets.refreshIosTargets()
@@ -2110,7 +2110,7 @@ class DesktopMcpServerService(
             }
         }
 
-        registerComputerUseTools(mcpServer)
+        registerComputerUseTools(mcpServer, callerTaskId?.takeIf { it.isNotBlank() })
 
         registerIosMcpTools(
             iosDevices = iosDevices,
@@ -2121,8 +2121,19 @@ class DesktopMcpServerService(
         )
     }
 
-    private fun registerComputerUseTools(mcpServer: Server) {
+    private fun registerComputerUseTools(mcpServer: Server, callerTaskId: String?) {
         fun masterOn(): Boolean = workspaceStore.state?.value?.computerUseEnabled == true
+
+        fun sessionOwner(): String? = computerUse.hud.value?.ownerTaskId
+
+        /**
+         * An armed session is bound to the run that requested it. Any other MCP connection
+         * (including the UI-less andyd process) must not drive it.
+         */
+        fun ownsArmedSession(): Boolean {
+            val owner = sessionOwner() ?: return false
+            return owner == callerTaskId
+        }
 
         suspend fun gated(block: suspend () -> CallToolResult): CallToolResult {
             if (!masterOn()) {
@@ -2137,6 +2148,23 @@ class DesktopMcpServerService(
                 )
             }
             return block()
+        }
+
+        /** Gate for tools that act on an already-armed session. */
+        suspend fun gatedArmed(block: suspend () -> CallToolResult): CallToolResult = gated {
+            if (!ownsArmedSession()) {
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = "Computer-use session is not armed for this run. " +
+                                "Call computer_request_control first (sessions are bound to the requesting run).",
+                        ),
+                    ),
+                    isError = true,
+                )
+            } else {
+                block()
+            }
         }
 
         fun actionResult(result: app.andy.model.ComputerActionResult): CallToolResult {
@@ -2205,7 +2233,7 @@ class DesktopMcpServerService(
                 "wallClockCapSeconds" to intProp("Wall-clock ceiling in seconds"),
             ),
         ) { args ->
-            gated {
+            gatedArmed {
                 val apps = args["apps"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
                 val scope = ComputerUseScope(
                     appNames = apps,
@@ -2217,6 +2245,7 @@ class DesktopMcpServerService(
                         attended = args["attended"]?.jsonPrimitive?.booleanOrNull ?: true,
                         profileId = args["profileId"]?.jsonPrimitive?.contentOrNull,
                         wallClockCapSeconds = args["wallClockCapSeconds"]?.jsonPrimitive?.intOrNull,
+                        ownerTaskId = callerTaskId,
                     )
                 ) {
                     is ComputerUseArmResult.Armed -> CallToolResult(
@@ -2241,7 +2270,7 @@ class DesktopMcpServerService(
             "Voluntarily disarm the current computer-use session.",
             properties = mapOf("sessionId" to stringProp("Optional session id")),
         ) { args ->
-            gated {
+            gatedArmed {
                 val result = computerUse.releaseControl(args["sessionId"]?.jsonPrimitive?.contentOrNull)
                 CallToolResult(
                     content = listOf(TextContent(text = result.message)),
@@ -2257,7 +2286,7 @@ class DesktopMcpServerService(
                 "appName" to stringProp("App within armed scope (defaults to first scoped app)"),
             ),
         ) { args ->
-            gated {
+            gatedArmed {
                 val tree = computerUse.dump(
                     appName = args["appName"]?.jsonPrimitive?.contentOrNull,
                     menus = false,
@@ -2278,7 +2307,7 @@ class DesktopMcpServerService(
             "Menu bar for the scoped app (on demand — menus dominate naive full-app dumps).",
             properties = mapOf("appName" to stringProp("App within armed scope")),
         ) { args ->
-            gated {
+            gatedArmed {
                 val tree = computerUse.dump(
                     appName = args["appName"]?.jsonPrimitive?.contentOrNull,
                     menus = true,
@@ -2304,9 +2333,9 @@ class DesktopMcpServerService(
             ),
             required = listOf("query"),
         ) { args ->
-            gated {
+            gatedArmed {
                 val query = args["query"]?.jsonPrimitive?.contentOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "query is required")),
                         isError = true,
                     )
@@ -2346,13 +2375,14 @@ class DesktopMcpServerService(
             "Host capture with scale factor and origin. Untrusted screen content.",
             properties = mapOf("appName" to stringProp("Optional app hint")),
         ) { args ->
-            gated {
+            gatedArmed {
                 val shot = computerUse.screenshot(args["appName"]?.jsonPrimitive?.contentOrNull)
+                val savedPath = shot.savedPath?.let { "\"$it\"" } ?: "null"
                 CallToolResult(
                     content = listOf(
                         TextContent(
                             text = app.andy.desktop.service.computeruse.HostDumpPipeline.wrapUntrusted(
-                                """{"scaleFactor":${shot.scaleFactor},"originX":${shot.originX},"originY":${shot.originY},"width":${shot.width},"height":${shot.height}}""",
+                                """{"scaleFactor":${shot.scaleFactor},"originX":${shot.originX},"originY":${shot.originY},"width":${shot.width},"height":${shot.height},"savedPath":$savedPath}""",
                             ),
                         ),
                         ImageContent(data = shot.pngBase64, mimeType = "image/png"),
@@ -2374,7 +2404,7 @@ class DesktopMcpServerService(
                 },
             ),
         ) { args ->
-            gated {
+            gatedArmed {
                 actionResult(
                     computerUse.act(
                         ComputerAction.Tap(
@@ -2397,9 +2427,9 @@ class DesktopMcpServerService(
             ),
             required = listOf("text"),
         ) { args ->
-            gated {
+            gatedArmed {
                 val text = args["text"]?.jsonPrimitive?.contentOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "text is required")),
                         isError = true,
                     )
@@ -2423,9 +2453,9 @@ class DesktopMcpServerService(
             ),
             required = listOf("key"),
         ) { args ->
-            gated {
+            gatedArmed {
                 val key = args["key"]?.jsonPrimitive?.contentOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "key is required")),
                         isError = true,
                     )
@@ -2445,7 +2475,7 @@ class DesktopMcpServerService(
                 "deltaY" to intProp("Vertical scroll delta (lines)"),
             ),
         ) { args ->
-            gated {
+            gatedArmed {
                 actionResult(
                     computerUse.act(
                         ComputerAction.Scroll(
@@ -2472,24 +2502,24 @@ class DesktopMcpServerService(
             ),
             required = listOf("startX", "startY", "endX", "endY"),
         ) { args ->
-            gated {
+            gatedArmed {
                 val startX = args["startX"]?.jsonPrimitive?.intOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "startX is required")),
                         isError = true,
                     )
                 val startY = args["startY"]?.jsonPrimitive?.intOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "startY is required")),
                         isError = true,
                     )
                 val endX = args["endX"]?.jsonPrimitive?.intOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "endX is required")),
                         isError = true,
                     )
                 val endY = args["endY"]?.jsonPrimitive?.intOrNull
-                    ?: return@gated CallToolResult(
+                    ?: return@gatedArmed CallToolResult(
                         content = listOf(TextContent(text = "endY is required")),
                         isError = true,
                     )
@@ -2504,6 +2534,24 @@ class DesktopMcpServerService(
                         ),
                     ),
                 )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_confirm_action",
+            "Execute the high-consequence action that was deferred pending user confirmation.",
+        ) { _ ->
+            gatedArmed {
+                actionResult(computerUse.confirmPendingAction())
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_discard_action",
+            "Dismiss the deferred high-consequence action without executing it.",
+        ) { _ ->
+            gatedArmed {
+                actionResult(computerUse.discardPendingAction())
             }
         }
     }

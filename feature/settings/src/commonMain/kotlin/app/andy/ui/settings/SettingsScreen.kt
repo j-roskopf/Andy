@@ -3281,7 +3281,9 @@ private fun ComputerUseSettingsPanel(
         SettingsToggleRow(
             label = "Persist attended screenshots to disk",
             checked = workspaceState.computerUsePersistScreenshots,
-            description = "Off by default. Screenshots still reach the model provider in context.",
+            description = "Off by default. When on, captures are written under " +
+                "~/.andy/computer-use/screenshots (capped at 200 files). " +
+                "Screenshots still reach the model provider in context.",
             onCheckedChange = { checked ->
                 onUpdateWorkspace { it.copy(computerUsePersistScreenshots = checked) }
             },
