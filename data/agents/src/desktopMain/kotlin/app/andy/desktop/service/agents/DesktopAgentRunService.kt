@@ -354,8 +354,12 @@ class DesktopAgentRunService(
             refreshCliStatuses()
             refreshSlashCommandsForReadyProviders()
             watchLocalModelSettings()
-            scope.launch(Dispatchers.IO) {
-                _openRouterKeyPresent.value = OpenRouterCredentialStore.isPresent()
+            // Only probe the OS keychain where probes are enabled; attach-only bridges and tests
+            // must not spawn a keychain subprocess at construction.
+            if (enableProbes) {
+                scope.launch(Dispatchers.IO) {
+                    _openRouterKeyPresent.value = OpenRouterCredentialStore.isPresent()
+                }
             }
             scope.launch(Dispatchers.IO) {
                 runCatching {
