@@ -382,8 +382,12 @@ fun buildChatTimeline(
                 }
                 if (matchIndex >= 0) {
                     unmatchedToolCalls.removeAt(matchIndex)
-                    previousEventAtMillis = event.atMillis
-                    return@forEachIndexed
+                    // A successful result adds nothing beyond its stored call row, but an error
+                    // still needs a visible row so the failure detail is not lost.
+                    if (!event.isError) {
+                        previousEventAtMillis = event.atMillis
+                        return@forEachIndexed
+                    }
                 }
                 val turn = ensureTurn()
                 addRow(

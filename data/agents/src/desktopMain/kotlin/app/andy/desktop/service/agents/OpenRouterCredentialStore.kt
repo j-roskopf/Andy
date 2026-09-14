@@ -114,8 +114,12 @@ object OpenRouterCredentialStore {
             "account", Account,
         ).redirectErrorStream(true).start()
         if (!process.waitFor(5, TimeUnit.SECONDS)) return Lookup.Unavailable
+        // stderr is merged into the stream, so a non-blank payload on a failed exit is a D-Bus or
+        // Secret Service error (Unavailable); a silent non-zero exit is the no-match case (Absent).
         val value = process.inputStream.bufferedReader().readText().trim()
-        if (process.exitValue() != 0) return Lookup.Absent // secret-tool exits 1 when no match.
+        if (process.exitValue() != 0) {
+            return if (value.isNotEmpty()) Lookup.Unavailable else Lookup.Absent
+        }
         return if (value.isNotEmpty()) Lookup.Found(value) else Lookup.Absent
     }
 

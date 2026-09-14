@@ -437,6 +437,27 @@ class ChatTimelineTest {
     }
 
     @Test
+    fun matchedErrorResultStillRendersAnErrorRow() {
+        val model = buildChatTimeline(
+            listOf(
+                AgentEvent.UserMessage(atMillis = 1, text = "hi"),
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "bash",
+                    summary = "pwd",
+                    detail = "pwd",
+                    toolCallId = "call-1",
+                    startedAtMillis = 1,
+                    endedAtMillis = 2,
+                ),
+                AgentEvent.ToolResult(atMillis = 3, toolName = "bash", summary = "pwd", detail = "boom", isError = true),
+            ),
+        )
+        assertTrue(model.rows.any { it.kind == TimelineRowKind.Error })
+        assertEquals(1, model.turns.first().toolCallCount)
+    }
+
+    @Test
     fun toolResultPairingIsScopedToItsTurn() {
         val model = buildChatTimeline(
             listOf(
