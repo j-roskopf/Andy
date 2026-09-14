@@ -7,6 +7,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -52,6 +53,7 @@ class AndyDesktopScreenshotTest {
 
     private val workspaceScenarios = listOf(
         AndyScreenshotScenario.AgentsCompletedDiff,
+        AndyScreenshotScenario.AgentsTimeline,
         AndyScreenshotScenario.SnapshotsPopulated,
         AndyScreenshotScenario.ControlsHardware,
         AndyScreenshotScenario.PerformanceSamples,
@@ -227,6 +229,11 @@ class AndyDesktopScreenshotTest {
                             onRoot().performMouseInput { moveTo(Offset(1100f, 700f)) }
                             waitForIdle()
                         }
+                        AndyScreenshotScenario.AgentsTimeline -> {
+                            waitUntil(timeoutMillis = 15_000) {
+                                onAllNodesWithTag("chat-timeline-view").fetchSemanticsNodes().isNotEmpty()
+                            }
+                        }
                         AndyScreenshotScenario.TracingPerfetto -> {
                             // Quick-start cards fill the left pane; scroll so the seeded
                             // user config row is inside the capture viewport.
@@ -253,7 +260,9 @@ class AndyDesktopScreenshotTest {
                     runOnUiThread { redrawTick++ }
                     waitForIdle()
                     val captureTarget = when (scenario) {
-                        AndyScreenshotScenario.MirrorPopOut -> onRoot()
+                        AndyScreenshotScenario.MirrorPopOut,
+                        AndyScreenshotScenario.AgentsTimeline,
+                        -> onRoot()
                         AndyScreenshotScenario.ProjectsSpecDetail,
                         AndyScreenshotScenario.ProjectsBuildDetail,
                         AndyScreenshotScenario.ProjectsVerification,

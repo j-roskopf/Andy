@@ -9,7 +9,7 @@ import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.LocalAgentRuntime
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.toAutonomy
 
 internal data class SideChatLaunchConfig(
@@ -22,7 +22,7 @@ internal data class SideChatLaunchConfig(
 
 internal fun sideChatAgent(parent: AgentKind, statuses: List<AgentCliStatus>): AgentKind {
     val ready = statuses.filter { it.ready }.map { it.kind }.distinct()
-    return ready.firstOrNull { it != parent && !it.isLocalModelBackend }
+    return ready.firstOrNull { it != parent && !it.isModelBackend }
         ?: ready.firstOrNull { it != parent }
         ?: ready.firstOrNull()
         ?: parent

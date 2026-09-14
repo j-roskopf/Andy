@@ -38,8 +38,15 @@ internal fun parseProviderJsonModels(output: String): List<Pair<String, String>>
         when (element) {
             is JsonPrimitive -> element.content.takeIf { it.isNotBlank() }?.let { it to humanizeProviderModel(it) }
             is JsonObject -> {
-                val id = element["id"]?.jsonPrimitive?.content ?: element["model"]?.jsonPrimitive?.content ?: element["name"]?.jsonPrimitive?.content
-                id?.takeIf { it.isNotBlank() }?.let { it to (element["label"]?.jsonPrimitive?.content ?: humanizeProviderModel(it)) }
+                val id = element["id"]?.jsonPrimitive?.content
+                    ?: element["model"]?.jsonPrimitive?.content
+                    ?: element["name"]?.jsonPrimitive?.content
+                id?.takeIf { it.isNotBlank() }?.let { modelId ->
+                    val label = element["label"]?.jsonPrimitive?.content
+                        ?: element["name"]?.jsonPrimitive?.content?.takeIf { it != modelId }
+                        ?: humanizeProviderModel(modelId)
+                    modelId to label
+                }
             }
             else -> null
         }

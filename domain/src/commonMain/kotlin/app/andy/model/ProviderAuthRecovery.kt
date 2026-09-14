@@ -68,6 +68,10 @@ fun providerLoginRemoteInstructions(agent: AgentKind): String {
 /** Actionable recovery copy when [raw] looks like a missing/expired provider login. */
 fun providerAuthFailureHint(agent: AgentKind, raw: String?): String? {
     if (!looksLikeProviderAuthFailure(raw)) return null
+    // OpenRouter has no vendor CLI to log into; recovery is replacing the saved key in Settings.
+    if (agent == AgentKind.OpenRouter) {
+        return "Not authorized — update the OpenRouter API key in Settings, then retry"
+    }
     val command = providerLoginCommand(agent)
     return when (agent) {
         AgentKind.ClaudeCode ->
@@ -100,6 +104,8 @@ data class ProviderAuthRecovery(
 
 fun AgentTask.providerAuthRecoveryOrNull(): ProviderAuthRecovery? {
     if (!looksLikeProviderAuthFailure(errorMessage)) return null
+    // No vendor CLI to open a login terminal for; the hint points at Settings instead.
+    if (agent == AgentKind.OpenRouter) return null
     return ProviderAuthRecovery(
         agent = agent,
         command = providerLoginCommand(agent),

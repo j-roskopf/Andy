@@ -35,7 +35,7 @@ internal class ProviderModelProbe {
             .mapNotNull { file -> runCatching { file.readText() }.getOrNull()?.let(::parseGooseModels) }
             .firstOrNull { it.isNotEmpty() }
             ?: runModelsCommand(binary, listOf("info", "-v"))?.let(::parseGooseModels)?.takeIf { it.isNotEmpty() }
-        AgentKind.ClaudeCode, AgentKind.Codex, AgentKind.Ollama, AgentKind.LMStudio -> null
+        AgentKind.ClaudeCode, AgentKind.Codex, AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> null
     }
 
     private fun runModelsCommand(binary: String, args: List<String>): String? = runCatching {

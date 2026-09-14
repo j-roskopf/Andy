@@ -113,7 +113,7 @@ fun skillRootsFor(
         File(home, ".goose/skills"),
         File(home, ".agents/skills"),
     )
-    AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
+    AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> emptyList()
 }
 
 /** Names of locally installed skills that an ACP provider may accidentally advertise globally. */

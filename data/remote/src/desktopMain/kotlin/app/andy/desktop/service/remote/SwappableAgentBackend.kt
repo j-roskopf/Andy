@@ -69,6 +69,7 @@ class SwappableAgentBackend(
     private val _providerDefaults = MutableStateFlow(initial.providerDefaults.value)
     private val _lastUsedAgent = MutableStateFlow(initial.lastUsedAgent.value)
     private val _localModelBackends = MutableStateFlow(initial.localModelBackends.value)
+    private val _openRouterKeyPresent = MutableStateFlow(initial.openRouterKeyPresent.value)
     private val _interactiveTerminalTaskIds = MutableStateFlow(initial.interactiveTerminalTaskIds.value)
     private val _attachedTerminalTaskIds = MutableStateFlow(initial.attachedTerminalTaskIds.value)
     private val _projects = MutableStateFlow((initial as ProjectWorkflowService).projects.value)
@@ -110,6 +111,7 @@ class SwappableAgentBackend(
         _providerDefaults.value = backend.providerDefaults.value
         _lastUsedAgent.value = backend.lastUsedAgent.value
         _localModelBackends.value = backend.localModelBackends.value
+        _openRouterKeyPresent.value = backend.openRouterKeyPresent.value
         _interactiveTerminalTaskIds.value = backend.interactiveTerminalTaskIds.value
         _attachedTerminalTaskIds.value = backend.attachedTerminalTaskIds.value
         _projects.value = workflows.projects.value
@@ -122,6 +124,7 @@ class SwappableAgentBackend(
             launch { backend.providerDefaults.collectLatest { _providerDefaults.value = it } }
             launch { backend.lastUsedAgent.collectLatest { _lastUsedAgent.value = it } }
             launch { backend.localModelBackends.collectLatest { _localModelBackends.value = it } }
+            launch { backend.openRouterKeyPresent.collectLatest { _openRouterKeyPresent.value = it } }
             launch { backend.interactiveTerminalTaskIds.collectLatest { _interactiveTerminalTaskIds.value = it } }
             launch { backend.attachedTerminalTaskIds.collectLatest { _attachedTerminalTaskIds.value = it } }
             launch { workflows.projects.collectLatest { _projects.value = it } }
@@ -152,6 +155,10 @@ class SwappableAgentBackend(
     }
 
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = runs().setQuotaAccess(agent, enabled)
+    override fun openRouterApiKeyPresent(): Boolean = runs().openRouterApiKeyPresent()
+    override val openRouterKeyPresent: StateFlow<Boolean> get() = _openRouterKeyPresent.asStateFlow()
+    override suspend fun setOpenRouterApiKey(key: String) = runs().setOpenRouterApiKey(key)
+    override suspend fun clearOpenRouterApiKey() = runs().clearOpenRouterApiKey()
     override fun setProviderLane(agent: AgentKind, lane: AgentLaneKind) = runs().setProviderLane(agent, lane)
     override fun skills(agent: AgentKind, directory: String?): StateFlow<List<AgentSkill>> =
         runs().skills(agent, directory)

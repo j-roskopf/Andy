@@ -44,7 +44,7 @@ import app.andy.model.AgentTask
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.WorkspaceState
 import app.andy.model.comboReady
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.service.AndyServices
 import app.andy.ui.agents.AgentTaskDetail
 import app.andy.ui.agents.ComposerCustomModelId
@@ -157,7 +157,7 @@ private fun SideChatStarter(
             customModel = selection.customModel
             reasoningEffort = defaults?.reasoningEffort
             localRuntime = when {
-                !agent.isLocalModelBackend -> null
+                !agent.isModelBackend -> null
                 else -> localRuntime ?: defaults?.localRuntime ?: LocalAgentRuntime.OpenCode
             }
             seededForAgent = agent
@@ -191,9 +191,9 @@ private fun SideChatStarter(
 
     val agentReady = AgentPickerOption(
         agent,
-        localRuntime.takeIf { agent.isLocalModelBackend },
+        localRuntime.takeIf { agent.isModelBackend },
     ).comboReady(cliStatuses, localBackends)
-    val localModelChosen = !agent.isLocalModelBackend ||
+    val localModelChosen = !agent.isModelBackend ||
         (localRuntime != null && (
             (modelId == ComposerCustomModelId && customModel.isNotBlank()) ||
                 (modelId != ComposerCustomModelId && !modelId.isNullOrBlank())

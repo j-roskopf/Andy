@@ -12,6 +12,7 @@ enum class AgentKind(val label: String, val cliName: String) {
     Goose("Goose", "goose"),
     Ollama("Ollama", "ollama"),
     LMStudio("LM Studio", "lmstudio"),
+    OpenRouter("OpenRouter", "openrouter"),
 }
 
 /** The transport that owns a task's provider conversation. Persisted per task. */
@@ -31,6 +32,7 @@ val AgentKind.acpSupported: Boolean
         AgentKind.Goose,
         AgentKind.Ollama,
         AgentKind.LMStudio,
+        AgentKind.OpenRouter,
         -> true
         AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
@@ -50,6 +52,7 @@ val AgentKind.hooksSupported: Boolean
         AgentKind.Goose,
         AgentKind.Ollama,
         AgentKind.LMStudio,
+        AgentKind.OpenRouter,
         -> false
     }
 
@@ -118,7 +121,7 @@ fun AgentKind.sandboxControlLabel(): String = when (this) {
     AgentKind.Codex, AgentKind.Cursor -> "sandbox"
     AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
     AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
-    AgentKind.Ollama, AgentKind.LMStudio -> "approvals"
+    AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> "approvals"
 }
 
 fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
@@ -163,7 +166,7 @@ fun AgentSandboxMode.labelFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.WorkspaceWrite -> "approve tools"
         AgentSandboxMode.None -> "auto"
     }
-    AgentKind.Ollama, AgentKind.LMStudio -> labelFor(AgentKind.OpenCode)
+    AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> labelFor(AgentKind.OpenCode)
 }
 
 fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
@@ -212,7 +215,7 @@ fun AgentSandboxMode.descriptionFor(agent: AgentKind): String = when (agent) {
         AgentSandboxMode.WorkspaceWrite -> "Goose asks before running tools that change the workspace."
         AgentSandboxMode.None -> "Goose auto-approves tool use (GOOSE_MODE=auto)."
     }
-    AgentKind.Ollama, AgentKind.LMStudio ->
+    AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter ->
         descriptionFor(AgentKind.OpenCode).replace("OpenCode", agent.label)
 }
 
@@ -387,7 +390,7 @@ object AgentModelCatalog {
             AgentModelOption("openai/gpt-5.4", "GPT-5.4", emptyList()),
             AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
         )
-        AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
+        AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> emptyList()
     }
 
     fun options(agent: AgentKind, discovered: Map<AgentKind, List<AgentModelOption>>): List<AgentModelOption> =
@@ -706,11 +709,13 @@ data class AgentQuotaAccess(
         // Multi-provider auth; no stable quota probe yet.
         AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
         AgentKind.Ollama, AgentKind.LMStudio -> false
+        // Key presence is consent; quota comes from GET /api/v1/key.
+        AgentKind.OpenRouter -> true
     }
 
     fun withAccess(agent: AgentKind, enabled: Boolean): AgentQuotaAccess = when (agent) {
         AgentKind.Codex, AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
-        AgentKind.Ollama, AgentKind.LMStudio -> this
+        AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> this
         AgentKind.ClaudeCode -> copy(claudeAccountAccess = enabled)
         AgentKind.Cursor -> copy(cursorAccountAccess = enabled)
         AgentKind.Antigravity -> copy(antigravityAccountAccess = enabled)
@@ -1144,7 +1149,8 @@ fun AgentTask.modelForCli(discovered: Map<AgentKind, List<AgentModelOption>> = A
         // Pi requires provider/model (e.g. openai-codex/gpt-5.5). A bare provider
         // column from a bad --list-models parse must not be passed as --model.
         AgentKind.Pi -> selected.takeIf { '/' in it }
-        AgentKind.Ollama, AgentKind.LMStudio -> prefixedLocalModelId(agent, selected).takeIf { it.isNotBlank() }
+        AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter ->
+            prefixedLocalModelId(agent, selected).takeIf { it.isNotBlank() }
         else -> selected
     }
 }
@@ -1422,7 +1428,8 @@ fun AgentTask.estimatedTokenCostUsd(inputTokens: Long?, outputTokens: Long?): Do
         }
         // Claude Code reports its billed total; these providers currently report no token usage.
         AgentKind.ClaudeCode, AgentKind.Antigravity, AgentKind.OpenCode, AgentKind.Pi,
-        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose, AgentKind.Ollama, AgentKind.LMStudio -> null
+        AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose, AgentKind.Ollama, AgentKind.LMStudio,
+        AgentKind.OpenRouter -> null
     } ?: return null
     return ((inputTokens ?: 0) * price.inputUsdPerMillion + (outputTokens ?: 0) * price.outputUsdPerMillion) / 1_000_000.0
 }
@@ -1464,6 +1471,10 @@ sealed interface AgentEvent {
         val locations: List<String> = emptyList(),
         /** Inline images returned by the tool (e.g. a screenshot), shown instead of a "[image]" placeholder. */
         val images: List<AgentToolImage> = emptyList(),
+        /** When the call was first observed (pending/in-progress). Null for legacy rows recorded before this field existed. */
+        val startedAtMillis: Long? = null,
+        /** When the call reached a terminal state (completed/failed). Null while pending or for legacy rows. */
+        val endedAtMillis: Long? = null,
     ) : AgentEvent
     data class ToolResult(
         override val atMillis: Long,

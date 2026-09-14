@@ -107,7 +107,7 @@ import app.andy.model.agentPickerOptions
 import app.andy.model.defaultLane
 import app.andy.model.hasVendorCli
 import app.andy.model.hooksSupported
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.rememberCopyText
 import app.andy.service.AndyServices
 import app.andy.service.AppUpdateService
@@ -254,7 +254,7 @@ fun SettingsScreen(
                     OrchestrationPreferencesPanel(services.orchestrationPreferences, providerModels)
                 }
                 AgentExecutionPreferencesPanel(services)
-                LocalModelsPanel(workspaceState, onUpdateWorkspace)
+                LocalModelsPanel(workspaceState, onUpdateWorkspace, services)
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentChatListPanel(workspaceState, onUpdateWorkspace)
@@ -1028,9 +1028,9 @@ private fun OrchestrationPreferencesPanel(
             val modelOptions = AgentModelCatalog.options(agent, providerModels)
             val modelLabel = roleSettings.model?.let { model ->
                 AgentModelCatalog.option(agent, model, providerModels)?.label ?: model
-            } ?: if (agent.isLocalModelBackend) "choose a model" else "provider default"
+            } ?: if (agent.isModelBackend) "choose a model" else "provider default"
             val runtime = prefs.runtimeFor(role)
-            val pickerLabel = if (agent.isLocalModelBackend) {
+            val pickerLabel = if (agent.isModelBackend) {
                 "${agent.label} · ${(runtime ?: app.andy.model.LocalAgentRuntime.OpenCode).label}"
             } else {
                 agent.label
@@ -1069,7 +1069,7 @@ private fun OrchestrationPreferencesPanel(
                                     val next = prefs.withAgent(role, option.agent).withRuntime(role, option.localRuntime)
                                     val selectedModel = next.settingsFor(role).model
                                     persist(
-                                        if (option.agent.isLocalModelBackend) {
+                                        if (option.agent.isModelBackend) {
                                             if (selectedModel != null && AgentModelCatalog.option(option.agent, selectedModel, providerModels) != null) {
                                                 next
                                             } else {
@@ -1102,12 +1102,12 @@ private fun OrchestrationPreferencesPanel(
                         containerColor = AndyColors.Neutral750,
                     ) {
                         DropdownMenuItem(
-                            text = { Text(if (agent.isLocalModelBackend) "choose a model" else "provider default", color = TextPrimary) },
+                            text = { Text(if (agent.isModelBackend) "choose a model" else "provider default", color = TextPrimary) },
                             onClick = {
                                 persist(prefs.withModel(role, null))
                                 expandedMenu = null
                             },
-                            enabled = !agent.isLocalModelBackend,
+                            enabled = !agent.isModelBackend,
                         )
                         modelOptions.forEach { option ->
                             DropdownMenuItem(
@@ -1268,10 +1268,22 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
 private fun LocalModelsPanel(
     workspace: WorkspaceState,
     update: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    services: AndyServices,
 ) {
+    val scope = rememberCoroutineScope()
+    val quotas by services.agentRuns.providerQuotas.collectAsState()
+    val openRouterQuota = quotas[app.andy.model.AgentKind.OpenRouter]
+    var openRouterKeyDraft by remember { mutableStateOf("") }
+    // Populated from the observed flow below; never read the OS keychain during composition.
+    var openRouterKeyPresent by remember { mutableStateOf(false) }
+    var openRouterKeyMessage by remember { mutableStateOf<String?>(null) }
+    val observedKeyPresent by services.agentRuns.openRouterKeyPresent.collectAsState()
+    LaunchedEffect(observedKeyPresent) {
+        openRouterKeyPresent = observedKeyPresent
+    }
     SettingsGroup(
-        title = "Local models",
-        description = "Ollama and LM Studio are OpenAI-compatible backends. Andy launches OpenCode, Pi, or Goose against these URLs — it does not start the servers.",
+        title = "Model backends",
+        description = "Ollama, LM Studio, and OpenRouter are OpenAI-compatible backends. Andy launches OpenCode, Pi, or Goose against these URLs — it does not start the servers. The OpenRouter API key is stored in the OS keychain on the host where andyd runs.",
         ) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Ollama", color = TextPrimary, fontSize = 13.sp)
@@ -1314,6 +1326,97 @@ private fun LocalModelsPanel(
                 textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                 colors = fieldColors(),
             )
+            Text("OpenRouter", color = TextPrimary, fontSize = 13.sp)
+            Text("Base URL", color = TextSecondary, fontSize = 12.sp)
+            TextField(
+                workspace.openRouterBaseUrl,
+                { value -> update { it.copy(openRouterBaseUrl = value) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+                placeholder = { Text(app.andy.model.DefaultOpenRouterBaseUrl, color = TextSecondary) },
+            )
+            Text(
+                if (openRouterKeyPresent) "API key (saved on this host)" else "API key",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+            TextField(
+                openRouterKeyDraft,
+                { value -> openRouterKeyDraft = value },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                colors = fieldColors(),
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                placeholder = {
+                    Text(
+                        if (openRouterKeyPresent) "••••••••  (enter a new key to replace)" else "sk-or-…",
+                        color = TextSecondary,
+                    )
+                },
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            val result = services.agentRuns.setOpenRouterApiKey(openRouterKeyDraft)
+                            openRouterKeyMessage = if (result.isSuccess) result.stdout else result.stderr
+                            if (result.isSuccess) {
+                                openRouterKeyDraft = ""
+                                openRouterKeyPresent = true
+                                services.agentRuns.refreshProviderQuotas()
+                            }
+                        }
+                    },
+                    enabled = openRouterKeyDraft.isNotBlank(),
+                ) {
+                    Text(if (openRouterKeyPresent) "Update key" else "Save key")
+                }
+                if (openRouterKeyPresent) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                val result = services.agentRuns.clearOpenRouterApiKey()
+                                openRouterKeyMessage = if (result.isSuccess) result.stdout else result.stderr
+                                if (result.isSuccess) openRouterKeyPresent = false
+                            }
+                        },
+                    ) {
+                        Text("Clear key")
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            services.agentRuns.refreshCliStatuses()
+                            services.agentRuns.refreshProviderQuotas()
+                            openRouterKeyPresent = services.agentRuns.openRouterApiKeyPresent()
+                            openRouterKeyMessage = "Refreshed models and usage"
+                        }
+                    },
+                ) {
+                    Text("Refresh usage")
+                }
+            }
+            openRouterKeyMessage?.let { msg ->
+                Text(msg, color = TextSecondary, fontSize = 12.sp)
+            }
+            if (openRouterQuota != null && openRouterQuota.windows.isNotEmpty()) {
+                Text("Usage", color = TextSecondary, fontSize = 12.sp)
+                openRouterQuota.windows.forEach { window ->
+                    val detail = listOfNotNull(
+                        window.label,
+                        window.detail,
+                        window.remainingFraction?.let { pct -> "${(pct * 100).toInt()}% left" },
+                    ).joinToString(" · ")
+                    Text(detail, color = TextPrimary, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+            } else if (openRouterKeyPresent) {
+                Text("Usage appears after a successful key probe.", color = TextSecondary, fontSize = 12.sp)
+            }
         }
     }
 }

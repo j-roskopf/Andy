@@ -6,6 +6,7 @@ import app.andy.model.AgentFileChange
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentToolKind
@@ -222,6 +223,46 @@ class AcpLaneTest {
         assertEquals("Andy MCP · tap", completed.toolName)
         assertEquals("x=666, y=1837, serial=R3CXB056ZZB", completed.summary)
         assertEquals(AgentToolState.Completed, completed.state)
+    }
+
+    @Test
+    fun mapperOnlyStampsStartOnNonTerminalObservations() {
+        val pending = AcpEventMapper.map(
+            SessionUpdate.ToolCall(
+                toolCallId = com.agentclientprotocol.model.ToolCallId("timing-1"),
+                title = "bash",
+                kind = ToolKind.EXECUTE,
+                status = ToolCallStatus.PENDING,
+                content = emptyList(),
+                locations = emptyList(),
+                rawInput = buildJsonObject { put("command", "pwd") },
+                rawOutput = null,
+            ),
+            atMillis = 100,
+        ) as AgentEvent.ToolCall
+        assertEquals(100L, pending.startedAtMillis)
+        assertEquals(null, pending.endedAtMillis)
+
+        val completed = AcpEventMapper.map(
+            SessionUpdate.ToolCallUpdate(
+                toolCallId = com.agentclientprotocol.model.ToolCallId("timing-1"),
+                title = null,
+                kind = ToolKind.EXECUTE,
+                status = ToolCallStatus.COMPLETED,
+                content = null,
+                locations = null,
+                rawInput = null,
+                rawOutput = null,
+            ),
+            atMillis = 200,
+        ) as AgentEvent.ToolCall
+        // Terminal-only observation: no observed start, so the timeline gap-approximates.
+        assertEquals(null, completed.startedAtMillis)
+        assertEquals(200L, completed.endedAtMillis)
+
+        val merged = AcpEventMapper.reduce(listOf(pending), completed).single() as AgentEvent.ToolCall
+        assertEquals(100L, merged.startedAtMillis)
+        assertEquals(200L, merged.endedAtMillis)
     }
 
     @Test
@@ -630,6 +671,61 @@ class AcpLaneTest {
                 replayScratch,
             ),
         )
+    }
+
+    @Test
+    fun transcriptStoreRoundTripsToolCallTimingFields() {
+        val root = createTempDirectory("andy-acp-tool-timing").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.append(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 200,
+                    toolName = "bash",
+                    summary = "pwd",
+                    detail = "pwd",
+                    toolCallId = "call-1",
+                    startedAtMillis = 100,
+                    endedAtMillis = 200,
+                ),
+            )
+            val loaded = store.load("task-1").single() as AgentEvent.ToolCall
+            assertEquals(100, loaded.startedAtMillis)
+            assertEquals(200, loaded.endedAtMillis)
+
+            // Legacy row without the new fields still loads (0 → null).
+            val file = root.resolve("task-1/transcript.jsonl")
+            file.writeText(
+                """{"type":"tool","atMillis":5,"toolName":"read","summary":"x","detail":"x","toolCallId":"legacy"}""" + "\n",
+            )
+            val legacy = store.load("task-1").single() as AgentEvent.ToolCall
+            assertEquals(null, legacy.startedAtMillis)
+            assertEquals(null, legacy.endedAtMillis)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun transcriptStoreRoundTripsSkillMetadata() {
+        val root = createTempDirectory("andy-acp-skill-meta").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.append(
+                "task-skills",
+                AgentEvent.UserMessage(
+                    atMillis = 10,
+                    text = "hi",
+                    skills = listOf(AgentSkill("s", "desc", "/p", userInvocable = false)),
+                ),
+            )
+            val loaded = store.load("task-skills").single() as AgentEvent.UserMessage
+            assertEquals("desc", loaded.skills.single().description)
+            assertFalse(loaded.skills.single().userInvocable)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test

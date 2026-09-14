@@ -125,7 +125,7 @@ class AgentCliLocator {
                 "$home/.local/bin/goose",
                 "$home/Library/Application Support/Block/goose/bin/goose",
             )
-            AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
+            AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> emptyList()
         }
         return (common + specific).firstOrNull { File(it).canExecute() }
     }

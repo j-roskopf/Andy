@@ -30,6 +30,7 @@ Actions workflow). PR CI runs `verifyRoborazziDesktop` on `macos-latest` only.
 | Project new build | Projects | New build dialog with linked plan and build profile | `desktop-projects-new-build.png` | yes |
 | Project new spec | Projects | New spec dialog filled with title, brief, and scratchpad | `desktop-projects-new-spec.png` | yes |
 | Agents completed diff | Agents | completed Codex transcript and deterministic diff | `desktop-agents-completed-diff.png` | yes |
+| Agents timeline | Agents | isolated chat timeline with seeded turn, tool call, brush selection, and detail pane | `desktop-agents-timeline.png` | yes |
 | Snapshots populated | Snapshots | boot and manual AVD snapshots | `desktop-snapshots-populated.png` | yes |
 | Controls hardware | Controls | selected Pixel 8 control surface | `desktop-controls-hardware.png` | yes |
 | Performance samples | Performance | CPU, memory, process, and frame timing data | `desktop-performance-samples.png` | yes |

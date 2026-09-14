@@ -23,10 +23,10 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
     ## Starting an agent
 
     MCP: `chat.start` — required `prompt`, `agent` (one of ClaudeCode, Codex, Cursor,
-    Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, Ollama, LMStudio). Optional: `title`, `projectId`,
+    Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, Ollama, LMStudio, OpenRouter). Optional: `title`, `projectId`,
     `directory`, `model`, `autonomy` (ReadOnly | Standard | Full), `sandboxMode`
     (ReadOnly | WorkspaceWrite | None), `callerTaskId`, `parentChatTaskId`,
-    `useWorktree`, `existingWorktreePath`. For Ollama and LM Studio, `runtime`
+    `useWorktree`, `existingWorktreePath`. For Ollama, LM Studio, and OpenRouter, `runtime`
     (OpenCode | Pi | Goose) and `model` are required.
 
     **Autonomy / sandbox inheritance:** when `autonomy` is omitted, Andy inherits the

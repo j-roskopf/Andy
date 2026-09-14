@@ -21,7 +21,7 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.defaultLane
 import app.andy.model.hasVendorCli
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.AgentPlanEntry
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentToolKind
@@ -35,6 +35,8 @@ import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentQuotaAccess
+import app.andy.model.AgentQuotaSource
+import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
@@ -89,6 +91,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.BufferedReader
@@ -186,6 +189,8 @@ class McpAgentRunClient(
 
     private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
     override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends.asStateFlow()
+    private val _openRouterKeyPresent = MutableStateFlow(false)
+    override val openRouterKeyPresent: StateFlow<Boolean> = _openRouterKeyPresent.asStateFlow()
 
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()
@@ -229,6 +234,7 @@ class McpAgentRunClient(
                 delay(2_000)
             }
         }
+        refreshOpenRouterKeyStatus()
     }
 
     fun attachLocalTerminalBridge(local: DesktopAgentRunService) {
@@ -397,7 +403,21 @@ class McpAgentRunClient(
             "session" -> AgentEvent.SessionStarted(atMillis, obj.string("sessionId"), obj.string("model"))
             "assistant" -> AgentEvent.AssistantText(atMillis, obj.string("text").orEmpty(), obj.bool("stream"))
             "thinking" -> AgentEvent.Thinking(atMillis, obj.string("text").orEmpty(), obj.bool("stream"))
-            "user" -> AgentEvent.UserMessage(atMillis, obj.string("text").orEmpty(), imagePaths = obj["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty())
+            "user" -> AgentEvent.UserMessage(
+                atMillis = atMillis,
+                text = obj.string("text").orEmpty(),
+                skills = obj["skills"]?.jsonArray?.map { skill ->
+                    val value = skill.jsonObject
+                    AgentSkill(
+                        name = value.string("name").orEmpty(),
+                        description = value.string("description").orEmpty(),
+                        path = value.string("path").orEmpty(),
+                        userInvocable = value["userInvocable"]?.jsonPrimitive?.booleanOrNull ?: true,
+                    )
+                }.orEmpty(),
+                imagePaths = obj["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
+                attachments = obj["attachments"]?.jsonArray?.map { it.jsonObject.toAgentAttachment() }.orEmpty(),
+            )
             "tool" -> AgentEvent.ToolCall(
                 atMillis = atMillis,
                 toolName = obj.string("toolName").orEmpty(),
@@ -407,6 +427,8 @@ class McpAgentRunClient(
                 kind = AgentToolKind.entries.firstOrNull { it.name == obj.string("kind") },
                 state = AgentToolState.entries.firstOrNull { it.name == obj.string("state") } ?: AgentToolState.Completed,
                 locations = obj["locations"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
+                startedAtMillis = obj.long("startedAtMillis")?.takeIf { it > 0 },
+                endedAtMillis = obj.long("endedAtMillis")?.takeIf { it > 0 },
             )
             "tool-result" -> AgentEvent.ToolResult(atMillis, obj.string("toolName"), obj.string("summary").orEmpty(), obj.string("detail").orEmpty(), obj.bool("isError"))
             "error" -> AgentEvent.TaskError(atMillis, obj.string("text").orEmpty())
@@ -487,6 +509,19 @@ class McpAgentRunClient(
         relativePath?.let { put("relativePath", it) }
     }
 
+    /** Inverse of [app.andy.model.AgentAttachment.toJsonObject], for descriptors echoed back on transcript events. */
+    private fun JsonObject.toAgentAttachment(): app.andy.model.AgentAttachment = app.andy.model.AgentAttachment(
+        id = string("id").orEmpty(),
+        displayName = string("displayName").orEmpty(),
+        kind = app.andy.model.AgentAttachmentKind.entries.firstOrNull { it.name == string("kind") }
+            ?: app.andy.model.AgentAttachmentKind.Text,
+        mediaType = string("mediaType") ?: "text/plain; charset=utf-8",
+        byteCount = long("byteCount") ?: 0L,
+        lineCount = long("lineCount")?.takeIf { it > 0 },
+        sha256 = string("sha256").orEmpty(),
+        relativePath = string("relativePath"),
+    )
+
     private fun JsonObject.string(key: String): String? =
         this[key]?.jsonPrimitive?.contentOrNull
 
@@ -535,7 +570,7 @@ class McpAgentRunClient(
         _localModelBackends.value = agents.mapNotNull { element ->
             val obj = element.jsonObject
             val kind = AgentKind.entries.firstOrNull { it.name == obj.string("id") } ?: return@mapNotNull null
-            if (!kind.isLocalModelBackend) return@mapNotNull null
+            if (!kind.isModelBackend) return@mapNotNull null
             val reachable = obj["reachable"]?.jsonPrimitive?.booleanOrNull
                 ?: obj["reachable"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
                 ?: false
@@ -682,8 +717,72 @@ class McpAgentRunClient(
             }
         }
 
-    override suspend fun refreshProviderQuotas() = Unit
+    override suspend fun refreshProviderQuotas() {
+        val raw = runCatching { callTool("settings.provider_quotas", emptyMap()) }.getOrNull() ?: return
+        val quotas = runCatching { json.parseToJsonElement(raw).jsonObject["quotas"]?.jsonObject }.getOrNull() ?: return
+        _providerQuotas.value = quotas.mapNotNull { (key, value) ->
+            val kind = AgentKind.entries.firstOrNull { it.name == key } ?: return@mapNotNull null
+            parseProviderQuota(value.jsonObject)?.let { kind to it }
+        }.toMap()
+    }
+
+    private fun parseProviderQuota(obj: JsonObject): AgentProviderQuota? {
+        val windows = obj["windows"]?.jsonArray?.mapNotNull { element ->
+            val window = element.jsonObject
+            val label = window.string("label")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            AgentQuotaWindow(
+                label = label,
+                remainingFraction = window["remainingFraction"]?.jsonPrimitive?.floatOrNull,
+                resetAtMillis = window.long("resetAtMillis"),
+                detail = window.string("detail"),
+            )
+        }.orEmpty()
+        if (windows.isEmpty()) return null
+        return AgentProviderQuota(
+            windows = windows,
+            updatedAtMillis = obj.long("updatedAtMillis") ?: System.currentTimeMillis(),
+            source = AgentQuotaSource.entries.firstOrNull { it.name == obj.string("source") }
+                ?: AgentQuotaSource.ProviderEvent,
+            accountLabel = obj.string("accountLabel"),
+            lifetimeTokens = obj.long("lifetimeTokens"),
+            providerTokenDays = obj["providerTokenDays"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.longOrNull }
+                .orEmpty(),
+        )
+    }
+
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
+
+    override fun openRouterApiKeyPresent(): Boolean = _openRouterKeyPresent.value
+
+    override suspend fun setOpenRouterApiKey(key: String): CommandResult = runCatching {
+        callTool(
+            "settings.openrouter_key_set",
+            mapOf("apiKey" to JsonPrimitive(key)),
+        )
+        _openRouterKeyPresent.value = true
+        refreshComposerOptions()
+        CommandResult.success("OpenRouter API key saved on this host")
+    }.getOrElse { CommandResult.failure(it.message.orEmpty()) }
+
+    override suspend fun clearOpenRouterApiKey(): CommandResult = runCatching {
+        callTool("settings.openrouter_key_clear", emptyMap())
+        _openRouterKeyPresent.value = false
+        _providerQuotas.update { it - AgentKind.OpenRouter }
+        refreshComposerOptions()
+        CommandResult.success("OpenRouter API key cleared")
+    }.getOrElse { CommandResult.failure(it.message.orEmpty()) }
+
+    private fun refreshOpenRouterKeyStatus() {
+        scope.launch {
+            val raw = runCatching { callTool("settings.openrouter_key_status", emptyMap()) }.getOrNull() ?: return@launch
+            val present = runCatching {
+                json.parseToJsonElement(raw).jsonObject["present"]?.jsonPrimitive?.booleanOrNull
+            }.getOrNull() == true
+            _openRouterKeyPresent.value = present
+        }
+    }
+
     private fun normalizeProbeDirectory(directory: String?): String? {
         val probes = sshProbes
         return directory

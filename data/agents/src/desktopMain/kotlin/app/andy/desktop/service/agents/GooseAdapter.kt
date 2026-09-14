@@ -4,7 +4,7 @@ import app.andy.model.AgentKind
 import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentTask
 import app.andy.model.defaultSandboxMode
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelIdWithoutProviderPrefix
 import app.andy.model.localModelProviderId
 import app.andy.model.modelForCli
@@ -72,7 +72,7 @@ internal fun gooseLaunchEnvironment(task: AgentTask): Map<String, String> = buil
 
 internal fun gooseProviderAndModel(task: AgentTask): Pair<String?, String?> {
     val selected = task.modelForCli()?.trim()?.takeIf { it.isNotBlank() } ?: return null to null
-    if (task.agent.isLocalModelBackend) {
+    if (task.agent.isModelBackend) {
         val model = localModelIdWithoutProviderPrefix(task.agent, selected).takeIf { it.isNotBlank() }
         return task.agent.localModelProviderId to model
     }

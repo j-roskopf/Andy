@@ -194,6 +194,8 @@ object AcpEventMapper {
             ).distinct().joinToString("\n")
             if (extra.isBlank()) input else "$input${AcpToolCallPresentation.DetailSeparator}$extra"
         } ?: presented.detail
+        val agentState = status.toAgentState()
+        val isTerminal = agentState == AgentToolState.Completed || agentState == AgentToolState.Failed
         return AgentEvent.ToolCall(
             atMillis = atMillis,
             toolName = presented.toolName,
@@ -201,9 +203,14 @@ object AcpEventMapper {
             detail = detail,
             toolCallId = id,
             kind = agentKind,
-            state = status.toAgentState(),
+            state = agentState,
             locations = resolvedLocations,
             images = content.extractImages(),
+            // A terminal-only update (first observation already completed/failed) has no observed
+            // start. Leave it null so the timeline gap-approximates instead of asserting an exact
+            // zero-duration span; only non-terminal observations record the start.
+            startedAtMillis = if (isTerminal) null else atMillis,
+            endedAtMillis = if (isTerminal) atMillis else null,
         )
     }
 

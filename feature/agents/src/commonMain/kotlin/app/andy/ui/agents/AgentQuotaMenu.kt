@@ -133,7 +133,7 @@ private fun ProviderUsagePanel(
 
         AndyHorizontalDivider()
 
-        if (!accountAccessEnabled && agent != AgentKind.Codex) {
+        if (!accountAccessEnabled && agent != AgentKind.Codex && agent != AgentKind.OpenRouter) {
             AccountAccessPrompt(agent, onEnableAccountAccess)
         } else if (windows.isEmpty()) {
             Column(
@@ -195,6 +195,7 @@ private fun ProviderUsagePanel(
                     AgentKind.Antigravity -> "Refreshed from the running local Antigravity session."
                     AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
                     AgentKind.Ollama, AgentKind.LMStudio -> "Account-limit probes are not available for this provider yet."
+                    AgentKind.OpenRouter -> "Refreshed from OpenRouter GET /api/v1/key using the API key saved on this host."
                 }
             } else {
                 "Local activity comes from Andy task history. Account-limit access is always opt-in per provider."
@@ -203,7 +204,7 @@ private fun ProviderUsagePanel(
             fontFamily = MonoFont,
             fontSize = 9.sp,
         )
-        if (accountAccessEnabled && agent != AgentKind.Codex) {
+        if (accountAccessEnabled && agent != AgentKind.Codex && agent != AgentKind.OpenRouter) {
             FilterPill("turn off account access", false, agentColor(agent), onClick = onDisableAccountAccess)
         }
     }
@@ -228,6 +229,7 @@ private fun AccountAccessPrompt(agent: AgentKind, onEnable: () -> Unit) {
                 AgentKind.Codex -> "Codex limits are read directly from the installed Codex app server."
                 AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
                 AgentKind.Ollama, AgentKind.LMStudio -> "This provider does not expose a stable account-limit API Andy can query yet."
+                AgentKind.OpenRouter -> "OpenRouter usage is read with the API key saved in Settings whenever the key is present."
             },
             color = TextSecondary,
             fontFamily = MonoFont,

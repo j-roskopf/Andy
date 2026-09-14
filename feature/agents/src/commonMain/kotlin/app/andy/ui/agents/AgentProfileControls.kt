@@ -23,7 +23,7 @@ import app.andy.model.ProjectAgentProfile
 import app.andy.model.agentPickerOptions
 import app.andy.model.comboReady
 import app.andy.model.agentModelMenuSections
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.runtimeKind
 import app.andy.ui.components.FilterPill
 import app.andy.ui.components.LabeledField
@@ -105,7 +105,7 @@ fun AgentProviderModelProfileControls(
     if (groupedModels != null) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ProfileOptionRow(wrapOptions) {
-                if (!profile.agent.isLocalModelBackend) {
+                if (!profile.agent.isModelBackend) {
                     FilterPill("provider default", profile.model == null, Cyan) {
                         onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
                     }
@@ -135,7 +135,7 @@ fun AgentProviderModelProfileControls(
         }
     } else {
         ProfileOptionRow(wrapOptions) {
-            if (!profile.agent.isLocalModelBackend) {
+            if (!profile.agent.isModelBackend) {
                 FilterPill("provider default", profile.model == null, Cyan) {
                     onChange(profile.copy(model = null, reasoningEffort = null, fastMode = false))
                 }

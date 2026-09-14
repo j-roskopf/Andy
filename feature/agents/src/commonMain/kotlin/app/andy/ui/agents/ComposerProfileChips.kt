@@ -25,7 +25,7 @@ import app.andy.model.LocalAgentRuntime
 import app.andy.model.agentPickerOptions
 import app.andy.model.comboReady
 import app.andy.model.agentModelMenuSections
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.labelFor
 import app.andy.model.runtimeKind
 import app.andy.ui.components.ComposerEffortChip
@@ -70,7 +70,7 @@ fun ComposerProfileChips(
 
     Box {
         ComposerProviderChip(
-            text = AgentPickerOption(agent, localRuntime.takeIf { agent.isLocalModelBackend }).label,
+            text = AgentPickerOption(agent, localRuntime.takeIf { agent.isModelBackend }).label,
             onClick = { agentMenuExpanded = true },
             leadingContent = { AgentPillIcon(agent) },
         )
@@ -122,7 +122,7 @@ fun ComposerProfileChips(
             onClick = { modelMenuExpanded = true },
         )
         DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
-            if (!agent.isLocalModelBackend) {
+            if (!agent.isModelBackend) {
                 DropdownMenuItem(
                     text = { Text("provider default", color = TextPrimary) },
                     onClick = {

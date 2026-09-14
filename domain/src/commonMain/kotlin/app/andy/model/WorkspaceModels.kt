@@ -197,6 +197,13 @@ data class WorkspaceState(
      * (and can refine a previously adopted provider title). Explicit titles are left alone.
      */
     val agentAdoptProviderSessionTitles: Boolean = true,
+    /**
+     * Last-used Timeline list mode (`Turns` / `Calls`). Legacy value `Duration` migrates to
+     * Turns + [agentTimelineDuration]=true on load.
+     */
+    val agentTimelineAxis: String = "Turns",
+    /** When true, lane cells are time-proportional; when false, equal-width step cells. */
+    val agentTimelineDuration: Boolean = false,
     /** Names of [app.andy.AndyDestination] entries hidden from the sidebar. Settings is never included. */
     val disabledDestinations: Set<String> = emptySet(),
     /** Project ids whose chat lists are expanded in the Projects sidebar. Collapsed by default. */
@@ -210,6 +217,8 @@ data class WorkspaceState(
     val ollamaBearerToken: String = "",
     val lmStudioBaseUrl: String = DefaultLmStudioBaseUrl,
     val lmStudioBearerToken: String = "",
+    /** OpenAI-compatible OpenRouter endpoint. API key lives in the OS keychain, not here. */
+    val openRouterBaseUrl: String = DefaultOpenRouterBaseUrl,
     /**
      * Saved SSH targets for desktop remote (`Host` alias or `user@host`). Non-secret only —
      * optional passwords live in the OS keychain (`Andy SSH`), not in this file.

@@ -1,6 +1,6 @@
 package app.andy.model
 
-/** Coding-agent CLI that actually owns the loop for an Ollama / LM Studio chat. */
+/** Coding-agent CLI that actually owns the loop for an Ollama / LM Studio / OpenRouter chat. */
 enum class LocalAgentRuntime(val agent: AgentKind, val label: String) {
     OpenCode(AgentKind.OpenCode, "OpenCode"),
     Pi(AgentKind.Pi, "Pi"),
@@ -9,23 +9,33 @@ enum class LocalAgentRuntime(val agent: AgentKind, val label: String) {
 
 const val DefaultOllamaBaseUrl = "http://127.0.0.1:11434/v1"
 const val DefaultLmStudioBaseUrl = "http://127.0.0.1:1234/v1"
+const val DefaultOpenRouterBaseUrl = "https://openrouter.ai/api/v1"
 
+/** True local HTTP backends (no cloud billing key required). */
 val AgentKind.isLocalModelBackend: Boolean
     get() = this == AgentKind.Ollama || this == AgentKind.LMStudio
 
+/**
+ * Andy-owned model backends launched through OpenCode / Pi / Goose — includes local
+ * Ollama/LM Studio and cloud OpenRouter.
+ */
+val AgentKind.isModelBackend: Boolean
+    get() = isLocalModelBackend || this == AgentKind.OpenRouter
+
 val AgentKind.hasVendorCli: Boolean
-    get() = !isLocalModelBackend
+    get() = !isModelBackend
 
 /** OpenCode / Goose / Pi provider id written into `--model provider/id`. */
 val AgentKind.localModelProviderId: String
     get() = when (this) {
         AgentKind.Ollama -> "ollama"
         AgentKind.LMStudio -> "lmstudio"
-        else -> error("${label} is not a local model backend")
+        AgentKind.OpenRouter -> "openrouter"
+        else -> error("${label} is not a model backend")
     }
 
 fun AgentKind.runtimeKind(localRuntime: LocalAgentRuntime?): AgentKind =
-    if (isLocalModelBackend) (localRuntime ?: LocalAgentRuntime.OpenCode).agent else this
+    if (isModelBackend) (localRuntime ?: LocalAgentRuntime.OpenCode).agent else this
 
 fun AgentTask.runtimeKind(): AgentKind = agent.runtimeKind(localRuntime)
 
@@ -45,7 +55,7 @@ fun parseLocalAgentRuntime(raw: String?): LocalAgentRuntime? =
 
 /**
  * Composer / MCP identity for one picker row.
- * Vendor agents stay a single row; local backends expand to one row per runtime.
+ * Vendor agents stay a single row; model backends expand to one row per runtime.
  */
 data class AgentPickerOption(
     val agent: AgentKind,
@@ -59,7 +69,7 @@ data class AgentPickerOption(
 
 fun agentPickerOptions(): List<AgentPickerOption> =
     AgentKind.entries.filter { it.hasVendorCli }.map { AgentPickerOption(it) } +
-        AgentKind.entries.filter { it.isLocalModelBackend }.flatMap { backend ->
+        AgentKind.entries.filter { it.isModelBackend }.flatMap { backend ->
             LocalAgentRuntime.entries.map { AgentPickerOption(backend, it) }
         }
 
@@ -70,7 +80,7 @@ fun prefixedLocalModelId(backend: AgentKind, rawId: String): String {
     return if (id.startsWith(prefix, ignoreCase = true)) id else prefix + id
 }
 
-/** Catalog / API id with Andy's `ollama/` or `lmstudio/` prefix removed. */
+/** Catalog / API id with Andy's `ollama/` / `lmstudio/` / `openrouter/` prefix removed. */
 fun localModelIdWithoutProviderPrefix(backend: AgentKind, stored: String): String {
     val id = stored.trim()
     val prefix = "${backend.localModelProviderId}/"
@@ -86,24 +96,39 @@ fun openaiCompatUrlToProviderHost(url: String): String {
 fun WorkspaceState.localModelBaseUrl(backend: AgentKind): String = when (backend) {
     AgentKind.Ollama -> ollamaBaseUrl.trim().ifBlank { DefaultOllamaBaseUrl }
     AgentKind.LMStudio -> lmStudioBaseUrl.trim().ifBlank { DefaultLmStudioBaseUrl }
-    else -> error("${backend.label} is not a local model backend")
+    AgentKind.OpenRouter -> openRouterBaseUrl.trim().ifBlank { DefaultOpenRouterBaseUrl }
+    else -> error("${backend.label} is not a model backend")
 }
 
-fun WorkspaceState.localModelBearerToken(backend: AgentKind): String? = when (backend) {
+/**
+ * Optional bearer for Ollama / LM Studio from workspace prefs.
+ * OpenRouter keys live in the OS keychain — pass them via [openRouterApiKey].
+ */
+fun WorkspaceState.localModelBearerToken(
+    backend: AgentKind,
+    openRouterApiKey: String? = null,
+): String? = when (backend) {
     AgentKind.Ollama -> ollamaBearerToken.trim().takeIf { it.isNotEmpty() }
     AgentKind.LMStudio -> lmStudioBearerToken.trim().takeIf { it.isNotEmpty() }
+    AgentKind.OpenRouter -> openRouterApiKey?.trim()?.takeIf { it.isNotEmpty() }
     else -> null
 }
 
 fun parseOpenAiCompatModels(output: String, backend: AgentKind): List<AgentModelOption> {
     val rows = parseProviderJsonModels(output)
-    return rows.map { (id, label) ->
+    val options = rows.map { (id, label) ->
         AgentModelOption(
             id = prefixedLocalModelId(backend, id),
             label = label,
             efforts = emptyList(),
         )
     }.distinctBy { it.id }
+    // OpenRouter returns hundreds of models in API order; sort for the picker.
+    return if (backend == AgentKind.OpenRouter) {
+        options.sortedBy { it.label.lowercase() }
+    } else {
+        options
+    }
 }
 
 /** Goose is ready as a local runtime if the binary exists; `goose configure` is not required. */
@@ -119,7 +144,7 @@ fun AgentPickerOption.comboReady(
     cliStatuses: List<AgentCliStatus>,
     localBackends: Map<AgentKind, Boolean>,
 ): Boolean {
-    if (agent.isLocalModelBackend) {
+    if (agent.isModelBackend) {
         return localModelComboReady(
             backendReachable = localBackends[agent] == true,
             runtimeStatus = cliStatuses.firstOrNull { it.kind == runtimeKind },
@@ -136,8 +161,14 @@ fun hasAvailableAgentProvider(
 ): Boolean = agentPickerOptions().any { it.comboReady(cliStatuses, localBackends) }
 
 fun AgentTaskDraft.localModelLaunchError(): String? {
-    if (!agent.isLocalModelBackend) return null
+    if (!agent.isModelBackend) return null
     if (localRuntime == null) return "runtime is required for ${agent.label} (OpenCode, Pi, or Goose)"
     if (model.isNullOrBlank()) return "a model is required for ${agent.label}"
     return null
+}
+
+/** Attribution headers OpenRouter asks apps to send for rankings / support. */
+object OpenRouterAttribution {
+    const val HttpReferer = "https://andy.app"
+    const val Title = "Andy"
 }

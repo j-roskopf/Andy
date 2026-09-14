@@ -202,6 +202,9 @@ class DesktopWorkspaceStore(
             } ?: AgentMessageDeliveryMode.Immediate,
             agentPinPriorityChats = props.getProperty("agentPinPriorityChats")?.toBooleanStrictOrNull() ?: false,
             agentAdoptProviderSessionTitles = props.getProperty("agentAdoptProviderSessionTitles")?.toBooleanStrictOrNull() ?: true,
+            agentTimelineAxis = migrateTimelineAxis(props.getProperty("agentTimelineAxis")),
+            agentTimelineDuration = props.getProperty("agentTimelineDuration")?.toBooleanStrictOrNull()
+                ?: (props.getProperty("agentTimelineAxis") == "Duration"),
             disabledDestinations = props.getProperty("disabledDestinations").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             expandedProjectChatIds = props.getProperty("expandedProjectChatIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
             collapsedWorkflowTaskIds = props.getProperty("collapsedWorkflowTaskIds").orEmpty().lines().filter { it.isNotBlank() }.toSet(),
@@ -209,6 +212,7 @@ class DesktopWorkspaceStore(
             ollamaBearerToken = props.getProperty("ollamaBearerToken").orEmpty(),
             lmStudioBaseUrl = props.getProperty("lmStudioBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().lmStudioBaseUrl,
             lmStudioBearerToken = props.getProperty("lmStudioBearerToken").orEmpty(),
+            openRouterBaseUrl = props.getProperty("openRouterBaseUrl")?.takeIf { it.isNotBlank() } ?: WorkspaceState().openRouterBaseUrl,
             savedSshTargets = props.getProperty("savedSshTargets").orEmpty().lines().filter { it.isNotBlank() },
             sshTargetAliases = loadIndexedStringMap(props, "sshTargetAlias"),
             iosCmioIds = loadIndexedStringMap(props, "iosCmioId"),
@@ -352,6 +356,8 @@ class DesktopWorkspaceStore(
             setProperty("agentMessageDeliveryMode", state.agentMessageDeliveryMode.name)
             setProperty("agentPinPriorityChats", state.agentPinPriorityChats.toString())
             setProperty("agentAdoptProviderSessionTitles", state.agentAdoptProviderSessionTitles.toString())
+            setProperty("agentTimelineAxis", state.agentTimelineAxis)
+            setProperty("agentTimelineDuration", state.agentTimelineDuration.toString())
             setProperty("disabledDestinations", state.disabledDestinations.joinToString("\n"))
             setProperty("expandedProjectChatIds", state.expandedProjectChatIds.joinToString("\n"))
             setProperty("collapsedWorkflowTaskIds", state.collapsedWorkflowTaskIds.joinToString("\n"))
@@ -359,6 +365,7 @@ class DesktopWorkspaceStore(
             setProperty("ollamaBearerToken", state.ollamaBearerToken)
             setProperty("lmStudioBaseUrl", state.lmStudioBaseUrl)
             setProperty("lmStudioBearerToken", state.lmStudioBearerToken)
+            setProperty("openRouterBaseUrl", state.openRouterBaseUrl)
             setProperty("savedSshTargets", state.savedSshTargets.joinToString("\n"))
             saveIndexedStringMap(this, "sshTargetAlias", state.sshTargetAliases)
             saveIndexedStringMap(this, "iosCmioId", state.iosCmioIds)
@@ -477,6 +484,13 @@ class DesktopWorkspaceStore(
         getProperty(key)?.toBooleanStrictOrNull()
             ?: getProperty(legacyKey)?.toBooleanStrictOrNull()
             ?: false
+
+    /** Legacy `Duration` axis becomes Turns; Duration is now an independent toggle. */
+    private fun migrateTimelineAxis(raw: String?): String = when (raw?.takeIf { it.isNotBlank() }) {
+        "Calls" -> "Calls"
+        "Duration", "Turns", null -> "Turns"
+        else -> if (raw in setOf("Turns", "Calls")) raw else "Turns"
+    }
 
     private companion object {
         val WorkspaceJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

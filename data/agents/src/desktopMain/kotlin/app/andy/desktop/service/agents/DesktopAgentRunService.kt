@@ -41,7 +41,7 @@ import app.andy.model.fallbackTitle
 import app.andy.model.shouldAdoptProviderSessionTitle
 import app.andy.model.AgentStatus
 import app.andy.model.hasVendorCli
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelLaunchError
 import app.andy.model.prefixedLocalModelId
 import app.andy.model.runtimeKind
@@ -216,6 +216,9 @@ class DesktopAgentRunService(
     private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
     override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends
 
+    private val _openRouterKeyPresent = MutableStateFlow(false)
+    override val openRouterKeyPresent: StateFlow<Boolean> = _openRouterKeyPresent
+
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects
 
@@ -351,6 +354,13 @@ class DesktopAgentRunService(
             refreshCliStatuses()
             refreshSlashCommandsForReadyProviders()
             watchLocalModelSettings()
+            // Only probe the OS keychain where probes are enabled; attach-only bridges and tests
+            // must not spawn a keychain subprocess at construction.
+            if (enableProbes) {
+                scope.launch(Dispatchers.IO) {
+                    _openRouterKeyPresent.value = OpenRouterCredentialStore.isPresent()
+                }
+            }
             scope.launch(Dispatchers.IO) {
                 runCatching {
                     transcriptSearch.backfill(
@@ -4235,7 +4245,7 @@ class DesktopAgentRunService(
                 .toMap()
         }
         _providerModels.update { current ->
-            current.filterKeys { !it.isLocalModelBackend } + models
+            current.filterKeys { !it.isModelBackend } + models
         }
         AgentModelCatalog.publishDiscovered(_providerModels.value)
         // Local HTTP probes must not block CLI refresh or occupy unbounded IO
@@ -4255,7 +4265,7 @@ class DesktopAgentRunService(
         }
         publishLocalModels(localModels)
         _providerModels.update { current ->
-            current.filterKeys { !it.isLocalModelBackend } + localModels
+            current.filterKeys { !it.isModelBackend } + localModels
         }
         AgentModelCatalog.publishDiscovered(_providerModels.value)
     }
@@ -4282,7 +4292,7 @@ class DesktopAgentRunService(
     }
 
     private fun publishLocalModels(localModels: Map<AgentKind, List<AgentModelOption>>) {
-        _localModelBackends.value = AgentKind.entries.filter { it.isLocalModelBackend }
+        _localModelBackends.value = AgentKind.entries.filter { it.isModelBackend }
             .associateWith { it in localModels }
     }
 
@@ -4292,18 +4302,35 @@ class DesktopAgentRunService(
             workspace.ollamaBearerToken,
             workspace.lmStudioBaseUrl,
             workspace.lmStudioBearerToken,
+            workspace.openRouterBaseUrl,
+            // Use the maintained flow, not a fresh keychain read: this signature is rebuilt on a
+            // 750 ms poll and must not spawn `security`/`secret-tool` on every tick.
+            _openRouterKeyPresent.value.toString(),
         ).joinToString("\u0000")
 
     override suspend fun refreshProviderQuotas() {
         ready.await()
         quotaRefreshMutex.withLock {
-            val fetched = withContext(Dispatchers.IO) {
-                _cliStatuses.value.mapNotNull { status ->
-                    status.binaryPath?.let { binary -> quotaProbe.query(status.kind, binary, _quotaAccess.value) }
+            val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
+            val (fetched, freshOpenRouter) = withContext(Dispatchers.IO) {
+                val fromCli = _cliStatuses.value.mapNotNull { status ->
+                    status.binaryPath?.let { binary ->
+                        quotaProbe.query(status.kind, binary, _quotaAccess.value, workspace.openRouterBaseUrl)
+                    }
                 }
+                val openRouter = quotaProbe.query(
+                    AgentKind.OpenRouter,
+                    binary = "",
+                    access = _quotaAccess.value,
+                    openRouterBaseUrl = workspace.openRouterBaseUrl,
+                )
+                (fromCli + listOfNotNull(openRouter)) to (openRouter != null)
             }
-            if (fetched.isNotEmpty()) {
-                _providerQuotas.update { current -> current + fetched.toMap() }
+            _providerQuotas.update { current ->
+                val merged = if (fetched.isNotEmpty()) current + fetched.toMap() else current
+                // A replaced key or a failed probe must not leave the previous credential's usage
+                // on screen, so drop the OpenRouter entry whenever no fresh quota came back.
+                if (freshOpenRouter) merged else merged - AgentKind.OpenRouter
             }
         }
     }
@@ -4422,6 +4449,38 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun openRouterApiKeyPresent(): Boolean = OpenRouterCredentialStore.isPresent()
+
+    override suspend fun setOpenRouterApiKey(key: String): CommandResult = withContext(Dispatchers.IO) {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) return@withContext CommandResult.failure("API key is blank")
+        OpenRouterCredentialStore.save(trimmed)
+        // A failed write when replacing an existing key leaves the old secret readable, so verify
+        // the stored value actually matches the new one rather than just that some key exists.
+        if (OpenRouterCredentialStore.load() != trimmed) {
+            return@withContext CommandResult.failure("Could not save OpenRouter API key to the OS keychain")
+        }
+        // Await catalog refresh so composer_options / localModelBackends see OpenRouter as ready
+        // before Settings or MCP returns success (avoids a race that left Send disabled).
+        refreshLocalModelCatalog()
+        refreshProviderQuotas()
+        _openRouterKeyPresent.value = true
+        CommandResult.success("OpenRouter API key saved on this host")
+    }
+
+    override suspend fun clearOpenRouterApiKey(): CommandResult = withContext(Dispatchers.IO) {
+        if (!OpenRouterCredentialStore.delete()) {
+            return@withContext CommandResult.failure(
+                "Could not remove the OpenRouter API key from the OS keychain",
+            )
+        }
+        _providerQuotas.update { it - AgentKind.OpenRouter }
+        LocalModelSidecar.clearGeneratedArtifacts(AgentKind.OpenRouter)
+        refreshLocalModelCatalog()
+        _openRouterKeyPresent.value = false
+        CommandResult.success("OpenRouter API key cleared")
+    }
+
     private suspend fun prepareMcp(agent: AgentKind, taskId: String, cwd: File? = null): String? = mcpMutex.withLock {
         val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
         val port = workspace.mcpServerPort
@@ -4470,8 +4529,8 @@ class DesktopAgentRunService(
                 writeProviderMcpConfig(McpClientConfig.ClientType.Goose, port, cwd, bearerToken = bearer)
                 mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
-            AgentKind.Ollama, AgentKind.LMStudio ->
-                error("local model backends must launch through OpenCode, Pi, or Goose")
+            AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter ->
+                error("model backends must launch through OpenCode, Pi, or Goose")
         }
     }
 
@@ -4723,7 +4782,7 @@ class DesktopAgentRunService(
         sandboxMode = if (planMode) AgentSandboxMode.ReadOnly else sandboxMode,
         planMode = planMode,
         confirmToolCalls = confirmToolCalls,
-        model = model?.let { if (agent.isLocalModelBackend) prefixedLocalModelId(agent, it) else it },
+        model = model?.let { if (agent.isModelBackend) prefixedLocalModelId(agent, it) else it },
         reasoningEffort = reasoningEffort,
         fastMode = fastMode,
         imagePaths = imagePaths,
