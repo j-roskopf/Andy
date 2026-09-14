@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.currentTimeMillis
 import app.andy.model.ComputerUseHudState
 import app.andy.service.AndyServices
 import app.andy.ui.components.Card
@@ -83,7 +84,7 @@ internal fun ComputerUseChatPanel(
     var elapsedSec by remember(state.sessionId) { mutableStateOf(0L) }
     LaunchedEffect(state.sessionId, state.startedAtEpochMs) {
         while (true) {
-            elapsedSec = ((System.currentTimeMillis() - state.startedAtEpochMs) / 1000).coerceAtLeast(0)
+            elapsedSec = ((currentTimeMillis() - state.startedAtEpochMs) / 1000).coerceAtLeast(0)
             delay(500)
         }
     }
