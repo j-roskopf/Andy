@@ -128,9 +128,9 @@ fun buildChatTimeline(
     var callIndex = 0
     var seenUserInCurrentTurn = false
     var previousEventAtMillis = task?.createdAtMillis ?: coalesced.firstOrNull()?.atMillis ?: 0L
-    // Tool names from stored ToolCall rows not yet paired with a ToolResult, so the fallback
+    // Tool calls not yet paired with a ToolResult, as (tool name, row index), so the fallback
     // result row is only added for orphan results instead of double-counting a stored call.
-    val unmatchedToolCalls = ArrayList<String?>()
+    val unmatchedToolCalls = ArrayList<Pair<String?, Int>>()
     // Latest TaskResult token counts, applied when the turn closes / next user starts.
     var pendingInputTokens: Long? = null
     var pendingOutputTokens: Long? = null
@@ -368,7 +368,7 @@ fun buildChatTimeline(
                         callIndex = callIndex++,
                     ),
                 )
-                unmatchedToolCalls += event.toolName.trim().ifBlank { null }
+                unmatchedToolCalls += event.toolName.trim().ifBlank { null } to rows.lastIndex
                 previousEventAtMillis = event.atMillis
             }
 
@@ -377,17 +377,41 @@ fun buildChatTimeline(
                 val resultName = event.toolName?.trim()?.ifBlank { null }
                 val matchIndex = when {
                     unmatchedToolCalls.isEmpty() -> -1
-                    resultName != null -> unmatchedToolCalls.indexOfLast { it == resultName }
+                    resultName != null -> unmatchedToolCalls.indexOfLast { it.first == resultName }
                     else -> unmatchedToolCalls.lastIndex
                 }
                 if (matchIndex >= 0) {
-                    unmatchedToolCalls.removeAt(matchIndex)
-                    // A successful result adds nothing beyond its stored call row, but an error
-                    // still needs a visible row so the failure detail is not lost.
-                    if (!event.isError) {
-                        previousEventAtMillis = event.atMillis
-                        return@forEachIndexed
+                    val (_, callRowIndex) = unmatchedToolCalls.removeAt(matchIndex)
+                    val callRow = rows[callRowIndex]
+                    val resultPreview = event.detail.trim()
+                        .takeIf { it.isNotBlank() && it != event.summary }
+                        ?.singleLine(80)
+                    if (event.isError) {
+                        // Keep the failure visible as an error row, but it belongs to the stored
+                        // call: reuse its call ordinal so the invocation is counted once.
+                        addRow(
+                            TimelineRow(
+                                key = "tool-result-$eventIndex",
+                                turnNumber = callRow.turnNumber,
+                                stepNumber = nextStep(),
+                                kind = TimelineRowKind.Error,
+                                badge = "ERROR",
+                                title = (resultName ?: callRow.title).singleLine(140),
+                                resultPreview = resultPreview,
+                                startMillis = event.atMillis,
+                                endMillis = event.atMillis,
+                                timingApproximate = true,
+                                lane = TimelineLane.Tools,
+                                eventIndex = eventIndex,
+                                callIndex = callRow.callIndex,
+                            ),
+                        )
+                    } else if (resultPreview != null && callRow.resultPreview.isNullOrBlank()) {
+                        // Fold the stored call's output preview in so it stays visible/searchable.
+                        rows[callRowIndex] = callRow.copy(resultPreview = resultPreview)
                     }
+                    previousEventAtMillis = event.atMillis
+                    return@forEachIndexed
                 }
                 val turn = ensureTurn()
                 addRow(

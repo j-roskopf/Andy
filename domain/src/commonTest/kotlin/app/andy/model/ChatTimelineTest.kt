@@ -426,6 +426,8 @@ class ChatTimelineTest {
         )
         assertEquals(1, paired.rows.count { it.kind == TimelineRowKind.Tool })
         assertEquals(1, paired.turns.first().toolCallCount)
+        // The stored call folds in the result preview so it stays visible/searchable.
+        assertTrue(paired.rows.first { it.kind == TimelineRowKind.Tool }.resultPreview?.contains("/tmp") == true)
 
         val orphan = buildChatTimeline(
             listOf(
@@ -455,6 +457,7 @@ class ChatTimelineTest {
         )
         assertTrue(model.rows.any { it.kind == TimelineRowKind.Error })
         assertEquals(1, model.turns.first().toolCallCount)
+        assertEquals(1, model.totalCalls)
     }
 
     @Test
