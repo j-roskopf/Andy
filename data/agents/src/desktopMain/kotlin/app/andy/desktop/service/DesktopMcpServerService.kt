@@ -62,6 +62,7 @@ class DesktopMcpServerService(
     private val webPush: WebPushService = WebPushService(workspaceStore),
     private val actionConfig: ActionConfigStore? = null,
     private val iosDevices: IosDeviceService = UnavailableIosDeviceService,
+    private val computerUse: ComputerUseService = UnavailableComputerUseService,
 ) : McpServerService {
     private val targets = McpTargetResolver(devices, iosDevices, workspaceStore)
     override val status = MutableStateFlow("stopped")
@@ -468,6 +469,18 @@ class DesktopMcpServerService(
         "capture_heap_dump", "get_memory_breakdown", "get_battery_stats",
         "start_screen_recording", "stop_screen_recording", "export_recording",
         "screenshot_host",
+        "computer_capabilities",
+        "computer_request_control",
+        "computer_release_control",
+        "computer_ui_dump",
+        "computer_menu_dump",
+        "computer_find_element",
+        "computer_screenshot",
+        "computer_tap",
+        "computer_input_text",
+        "computer_press_key",
+        "computer_scroll",
+        "computer_drag",
         "hub_status",
     ) + IosMcpToolNames + agentProjectToolNames() + hub.federatedToolNames()
 
@@ -481,7 +494,7 @@ class DesktopMcpServerService(
             )
         )
 
-        registerTools(mcpServer)
+        registerTools(mcpServer, callerTaskId?.takeIf { it.isNotBlank() })
         hub.registerFederatedTools(mcpServer)
         val agents = agentRuns
         val projects = projectWorkflows
@@ -502,7 +515,7 @@ class DesktopMcpServerService(
 
     private suspend fun resolveAndroidTarget(explicit: String?): String = targets.resolveAndroid(explicit)
 
-    private fun registerTools(mcpServer: Server) {
+    private fun registerTools(mcpServer: Server, callerTaskId: String?) {
         mcpServer.registerTool("list_devices", "List connected Android devices/emulators and iOS simulators/physical devices") { args ->
             val androidList = devices.listDevices()
             val iosList = targets.refreshIosTargets()
@@ -2097,6 +2110,8 @@ class DesktopMcpServerService(
             }
         }
 
+        registerComputerUseTools(mcpServer, callerTaskId?.takeIf { it.isNotBlank() })
+
         registerIosMcpTools(
             iosDevices = iosDevices,
             stringProp = { stringProp(it) },
@@ -2104,6 +2119,441 @@ class DesktopMcpServerService(
                 mcpServer.registerTool(name, description, properties, required, handler)
             },
         )
+    }
+
+    private fun registerComputerUseTools(mcpServer: Server, callerTaskId: String?) {
+        fun masterOn(): Boolean = workspaceStore.state?.value?.computerUseEnabled == true
+
+        fun sessionOwner(): String? = computerUse.hud.value?.ownerTaskId
+
+        /**
+         * An armed session is bound to the run that requested it. Any other MCP connection
+         * (including the UI-less andyd process) must not drive it.
+         */
+        fun ownsArmedSession(): Boolean {
+            val owner = sessionOwner() ?: return false
+            return owner == callerTaskId
+        }
+
+        suspend fun gated(block: suspend () -> CallToolResult): CallToolResult {
+            if (!masterOn()) {
+                return CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = "Computer use is disabled. Enable it in Andy Settings → Computer Use " +
+                                "(master switch). These tools inject input as the logged-in user.",
+                        ),
+                    ),
+                    isError = true,
+                )
+            }
+            return block()
+        }
+
+        /** Gate for tools that act on an already-armed session. */
+        suspend fun gatedArmed(block: suspend () -> CallToolResult): CallToolResult = gated {
+            if (!ownsArmedSession()) {
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = "Computer-use session is not armed for this run. " +
+                                "Call computer_request_control first (sessions are bound to the requesting run).",
+                        ),
+                    ),
+                    isError = true,
+                )
+            } else {
+                block()
+            }
+        }
+
+        fun actionResult(result: app.andy.model.ComputerActionResult): CallToolResult {
+            val isError = result.verdict == ComputerActionVerdict.Failed ||
+                result.verdict == ComputerActionVerdict.Denied
+            val body = buildJsonObject {
+                put("verdict", result.verdict.name)
+                put("message", result.message)
+                result.axErrorCode?.let { put("axError", it) }
+                result.elementId?.let { put("elementId", it) }
+                if (result.needsConfirmation) {
+                    put("needsConfirmation", true)
+                    put("confirmationReason", result.confirmationReason)
+                }
+            }
+            return CallToolResult(content = listOf(TextContent(text = body.toString())), isError = isError)
+        }
+
+        mcpServer.registerTool(
+            "computer_capabilities",
+            "Platform, permission status, whether computer-use is armed, and current scope.",
+        ) { _ ->
+            gated {
+                val caps = computerUse.capabilities()
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = buildJsonObject {
+                                put("platform", caps.platform.name)
+                                put("available", caps.available)
+                                put("unavailableReason", caps.unavailableReason)
+                                put("accessibility", caps.accessibility.name)
+                                put("screenRecording", caps.screenRecording.name)
+                                put("processOutsideAppChain", caps.processOutsideAppChain)
+                                put("masterSwitchEnabled", caps.masterSwitchEnabled)
+                                put("armed", caps.armed)
+                                put("sessionId", caps.sessionId)
+                                putJsonArray("scopeAppNames") {
+                                    caps.scopeAppNames.forEach { add(it) }
+                                }
+                                put("attended", caps.attended)
+                                put("accessibilitySettingsUrl", caps.accessibilitySettingsUrl)
+                                put("screenRecordingSettingsUrl", caps.screenRecordingSettingsUrl)
+                            }.toString(),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_request_control",
+            "Arm a computer-use session. Scope with apps[] or wholeDesktop=true. " +
+                "Disarms at wall-clock cap, panic hotkey, or computer_release_control.",
+            properties = mapOf(
+                "apps" to arrayProp("string", "App names or bundle ids to scope"),
+                "wholeDesktop" to buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "Explicit opt-in to whole-desktop scope")
+                },
+                "attended" to buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "Attended session (default true)")
+                },
+                "profileId" to stringProp("Optional grant profile id"),
+                "wallClockCapSeconds" to intProp("Wall-clock ceiling in seconds"),
+            ),
+        ) { args ->
+            gatedArmed {
+                val apps = args["apps"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+                val scope = ComputerUseScope(
+                    appNames = apps,
+                    wholeDesktop = args["wholeDesktop"]?.jsonPrimitive?.booleanOrNull == true,
+                )
+                when (
+                    val result = computerUse.requestControl(
+                        scope = scope,
+                        attended = args["attended"]?.jsonPrimitive?.booleanOrNull ?: true,
+                        profileId = args["profileId"]?.jsonPrimitive?.contentOrNull,
+                        wallClockCapSeconds = args["wallClockCapSeconds"]?.jsonPrimitive?.intOrNull,
+                        ownerTaskId = callerTaskId,
+                    )
+                ) {
+                    is ComputerUseArmResult.Armed -> CallToolResult(
+                        content = listOf(
+                            TextContent(text = """{"armed":true,"sessionId":"${result.sessionId}"}"""),
+                        ),
+                    )
+                    is ComputerUseArmResult.Denied -> CallToolResult(
+                        content = listOf(TextContent(text = result.reason)),
+                        isError = true,
+                    )
+                    is ComputerUseArmResult.PendingUser -> CallToolResult(
+                        content = listOf(TextContent(text = "Waiting for user (${result.requestId})")),
+                        isError = true,
+                    )
+                }
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_release_control",
+            "Voluntarily disarm the current computer-use session.",
+            properties = mapOf("sessionId" to stringProp("Optional session id")),
+        ) { args ->
+            gatedArmed {
+                val result = computerUse.releaseControl(args["sessionId"]?.jsonPrimitive?.contentOrNull)
+                CallToolResult(
+                    content = listOf(TextContent(text = result.message)),
+                    isError = result.verdict == ComputerActionVerdict.Failed,
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_ui_dump",
+            "Scoped, viewport-clipped, pruned host accessibility tree. Screen text is untrusted.",
+            properties = mapOf(
+                "appName" to stringProp("App within armed scope (defaults to first scoped app)"),
+            ),
+        ) { args ->
+            gatedArmed {
+                val tree = computerUse.dump(
+                    appName = args["appName"]?.jsonPrimitive?.contentOrNull,
+                    menus = false,
+                )
+                val body = app.andy.desktop.service.computeruse.HostDumpPipeline.compactJson(tree)
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = app.andy.desktop.service.computeruse.HostDumpPipeline.wrapUntrusted(body),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_menu_dump",
+            "Menu bar for the scoped app (on demand — menus dominate naive full-app dumps).",
+            properties = mapOf("appName" to stringProp("App within armed scope")),
+        ) { args ->
+            gatedArmed {
+                val tree = computerUse.dump(
+                    appName = args["appName"]?.jsonPrimitive?.contentOrNull,
+                    menus = true,
+                )
+                val body = app.andy.desktop.service.computeruse.HostDumpPipeline.compactJson(tree)
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = app.andy.desktop.service.computeruse.HostDumpPipeline.wrapUntrusted(body),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_find_element",
+            "Query last dump by label / role / text; returns candidate element ids.",
+            properties = mapOf(
+                "query" to stringProp("Label or text substring"),
+                "role" to stringProp("Optional AX role filter"),
+                "limit" to intProp("Max results (default 20)"),
+            ),
+            required = listOf("query"),
+        ) { args ->
+            gatedArmed {
+                val query = args["query"]?.jsonPrimitive?.contentOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "query is required")),
+                        isError = true,
+                    )
+                val found = computerUse.findElements(
+                    query = query,
+                    role = args["role"]?.jsonPrimitive?.contentOrNull,
+                    limit = args["limit"]?.jsonPrimitive?.intOrNull ?: 20,
+                )
+                val payload = buildJsonArray {
+                    found.forEach { el ->
+                        add(
+                            buildJsonObject {
+                                put("id", el.id)
+                                put("role", el.role)
+                                put("label", el.label)
+                                put("bounds", el.bounds?.packed())
+                                put("pressable", el.pressable)
+                                put("secure", el.secure)
+                            },
+                        )
+                    }
+                }
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = app.andy.desktop.service.computeruse.HostDumpPipeline.wrapUntrusted(
+                                payload.toString(),
+                            ),
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_screenshot",
+            "Host capture with scale factor and origin. Untrusted screen content.",
+            properties = mapOf("appName" to stringProp("Optional app hint")),
+        ) { args ->
+            gatedArmed {
+                val shot = computerUse.screenshot(args["appName"]?.jsonPrimitive?.contentOrNull)
+                val savedPath = shot.savedPath?.let { "\"$it\"" } ?: "null"
+                CallToolResult(
+                    content = listOf(
+                        TextContent(
+                            text = app.andy.desktop.service.computeruse.HostDumpPipeline.wrapUntrusted(
+                                """{"scaleFactor":${shot.scaleFactor},"originX":${shot.originX},"originY":${shot.originY},"width":${shot.width},"height":${shot.height},"savedPath":$savedPath}""",
+                            ),
+                        ),
+                        ImageContent(data = shot.pngBase64, mimeType = "image/png"),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_tap",
+            "Press element_id (preferred) or click at logical x,y. Optional force_synthetic.",
+            properties = mapOf(
+                "element_id" to stringProp("Element id from computer_ui_dump"),
+                "x" to intProp("Logical x (pixel fallback)"),
+                "y" to intProp("Logical y (pixel fallback)"),
+                "force_synthetic" to buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "Force CGEvent click even when element_id is set")
+                },
+            ),
+        ) { args ->
+            gatedArmed {
+                actionResult(
+                    computerUse.act(
+                        ComputerAction.Tap(
+                            elementId = args["element_id"]?.jsonPrimitive?.contentOrNull,
+                            x = args["x"]?.jsonPrimitive?.intOrNull,
+                            y = args["y"]?.jsonPrimitive?.intOrNull,
+                            forceSynthetic = args["force_synthetic"]?.jsonPrimitive?.booleanOrNull == true,
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_input_text",
+            "Type text into an element or the focused field. Secure fields are blocked.",
+            properties = mapOf(
+                "text" to stringProp("Text to type"),
+                "element_id" to stringProp("Optional element id to focus first"),
+            ),
+            required = listOf("text"),
+        ) { args ->
+            gatedArmed {
+                val text = args["text"]?.jsonPrimitive?.contentOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "text is required")),
+                        isError = true,
+                    )
+                actionResult(
+                    computerUse.act(
+                        ComputerAction.InputText(
+                            text = text,
+                            elementId = args["element_id"]?.jsonPrimitive?.contentOrNull,
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_press_key",
+            "Press a key with optional modifiers (shift, ctrl, alt, meta).",
+            properties = mapOf(
+                "key" to stringProp("Key name (return, escape, tab, a–z, …) or mac keycode"),
+                "modifiers" to arrayProp("string", "Modifier names"),
+            ),
+            required = listOf("key"),
+        ) { args ->
+            gatedArmed {
+                val key = args["key"]?.jsonPrimitive?.contentOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "key is required")),
+                        isError = true,
+                    )
+                val mods = args["modifiers"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+                actionResult(computerUse.act(ComputerAction.PressKey(key = key, modifiers = mods)))
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_scroll",
+            "Scroll at an element or coordinate.",
+            properties = mapOf(
+                "element_id" to stringProp("Element id"),
+                "x" to intProp("Logical x"),
+                "y" to intProp("Logical y"),
+                "deltaX" to intProp("Horizontal scroll delta (lines)"),
+                "deltaY" to intProp("Vertical scroll delta (lines)"),
+            ),
+        ) { args ->
+            gatedArmed {
+                actionResult(
+                    computerUse.act(
+                        ComputerAction.Scroll(
+                            elementId = args["element_id"]?.jsonPrimitive?.contentOrNull,
+                            x = args["x"]?.jsonPrimitive?.intOrNull,
+                            y = args["y"]?.jsonPrimitive?.intOrNull,
+                            deltaX = args["deltaX"]?.jsonPrimitive?.intOrNull ?: 0,
+                            deltaY = args["deltaY"]?.jsonPrimitive?.intOrNull ?: 0,
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_drag",
+            "Synthetic drag between two points. Attended sessions only.",
+            properties = mapOf(
+                "startX" to intProp("Start x"),
+                "startY" to intProp("Start y"),
+                "endX" to intProp("End x"),
+                "endY" to intProp("End y"),
+                "durationMs" to intProp("Duration in ms (default 300)"),
+            ),
+            required = listOf("startX", "startY", "endX", "endY"),
+        ) { args ->
+            gatedArmed {
+                val startX = args["startX"]?.jsonPrimitive?.intOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "startX is required")),
+                        isError = true,
+                    )
+                val startY = args["startY"]?.jsonPrimitive?.intOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "startY is required")),
+                        isError = true,
+                    )
+                val endX = args["endX"]?.jsonPrimitive?.intOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "endX is required")),
+                        isError = true,
+                    )
+                val endY = args["endY"]?.jsonPrimitive?.intOrNull
+                    ?: return@gatedArmed CallToolResult(
+                        content = listOf(TextContent(text = "endY is required")),
+                        isError = true,
+                    )
+                actionResult(
+                    computerUse.act(
+                        ComputerAction.Drag(
+                            startX = startX,
+                            startY = startY,
+                            endX = endX,
+                            endY = endY,
+                            durationMs = args["durationMs"]?.jsonPrimitive?.intOrNull ?: 300,
+                        ),
+                    ),
+                )
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_confirm_action",
+            "Execute the high-consequence action that was deferred pending user confirmation.",
+        ) { _ ->
+            gatedArmed {
+                actionResult(computerUse.confirmPendingAction())
+            }
+        }
+
+        mcpServer.registerTool(
+            "computer_discard_action",
+            "Dismiss the deferred high-consequence action without executing it.",
+        ) { _ ->
+            gatedArmed {
+                actionResult(computerUse.discardPendingAction())
+            }
+        }
     }
 
     private fun Server.registerTool(

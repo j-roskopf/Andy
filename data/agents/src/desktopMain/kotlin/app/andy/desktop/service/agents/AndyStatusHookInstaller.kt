@@ -51,8 +51,15 @@ object AndyStatusHookInstaller {
 
         case "${'$'}gate" in
           fully-idle)
-            # Antigravity Stop: only record done when the turn is fully idle.
-            printf '%s' "${'$'}payload" | grep -Eq '"fullyIdle"[[:space:]]*:[[:space:]]*true' || respond_and_exit
+            # Antigravity Stop: Done only when fullyIdle (no background tasks).
+            # Otherwise coerce done→working so a false finish is not latched.
+            if ! printf '%s' "${'$'}payload" | grep -Eq '"fullyIdle"[[:space:]]*:[[:space:]]*true'; then
+              if [ "${'$'}status" = "done" ]; then
+                status=working
+              else
+                respond_and_exit
+              fi
+            fi
             ;;
           completed)
             # Cursor stop: only record done for a clean/aborted finish.

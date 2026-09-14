@@ -745,6 +745,16 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
         visibleWorking = true,
         gate = ScreenGate(contains = listOf("andy:working")),
     ),
+    // Herdr: "· N task" while Gradle/etc. run in the background. Above andy:idle so
+    // OSC idle + background chrome stays Working (Stop+fullyIdle owns true Done).
+    ScreenRule(
+        id = "background_tasks_working",
+        state = ScreenState.Working,
+        priority = 1050,
+        region = ScreenRegion.BottomNonEmpty(5),
+        visibleWorking = true,
+        gate = ScreenGate(lineRegex = listOf(Regex("""(?i)·\s*[1-9][0-9]*\s+task"""))),
+    ),
     ScreenRule(
         id = "andy_osc_title_idle",
         state = ScreenState.Idle,
@@ -797,6 +807,7 @@ private val AntigravityScreenManifest: List<ScreenRule> = listOf(
                 ScreenGate(contains = listOf("enter to select")),
                 ScreenGate(regex = listOf(Regex("""[\u2800-\u28FF]"""))),
                 ScreenGate(lineRegex = listOf(Regex("""(?i)^\s*(Thinking|Generating|Executing|Running|Building)\b"""))),
+                ScreenGate(lineRegex = listOf(Regex("""(?i)·\s*[1-9][0-9]*\s+task"""))),
             ),
         ),
     ),

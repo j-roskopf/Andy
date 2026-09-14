@@ -288,7 +288,7 @@ class AgentQueuedFollowUpTest {
                     val liveUserMessages = service.events(task.id).value
                         .filterIsInstance<AgentEvent.UserMessage>()
                         .map { it.text }
-                    val observedFollowUps = (queuedTexts + liveUserMessages)
+                    val observedFollowUps = (liveUserMessages + queuedTexts)
                         .filter { it == "second message" || it == "third message" }
                     if (observedFollowUps == listOf("second message", "third message")) break
                     delay(25)
@@ -446,13 +446,19 @@ class AgentQueuedFollowUpTest {
             }
 
             service.queueFollowUp(task.id, "queued follow-up")
-            delay(100)
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
+                while (service.tasks.value.first { it.id == task.id }.queuedFollowUps.isEmpty()) delay(25)
+            }
 
             val current = service.tasks.value.first { it.id == task.id }
             assertEquals(listOf("queued follow-up"), current.queuedFollowUps.map { it.text })
             assertTrue(
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().none { it.text == "queued follow-up" },
             )
+            service.stop(task.id)
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+            }
         } finally {
             runCatching { service?.close() }
             scope.cancel()
@@ -512,13 +518,18 @@ class AgentQueuedFollowUpTest {
             }
 
             service.queueFollowUp(task.id, "send now")
-            delay(100)
+            withTimeout(harnessTimeoutMillis(10_000, 60_000)) {
+                while (service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().none { it.text == "send now" }) delay(25)
+            }
 
             val current = service.tasks.value.first { it.id == task.id }
             assertTrue(current.queuedFollowUps.isEmpty())
             assertTrue(
                 service.events(task.id).value.filterIsInstance<AgentEvent.UserMessage>().any { it.text == "send now" },
             )
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+            }
         } finally {
             runCatching { service?.close() }
             scope.cancel()
@@ -571,7 +582,7 @@ class AgentUserInputResumeTest {
 
             service.respondToUserInput(task.id, request.id, mapOf("platform" to "Desktop"))
             withTimeout(30_000) {
-                while (service.tasks.value.first { it.id == task.id }.isActive) delay(25)
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Done) delay(25)
             }
             val finished = service.tasks.value.first { it.id == task.id }
             assertEquals(AgentStatus.Done, finished.status)
@@ -786,10 +797,14 @@ private class UserInputTestAdapter : AgentCliAdapter {
         val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id).absolutePath
         val question =
             """{"questions":[{"id":"platform","question":"Which platform?","options":[{"label":"Desktop"},{"label":"Desktop + web"}]}]}"""
+        // Write question.json mid-command (while still "working"), then idle long enough for
+        // the settle window to park the decision card before the process exits.
         return listOf(
             binary,
             "-c",
-            "mkdir -p ${shellQuote(artifactDir)} && printf %s ${shellQuote(question)} > ${shellQuote("$artifactDir/question.json")} && sleep 2",
+            "mkdir -p ${shellQuote(artifactDir)} && " +
+                "printf %s ${shellQuote(question)} > ${shellQuote("$artifactDir/question.json")} && " +
+                "sleep 3",
         )
     }
 

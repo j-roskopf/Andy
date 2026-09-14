@@ -15,8 +15,9 @@ private val agySettingsJson = Json {
  * Antigravity (`agy`) title + settings install.
  *
  * agy has no ACP; it does expose structured `agent_state` / `tool_confirmation_pending`
- * via the title/statusLine command JSON. Andy installs a title script that maps those
- * fields into `.andy/<taskId>/status.json` and OSC-scrapeable `andy:*` markers.
+ * via the title/statusLine command JSON. Andy installs a title script that maps mid-turn
+ * Working/Blocked into `.andy/<taskId>/status.json` and OSC-scrapeable `andy:*` markers.
+ * Idle only sets the OSC marker — Done is authored by the Stop hook when `fullyIdle`.
  */
 object AndyAgyTitleInstaller {
     const val SCRIPT_NAME = "andy-agy-title.sh"
@@ -32,8 +33,8 @@ object AndyAgyTitleInstaller {
         #
         # Wired as ~/.gemini/antigravity-cli/settings.json → title.command.
         # agy pipes the same JSON payload used by statusLine (agent_state, tool_confirmation_pending, …)
-        # on stdin; we write .andy/<taskId>/status.json and print a window title with andy:* markers
-        # that AgentStatusTracker scrapes via OSC / pane title.
+        # on stdin; mid-turn Working/Blocked go to status.json. Idle only prints andy:idle —
+        # Done is authored by Stop when fullyIdle (background tasks stay Working).
         payload=${'$'}(cat 2>/dev/null || true)
 
         state=${'$'}(printf '%s' "${'$'}payload" | grep -o '"agent_state"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"${'$'}/\1/')
@@ -48,7 +49,8 @@ object AndyAgyTitleInstaller {
         else
           case "${'$'}state" in
           idle)
-            status=done
+            # OSC idle only — Stop + fullyIdle owns Done (background tasks stay Working).
+            status=""
             marker=andy:idle
             ;;
           thinking|working|tool_use)

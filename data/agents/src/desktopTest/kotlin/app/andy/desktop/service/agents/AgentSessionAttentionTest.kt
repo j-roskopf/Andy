@@ -159,4 +159,19 @@ class AgentSessionAttentionTest {
             ),
         )
     }
+
+    @Test
+    fun questionParkDefersOnlyWhileLiveStatusIsWorking() {
+        assertTrue(shouldDeferQuestionPark(AgentStatus.Working))
+        assertFalse(shouldDeferQuestionPark(AgentStatus.Blocked))
+        assertFalse(shouldDeferQuestionPark(AgentStatus.Done))
+        assertFalse(shouldDeferQuestionPark(AgentStatus.Error))
+        assertFalse(shouldDeferQuestionPark(null))
+    }
+
+    @Test
+    fun pendingGrillMeFollowUpSkipsPriorTurnFinish() {
+        assertTrue(shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp = true))
+        assertFalse(shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp = false))
+    }
 }

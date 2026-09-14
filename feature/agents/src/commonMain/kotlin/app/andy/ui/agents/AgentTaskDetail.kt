@@ -969,21 +969,38 @@ fun AgentTaskDetail(
                     modifier = terminalModifier,
                 )
             }
-            // Cursor-style Environment chip: floats top-right over the chat/terminal pane.
-            if (task.worktreePath != null && !terminalSessionActive) {
-                WorktreeEnvironmentPanel(
-                    services = services,
-                    task = task,
-                    diffSummary = diffSummary,
-                    onDiffSummaryChange = { diffSummary = it },
-                    onCopyText = copyText,
-                    paneWidth = chatPaneWidth,
-                    contentFullBleed = !acpTask,
+            // Floating chips: top-right over the chat/terminal pane (Computer Use + Environment).
+            val computerUseHud by services.computerUse.hud.collectAsState()
+            if (computerUseHud != null || (task.worktreePath != null && !terminalSessionActive)) {
+                Column(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = AndySpace.Space2, end = AndySpace.Space2)
                         .zIndex(2f),
-                )
+                    verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                    horizontalAlignment = Alignment.End,
+                ) {
+                    computerUseHud?.let { hud ->
+                        ComputerUseChatPanel(
+                            services = services,
+                            state = hud,
+                            paneWidth = chatPaneWidth,
+                            contentFullBleed = !acpTask,
+                            onStop = { services.computerUse.panic("hud stop") },
+                        )
+                    }
+                    if (task.worktreePath != null && !terminalSessionActive) {
+                        WorktreeEnvironmentPanel(
+                            services = services,
+                            task = task,
+                            diffSummary = diffSummary,
+                            onDiffSummaryChange = { diffSummary = it },
+                            onCopyText = copyText,
+                            paneWidth = chatPaneWidth,
+                            contentFullBleed = !acpTask,
+                        )
+                    }
+                }
             }
             if (acpTask && findVisible) {
                 ChatFindBar(

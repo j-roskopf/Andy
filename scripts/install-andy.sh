@@ -209,7 +209,14 @@ respond_and_exit() {
 
 case "$gate" in
   fully-idle)
-    printf '%s' "$payload" | grep -Eq '"fullyIdle"[[:space:]]*:[[:space:]]*true' || respond_and_exit
+    # Antigravity Stop: Done only when fullyIdle; otherwise coerce done→working.
+    if ! printf '%s' "$payload" | grep -Eq '"fullyIdle"[[:space:]]*:[[:space:]]*true'; then
+      if [ "$status" = "done" ]; then
+        status=working
+      else
+        respond_and_exit
+      fi
+    fi
     ;;
   completed)
     printf '%s' "$payload" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"(completed|aborted)"' || respond_and_exit
@@ -259,7 +266,8 @@ if [ "$pending" -eq 1 ]; then
 else
   case "$state" in
     idle)
-      status=done
+      # OSC idle only — Stop + fullyIdle owns Done.
+      status=""
       marker=andy:idle
       ;;
     thinking|working|tool_use)
@@ -275,7 +283,7 @@ fi
 
 HOOK="${HOME}/.andy/bin/andy-status-hook.sh"
 if [ -x "$HOOK" ] && [ -n "$status" ]; then
-  printf '' | "$HOOK" "$status" >/dev/null 2>&1 || true
+  printf '' | "$HOOK" "$status" none title >/dev/null 2>&1 || true
 fi
 
 if [ -n "$marker" ]; then

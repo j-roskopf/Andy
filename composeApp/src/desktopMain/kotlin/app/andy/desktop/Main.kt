@@ -13,6 +13,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
@@ -26,6 +27,7 @@ import app.andy.AndyApp
 import app.andy.AndyMirrorPopOut
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.fillMaxSize
 import app.andy.desktop.service.DesktopAgentAttentionCoordinator
 import app.andy.desktop.service.DesktopOsNotificationService
 import app.andy.desktop.service.DesktopWorkspaceStore
@@ -45,6 +47,7 @@ import app.andy.desktop.service.voice.desktopGlobalHotKeyRegistrar
 import app.andy.desktop.voice.VoiceNewThreadBlocker
 import app.andy.desktop.voice.VoiceNewThreadOverlayContent
 import app.andy.desktop.voice.voiceNewThreadBlocker
+import app.andy.ui.agents.ComputerUseGlobalHud
 import app.andy.ui.components.ActiveVoiceDictationShortcut
 import app.andy.ui.components.KeyCombo
 import app.andy.ui.theme.AndyTheme
@@ -118,6 +121,8 @@ fun main() {
         var voiceOverlayOpen by remember { mutableStateOf(false) }
         var voiceOverlayBlocker by remember { mutableStateOf<VoiceNewThreadBlocker?>(null) }
         var voiceOverlayRecording by remember { mutableStateOf(false) }
+        val computerUseHud by services.computerUse.hud.collectAsState()
+        val computerUseArm by services.computerUse.pendingArm.collectAsState()
         val hotKeyRegistrar = remember { desktopGlobalHotKeyRegistrar }
         // Presenter *attach* must stay blocked while *any* Andy window is being live-resized,
         // pop-outs included: opening an overlay from the EDT while the main thread is inside a
@@ -197,16 +202,24 @@ fun main() {
             }
             SwingUtilities.invokeLater(run)
         }
+        fun handleComputerUsePanicHotKey() {
+            SwingUtilities.invokeLater {
+                services.computerUse.panic("panic hotkey")
+            }
+        }
         LaunchedEffect(
             workspaceState.voiceNewThreadShortcut,
+            workspaceState.computerUsePanicShortcut,
+            computerUseHud?.sessionId,
             hotKeyRegistrar.isSupported,
             andyWindowFocused,
             voiceOverlayOpen,
         ) {
-            val combo = KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
-            // Carbon only while Andy is in the background. While focused (main or overlay),
-            // leave it unregistered so Compose onPreviewKeyEvent can see the combo — a live
-            // RegisterEventHotKey steals the keystroke and never delivers it to the window.
+            val panicCombo = KeyCombo.decode(workspaceState.computerUsePanicShortcut)
+            val voiceCombo = KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
+            // While computer-use is armed, the Carbon slot prefers the panic hotkey.
+            val armed = computerUseHud != null
+            val combo = if (armed) panicCombo else voiceCombo
             val useCarbon = combo != null &&
                 hotKeyRegistrar.isSupported &&
                 !andyWindowFocused &&
@@ -226,7 +239,15 @@ fun main() {
             }
         }
         LaunchedEffect(hotKeyRegistrar) {
-            hotKeyRegistrar.pressed.collect { handleVoiceNewThreadHotKey() }
+            hotKeyRegistrar.pressed.collect {
+                if (services.computerUse.hud.value != null &&
+                    KeyCombo.decode(workspaceStore.state.value.computerUsePanicShortcut) != null
+                ) {
+                    handleComputerUsePanicHotKey()
+                } else {
+                    handleVoiceNewThreadHotKey()
+                }
+            }
         }
         fun openPopOutMirror() {
             visible = true
@@ -414,16 +435,27 @@ fun main() {
                     else -> {
                         // Focused-window path: Carbon covers unfocused; this covers when Andy is
                         // frontmost (and when Carbon registration fails for any reason).
-                        val newThread = KeyCombo.decode(state.voiceNewThreadShortcut)
+                        val panic = KeyCombo.decode(state.computerUsePanicShortcut)
                         if (
-                            newThread != null &&
+                            panic != null &&
+                            services.computerUse.hud.value != null &&
                             event.type == KeyEventType.KeyDown &&
-                            newThread.matches(event)
+                            panic.matches(event)
                         ) {
-                            handleVoiceNewThreadHotKey()
+                            handleComputerUsePanicHotKey()
                             true
                         } else {
-                            false
+                            val newThread = KeyCombo.decode(state.voiceNewThreadShortcut)
+                            if (
+                                newThread != null &&
+                                event.type == KeyEventType.KeyDown &&
+                                newThread.matches(event)
+                            ) {
+                                handleVoiceNewThreadHotKey()
+                                true
+                            } else {
+                                false
+                            }
                         }
                     }
                 }
@@ -658,6 +690,33 @@ fun main() {
                             open(AndyDestination.Settings)
                         },
                         onOpenMicPrivacySettings = { openMicPrivacySettings() },
+                    )
+                }
+            }
+        }
+        // Global, always-on-top computer-use surface — independent of the task-detail pane,
+        // so arming approvals, deferred high-consequence confirmations, and Stop stay visible
+        // even when the user is on another destination or Andy is behind another app.
+        if (computerUseHud != null || computerUseArm != null) {
+            Window(
+                onCloseRequest = { services.computerUse.panic("hud closed") },
+                visible = true,
+                title = "Andy — Computer Use",
+                undecorated = true,
+                transparent = true,
+                alwaysOnTop = true,
+                resizable = false,
+                state = rememberWindowState(
+                    position = WindowPosition.Aligned(Alignment.TopEnd),
+                    width = 288.dp,
+                    height = 360.dp,
+                ),
+                icon = appIcon,
+            ) {
+                AndyTheme {
+                    ComputerUseGlobalHud(
+                        services = services,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }

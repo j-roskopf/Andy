@@ -69,6 +69,7 @@ include(
     ":data:bug-capture",
     ":data:platform-tools",
     ":data:host",
+    ":data:computer-use",
     ":data:updates",
     ":data:remote",
     ":feature:devices",

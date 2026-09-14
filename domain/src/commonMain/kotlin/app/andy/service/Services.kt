@@ -1387,6 +1387,7 @@ data class AndyServices(
     val runtimeBundle: RuntimeBundleService = UnavailableRuntimeBundleService,
     val cliUpdates: CliUpdateCheckService = UnavailableCliUpdateCheckService,
     val mcp: McpServerService,
+    val computerUse: ComputerUseService = UnavailableComputerUseService,
     val actionConfig: ActionConfigStore,
     val actionRuns: ActionRunService,
     val agentRuns: AgentRunService,

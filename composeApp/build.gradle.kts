@@ -230,6 +230,8 @@ tasks.named<Copy>("desktopProcessResources") {
         "buildAndyVoiceJniMacX64",
         "buildAndyBrowserJniMacArm64",
         "buildAndyBrowserJniMacX64",
+        "buildAndyComputerUseJniMacArm64",
+        "buildAndyComputerUseJniMacX64",
         verifyScrcpyServer,
         ":data:mirror:desktopProcessResources",
     )
@@ -244,6 +246,10 @@ tasks.named<Copy>("desktopProcessResources") {
     from(layout.buildDirectory.dir("native/andy-voice")) {
         include("**/andy-voice-jni.dylib")
         into("andy-voice")
+    }
+    from(layout.buildDirectory.dir("native/andy-computer-use")) {
+        include("**/andy-computer-use-jni.dylib")
+        into("andy-computer-use")
     }
 }
 
@@ -333,6 +339,36 @@ val buildAndyVoiceJniMacArm64 by tasks.registering(Exec::class) {
     )
 }
 
+val buildAndyComputerUseJniMacArm64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS arm64 computer-use Accessibility/CGEvent bridge."
+    val source = rootProject.layout.projectDirectory.file("native/andy-computer-use/jni/andy_computer_use_jni.m")
+    val output = layout.buildDirectory.file("native/andy-computer-use/macos-arm64/andy-computer-use-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "arm64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "ApplicationServices",
+        "-framework", "CoreGraphics",
+        "-framework", "Foundation",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
 val buildAndyNotificationsJniMacX64 by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the macOS x64 Notification Center bridge."
@@ -415,6 +451,36 @@ val buildAndyVoiceJniMacX64 by tasks.registering(Exec::class) {
         "-framework", "AVFoundation",
         "-framework", "Foundation",
         "-framework", "Carbon",
+        "-o", output.get().asFile.absolutePath,
+    )
+}
+
+val buildAndyComputerUseJniMacX64 by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Builds the macOS x64 computer-use Accessibility/CGEvent bridge."
+    val source = rootProject.layout.projectDirectory.file("native/andy-computer-use/jni/andy_computer_use_jni.m")
+    val output = layout.buildDirectory.file("native/andy-computer-use/macos-x86_64/andy-computer-use-jni.dylib")
+    inputs.file(source)
+    outputs.file(output)
+    onlyIf {
+        System.getProperty("os.name").lowercase().contains("mac") &&
+            System.getProperty("os.arch").lowercase() in setOf("x86_64", "amd64")
+    }
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-arch", "x86_64",
+        "-fobjc-arc",
+        "-I${System.getProperty("java.home")}/include",
+        "-I${System.getProperty("java.home")}/include/darwin",
+        source.asFile.absolutePath,
+        "-framework", "AppKit",
+        "-framework", "ApplicationServices",
+        "-framework", "CoreGraphics",
+        "-framework", "Foundation",
         "-o", output.get().asFile.absolutePath,
     )
 }

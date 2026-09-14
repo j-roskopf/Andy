@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class DesktopWorkspaceStoreTest {
     @Test
@@ -255,6 +256,18 @@ class DesktopWorkspaceStoreTest {
         assertEquals(true, DesktopWorkspaceStore(file).load().hostScreenshotEnabled)
         DesktopWorkspaceStore(file).save(saved.copy(hostScreenshotEnabled = false))
         assertEquals(false, DesktopWorkspaceStore(file).load().hostScreenshotEnabled)
+
+        DesktopWorkspaceStore(file).save(
+            saved.copy(
+                computerUseEnabled = true,
+                computerUseProfilesJson = """[{"id":"p1","name":"Test","scope":{"appNames":["Chrome"],"wholeDesktop":false},"attended":true,"wallClockCapSeconds":300,"highConsequenceLabels":[]}]""",
+                computerUseDefaultWallClockSeconds = 300,
+            ),
+        )
+        val cu = DesktopWorkspaceStore(file).load()
+        assertEquals(true, cu.computerUseEnabled)
+        assertEquals(300, cu.computerUseDefaultWallClockSeconds)
+        assertTrue(cu.computerUseProfilesJson.contains("p1"))
 
         // Concurrent ShellState-style save must not wipe targets written via update().
         val store = DesktopWorkspaceStore(file)
