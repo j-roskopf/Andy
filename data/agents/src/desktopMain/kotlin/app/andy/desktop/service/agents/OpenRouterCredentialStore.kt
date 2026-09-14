@@ -17,7 +17,7 @@ object OpenRouterCredentialStore {
     fun load(): String? = when {
         isMac() -> macFind()
         isLinux() -> linuxLookup()
-        isWindows() -> windowsLoad()
+        isWindows() -> runCatching { windowsLoad() }.getOrNull()
         else -> null
     }
 
@@ -26,7 +26,7 @@ object OpenRouterCredentialStore {
         when {
             isMac() -> macAdd(secret)
             isLinux() -> linuxStore(secret)
-            isWindows() -> windowsStore(secret)
+            isWindows() -> runCatching { windowsStore(secret) }
         }
     }
 
@@ -139,7 +139,7 @@ object OpenRouterCredentialStore {
     private fun windowsFile(): File =
         File(System.getProperty("user.home"), ".andy/openrouter-key.dpapi")
 
-    private fun windowsLoad(): String? {
+    internal fun windowsLoad(): String? {
         val file = windowsFile()
         if (!file.isFile) return null
         val script = """
@@ -147,11 +147,11 @@ object OpenRouterCredentialStore {
             ${'$'}sec = Import-Clixml -LiteralPath '${powerShellLiteral(file.absolutePath)}'
             [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${'$'}sec)))
         """.trimIndent()
-        val output = runPowerShell(script, emptyMap()) ?: return null
+        val output = runPowerShell(script, emptyMap())
         return output.trim().takeIf { it.isNotEmpty() }
     }
 
-    private fun windowsStore(secret: String) {
+    internal fun windowsStore(secret: String) {
         val file = windowsFile()
         file.parentFile?.mkdirs()
         val script = """
@@ -166,8 +166,8 @@ object OpenRouterCredentialStore {
         runCatching { windowsFile().delete() }
     }
 
-    /** Runs a PowerShell script, returning stdout, or null on failure/timeout. */
-    private fun runPowerShell(script: String, environment: Map<String, String>): String? = runCatching {
+    /** Runs a PowerShell script, returning stdout. Throws with stderr on non-zero/timeout. */
+    private fun runPowerShell(script: String, environment: Map<String, String>): String {
         val encoded = java.util.Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
         val builder = ProcessBuilder(
             powerShellExecutable(), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded,
@@ -181,20 +181,16 @@ object OpenRouterCredentialStore {
         val errThread = Thread { process.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
         outThread.start()
         errThread.start()
-        if (!process.waitFor(15, TimeUnit.SECONDS)) {
+        if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly()
-            return@runCatching null
+            throw IllegalStateException("PowerShell timed out")
         }
         outThread.join(1_000)
         errThread.join(1_000)
         if (process.exitValue() != 0) {
-            System.err.println("OpenRouterCredentialStore: PowerShell exited ${process.exitValue()}: ${err.toString().trim()}")
-            return@runCatching null
+            throw IllegalStateException("PowerShell exit ${process.exitValue()}: ${err.toString().trim()}")
         }
-        out.toString()
-    }.getOrElse {
-        System.err.println("OpenRouterCredentialStore: PowerShell invocation failed: ${it.message}")
-        null
+        return out.toString()
     }
 
     private fun powerShellExecutable(): String {

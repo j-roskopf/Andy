@@ -18,14 +18,14 @@ class OpenRouterCredentialStoreTest {
         val previous = OpenRouterCredentialStore.load()
         val secret = "sk-or-test-${System.nanoTime()}"
         try {
-            OpenRouterCredentialStore.save(secret)
-            assertTrue(OpenRouterCredentialStore.isPresent())
-            assertEquals(secret, OpenRouterCredentialStore.load())
+            OpenRouterCredentialStore.windowsStore(secret)
+            assertTrue(OpenRouterCredentialStore.isPresent(), "key not present after Windows store")
+            assertEquals(secret, OpenRouterCredentialStore.windowsLoad())
 
             assertTrue(OpenRouterCredentialStore.delete())
             assertFalse(OpenRouterCredentialStore.isPresent())
         } finally {
-            if (previous != null) OpenRouterCredentialStore.save(previous) else OpenRouterCredentialStore.delete()
+            if (previous != null) OpenRouterCredentialStore.windowsStore(previous) else OpenRouterCredentialStore.delete()
         }
     }
 }
