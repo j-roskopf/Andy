@@ -2547,7 +2547,7 @@ class DesktopAgentRunService(
             }
         } + extraProviderLaunchEnv(taskForLaunch)
 
-        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
+        if (!quietResume && (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null)) {
             val current = currentTask(taskId)
             if (current != null && current.finishedAtMillis == null) {
                 finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
@@ -2576,7 +2576,7 @@ class DesktopAgentRunService(
                 }
             }
         }
-        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
+        if (!quietResume && (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null)) {
             val current = currentTask(taskId)
             if (current != null && current.finishedAtMillis == null) {
                 finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
@@ -2764,7 +2764,7 @@ class DesktopAgentRunService(
             writeInitialPromptWhenReady(taskId, handle, text)
         }
 
-        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
+        if (handle.stopRequested || (!quietResume && currentTask(taskId)?.finishedAtMillis != null)) {
             terminals.stop(taskId)
             val current = currentTask(taskId)
             if (current != null && current.finishedAtMillis == null) {
@@ -2865,7 +2865,7 @@ class DesktopAgentRunService(
 
         if (outcomeHandled.get()) return
         if (currentTask(taskId)?.status == AgentStatus.Blocked) return
-        if (currentTask(taskId)?.finishedAtMillis != null) return
+        if (handle.stopRequested || (!quietResume && currentTask(taskId)?.finishedAtMillis != null)) return
         // If the question artifact landed while we were tearing down the monitor, still wait.
         if (!artifacts.answerFile.isFile) {
             artifacts.questionFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
@@ -2939,7 +2939,7 @@ class DesktopAgentRunService(
                 },
             )
         }
-        if (currentTask(taskId)?.finishedAtMillis != null) return
+        if (handle.stopRequested || (!quietResume && currentTask(taskId)?.finishedAtMillis != null)) return
         finishTask(
             taskId = taskId,
             status = status,
@@ -6536,7 +6536,7 @@ class DesktopAgentRunService(
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
         if (handles[taskId]?.stopRequested == true) return
-        if (task.finishedAtMillis != null && !task.isActive && (snapshot.status == AgentStatus.Working || snapshot.status == AgentStatus.Blocked)) {
+        if (task.workflowStage != null && task.finishedAtMillis != null && !task.isActive && (snapshot.status == AgentStatus.Working || snapshot.status == AgentStatus.Blocked)) {
             return
         }
         val terminalLive = isLaneLive(taskId)
