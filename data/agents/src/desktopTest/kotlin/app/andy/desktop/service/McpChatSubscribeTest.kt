@@ -32,7 +32,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import app.andy.desktop.test.OptInGates.harnessTimeoutMillis
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -83,19 +85,19 @@ class McpChatSubscribeTest {
                 writer.write("\n")
                 writer.flush()
 
-                val backlog = withTimeout(10_000) {
+                val backlog = withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     awaitSubscribeNotification(reader)
                 }
                 assertEquals("task-1", backlog.string("taskId"))
                 assertEquals(1, backlog.array("events").size)
                 assertEquals("user", backlog.array("events")[0].jsonObject.string("type"))
 
-                withTimeout(10_000) {
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     while (ChatSubscribeMetrics.activeCollectorCount() < 1) delay(25)
                 }
 
                 fake.appendEvent("task-1", AgentEvent.AssistantText(2, "world"))
-                val live = withTimeout(10_000) {
+                val live = withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     awaitSubscribeNotification(reader)
                 }
                 assertEquals(1, live.array("events").size)
@@ -106,7 +108,7 @@ class McpChatSubscribeTest {
                 // push cancels the lifetime token (SDK transport close can hang on writers).
                 disconnectClient(channel)
                 fake.appendEvent("task-1", AgentEvent.AssistantText(3, "after-disconnect"))
-                withTimeout(10_000) {
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
                 }
             }
@@ -146,10 +148,10 @@ class McpChatSubscribeTest {
                 writer.write("\n")
                 writer.flush()
 
-                val backlog = withTimeout(10_000) { awaitSubscribeNotification(reader) }
+                val backlog = withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { awaitSubscribeNotification(reader) }
                 assertEquals(2, backlog.array("events").size)
 
-                withTimeout(10_000) {
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     while (ChatSubscribeMetrics.activeCollectorCount() < 1) delay(25)
                 }
 
@@ -159,7 +161,7 @@ class McpChatSubscribeTest {
                     1,
                     AgentEvent.AssistantText(2, "hello", isStreamDelta = true),
                 )
-                val live = withTimeout(10_000) { awaitSubscribeNotification(reader) }
+                val live = withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { awaitSubscribeNotification(reader) }
                 assertEquals(1, live.int("replaceFrom"))
                 assertEquals(1, live.array("events").size)
                 assertEquals("assistant", live.array("events")[0].jsonObject.string("type"))
@@ -167,7 +169,7 @@ class McpChatSubscribeTest {
 
                 disconnectClient(channel)
                 fake.appendEvent("task-coalesce", AgentEvent.AssistantText(3, "after"))
-                withTimeout(10_000) {
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                     while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
                 }
             }
@@ -185,10 +187,10 @@ class McpChatSubscribeTest {
                     fake.setStatus("done-1", AgentStatus.Done)
                 }
             }
-            val text = withTimeout(15_000) { resultText.await() }
+            val text = withTimeout(harnessTimeoutMillis(15_000, 60_000, 90_000)) { resultText.await() }
             assertTrue(text.contains("\"ok\":true") || text.contains("\"ok\": true"), text)
             assertTrue(text.contains("\"reason\":\"terminal\"") || text.contains("\"reason\": \"terminal\""), text)
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                 while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
             }
         }
@@ -206,11 +208,11 @@ class McpChatSubscribeTest {
                     fake.setStatus("err-1", AgentStatus.Error)
                 }
             }
-            val text = withTimeout(15_000) { resultText.await() }
+            val text = withTimeout(harnessTimeoutMillis(15_000, 60_000, 90_000)) { resultText.await() }
             assertTrue(text.contains("\"ok\":true") || text.contains("\"ok\": true"), text)
             assertTrue(text.contains("\"reason\":\"error\"") || text.contains("\"reason\": \"error\""), text)
             assertFalse(text.contains("\"reason\":\"terminal\""), text)
-            withTimeout(10_000) {
+            withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) {
                 while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
             }
         }
@@ -231,7 +233,7 @@ class McpChatSubscribeTest {
                     ),
                 )
                 assertFalse(isError, text)
-                withTimeout(10_000) { while (fake.resumeCalls.isEmpty()) delay(25) }
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { while (fake.resumeCalls.isEmpty()) delay(25) }
                 assertEquals(listOf(png.absolutePath), fake.resumeCalls.single().imagePaths)
             } finally {
                 png.delete()
@@ -254,7 +256,7 @@ class McpChatSubscribeTest {
                     ),
                 )
                 assertFalse(isError, text)
-                withTimeout(10_000) { while (fake.queueCalls.isEmpty()) delay(25) }
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { while (fake.queueCalls.isEmpty()) delay(25) }
                 assertEquals(listOf(jpg.absolutePath), fake.queueCalls.single().imagePaths)
             } finally {
                 jpg.delete()
@@ -277,7 +279,7 @@ class McpChatSubscribeTest {
                     ),
                 )
                 assertFalse(isError, text)
-                withTimeout(10_000) { while (fake.startCalls.isEmpty()) delay(25) }
+                withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { while (fake.startCalls.isEmpty()) delay(25) }
                 assertEquals(listOf(webp.absolutePath), fake.startCalls.single().imagePaths)
             } finally {
                 webp.delete()
@@ -388,10 +390,16 @@ class McpChatSubscribeTest {
         }
         try {
             unixServer.startBlocking()
-            withTimeout(10_000) { while (!socketPath.exists()) delay(25) }
+            withTimeout(harnessTimeoutMillis(10_000, 30_000, 60_000)) { while (!socketPath.exists()) delay(25) }
+            withTimeoutOrNull(harnessTimeoutMillis(2_000, 5_000, 10_000)) {
+                while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
+            }
             block(fake, socketPath)
         } finally {
             unixServer.stopBlocking()
+            withTimeoutOrNull(harnessTimeoutMillis(2_000, 5_000, 10_000)) {
+                while (ChatSubscribeMetrics.activeCollectorCount() > 0) delay(25)
+            }
             dir.deleteRecursively()
         }
     }

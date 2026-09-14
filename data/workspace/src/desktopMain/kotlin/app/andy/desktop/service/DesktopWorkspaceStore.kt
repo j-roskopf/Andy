@@ -73,6 +73,13 @@ class DesktopWorkspaceStore(
             mcpServerPort = props.getProperty("mcpServerPort")?.toIntOrNull() ?: 8565,
             networkAccessEnabled = props.getProperty("networkAccessEnabled")?.toBooleanStrictOrNull() ?: false,
             hostScreenshotEnabled = props.getProperty("hostScreenshotEnabled")?.toBooleanStrictOrNull() ?: false,
+            computerUseEnabled = props.getProperty("computerUseEnabled")?.toBooleanStrictOrNull() ?: false,
+            computerUseProfilesJson = props.getProperty("computerUseProfilesJson")?.takeIf { it.isNotBlank() } ?: "[]",
+            computerUsePanicShortcut = props.getProperty("computerUsePanicShortcut")?.takeIf { it.isNotBlank() },
+            computerUseDefaultWallClockSeconds =
+                props.getProperty("computerUseDefaultWallClockSeconds")?.toIntOrNull() ?: 600,
+            computerUsePersistScreenshots =
+                props.getProperty("computerUsePersistScreenshots")?.toBooleanStrictOrNull() ?: false,
             networkAccessTailscaleOnly =
                 props.getProperty("networkAccessTailscaleOnly")?.toBooleanStrictOrNull() ?: true,
             networkAccessToken = props.getProperty("networkAccessToken").orEmpty(),
@@ -257,6 +264,14 @@ class DesktopWorkspaceStore(
             setProperty("mcpServerPort", state.mcpServerPort.toString())
             setProperty("networkAccessEnabled", state.networkAccessEnabled.toString())
             setProperty("hostScreenshotEnabled", state.hostScreenshotEnabled.toString())
+            setProperty("computerUseEnabled", state.computerUseEnabled.toString())
+            setProperty("computerUseProfilesJson", state.computerUseProfilesJson)
+            setProperty("computerUsePanicShortcut", state.computerUsePanicShortcut.orEmpty())
+            setProperty(
+                "computerUseDefaultWallClockSeconds",
+                state.computerUseDefaultWallClockSeconds.toString(),
+            )
+            setProperty("computerUsePersistScreenshots", state.computerUsePersistScreenshots.toString())
             setProperty("networkAccessTailscaleOnly", state.networkAccessTailscaleOnly.toString())
             setProperty("networkAccessToken", state.networkAccessToken)
             setProperty("networkAccessPasswordHash", state.networkAccessPasswordHash)

@@ -4,8 +4,8 @@
 #
 # Wired as ~/.gemini/antigravity-cli/settings.json → title.command.
 # agy pipes the same JSON payload used by statusLine (agent_state, tool_confirmation_pending, …)
-# on stdin; we write .andy/<taskId>/status.json and print a window title with andy:* markers
-# that AgentStatusTracker scrapes via OSC / pane title.
+# on stdin; mid-turn Working/Blocked go to .andy/<taskId>/status.json. Idle only prints the
+# andy:idle OSC marker — Done is authored by Stop when fullyIdle (background tasks stay Working).
 payload=$(cat 2>/dev/null || true)
 
 state=$(printf '%s' "$payload" | grep -o '"agent_state"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
@@ -20,7 +20,9 @@ if [ "$pending" -eq 1 ]; then
 else
   case "$state" in
     idle)
-      status=done
+      # OSC idle only — do not author Done here. Stop + fullyIdle owns turn completion
+      # so background tasks (Gradle, etc.) do not look like a finished chat.
+      status=""
       marker=andy:idle
       ;;
     thinking|working|tool_use)

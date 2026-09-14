@@ -538,7 +538,10 @@ class ProjectWorkflowServiceTest {
     @Test
     fun disablingAfterBlockingReviewBypassesItOnlyAfterExplicitResume() = runBlocking {
         withHarness(
-            WorkflowAdapter(reviewOutcomes = ArrayDeque(listOf("changes")), stageDelayMillis = 250),
+            WorkflowAdapter(
+                reviewOutcomes = ArrayDeque(listOf("changes")),
+                stageDelayMillis = harnessTimeoutMillis(800, 2_500, 4_000),
+            ),
         ) { harness ->
             val buildId = saveExternalPair(harness.service, reviewEnabled = true)
             harness.service.startBuildPair(buildId)
@@ -675,10 +678,9 @@ class ProjectWorkflowServiceTest {
             assertEquals(null, draft.linkedVerificationTaskId)
 
             harness.service.startBuildPair(buildId)
-            withTimeout(5_000) {
-                while (harness.service.tasks.value.none { it.workflowStage == ProjectWorkflowStage.Build }) delay(25)
+            val buildRun = awaitValue {
+                harness.service.tasks.value.firstOrNull { it.workflowStage == ProjectWorkflowStage.Build }
             }
-            val buildRun = harness.service.tasks.value.first { it.workflowStage == ProjectWorkflowStage.Build }
             assertEquals(AgentLaneKind.Terminal, buildRun.lane, "status=${buildRun.status} error=${buildRun.errorMessage}")
             await {
                 harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
@@ -915,7 +917,9 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun pauseLetsTheCurrentBuildFinishAndResumeContinuesWithVerification() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 250)) { harness ->
+        withHarness(
+            WorkflowAdapter(stageDelayMillis = harnessTimeoutMillis(800, 2_500, 4_000)),
+        ) { harness ->
             val buildId = saveExternalPair(harness.service)
             harness.service.startBuildPair(buildId)
             await { harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state == ProjectTaskState.Running }
@@ -992,7 +996,9 @@ class ProjectWorkflowServiceTest {
 
     @Test
     fun stoppingAndDeletingASpecRefineRestoresCompletedAndDropsTheAttempt() = runBlocking {
-        withHarness(WorkflowAdapter(stageDelayMillis = 400)) { harness ->
+        withHarness(
+            WorkflowAdapter(stageDelayMillis = harnessTimeoutMillis(2_000, 10_000, 20_000)),
+        ) { harness ->
             val service = harness.service
             val specId = service.saveSpec(
                 ProjectSpecDraft(
@@ -1949,7 +1955,7 @@ private fun isWindows(): Boolean = System.getProperty("os.name").contains("windo
 private const val WORKFLOW_ARTIFACT_POLL_MS = 20L
 
 /** Missing review/verify JSON should fail into NeedsAttention quickly in tests (prod: 3 min). */
-private const val WORKFLOW_ARTIFACT_WAIT_MS = 250L
+private val WORKFLOW_ARTIFACT_WAIT_MS = harnessTimeoutMillis(500, 2_000, 3_000)
 
 private class MutableActionConfig(var value: ActionsConfig) : ActionConfigStore {
     override suspend fun load(): ActionsConfig = value

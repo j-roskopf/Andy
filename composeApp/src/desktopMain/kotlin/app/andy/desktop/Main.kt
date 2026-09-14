@@ -118,6 +118,7 @@ fun main() {
         var voiceOverlayOpen by remember { mutableStateOf(false) }
         var voiceOverlayBlocker by remember { mutableStateOf<VoiceNewThreadBlocker?>(null) }
         var voiceOverlayRecording by remember { mutableStateOf(false) }
+        val computerUseHud by services.computerUse.hud.collectAsState()
         val hotKeyRegistrar = remember { desktopGlobalHotKeyRegistrar }
         // Presenter *attach* must stay blocked while *any* Andy window is being live-resized,
         // pop-outs included: opening an overlay from the EDT while the main thread is inside a
@@ -197,16 +198,24 @@ fun main() {
             }
             SwingUtilities.invokeLater(run)
         }
+        fun handleComputerUsePanicHotKey() {
+            SwingUtilities.invokeLater {
+                services.computerUse.panic("panic hotkey")
+            }
+        }
         LaunchedEffect(
             workspaceState.voiceNewThreadShortcut,
+            workspaceState.computerUsePanicShortcut,
+            computerUseHud?.sessionId,
             hotKeyRegistrar.isSupported,
             andyWindowFocused,
             voiceOverlayOpen,
         ) {
-            val combo = KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
-            // Carbon only while Andy is in the background. While focused (main or overlay),
-            // leave it unregistered so Compose onPreviewKeyEvent can see the combo — a live
-            // RegisterEventHotKey steals the keystroke and never delivers it to the window.
+            val panicCombo = KeyCombo.decode(workspaceState.computerUsePanicShortcut)
+            val voiceCombo = KeyCombo.decode(workspaceState.voiceNewThreadShortcut)
+            // While computer-use is armed, the Carbon slot prefers the panic hotkey.
+            val armed = computerUseHud != null
+            val combo = if (armed) panicCombo else voiceCombo
             val useCarbon = combo != null &&
                 hotKeyRegistrar.isSupported &&
                 !andyWindowFocused &&
@@ -226,7 +235,15 @@ fun main() {
             }
         }
         LaunchedEffect(hotKeyRegistrar) {
-            hotKeyRegistrar.pressed.collect { handleVoiceNewThreadHotKey() }
+            hotKeyRegistrar.pressed.collect {
+                if (services.computerUse.hud.value != null &&
+                    KeyCombo.decode(workspaceStore.state.value.computerUsePanicShortcut) != null
+                ) {
+                    handleComputerUsePanicHotKey()
+                } else {
+                    handleVoiceNewThreadHotKey()
+                }
+            }
         }
         fun openPopOutMirror() {
             visible = true
@@ -414,16 +431,27 @@ fun main() {
                     else -> {
                         // Focused-window path: Carbon covers unfocused; this covers when Andy is
                         // frontmost (and when Carbon registration fails for any reason).
-                        val newThread = KeyCombo.decode(state.voiceNewThreadShortcut)
+                        val panic = KeyCombo.decode(state.computerUsePanicShortcut)
                         if (
-                            newThread != null &&
+                            panic != null &&
+                            services.computerUse.hud.value != null &&
                             event.type == KeyEventType.KeyDown &&
-                            newThread.matches(event)
+                            panic.matches(event)
                         ) {
-                            handleVoiceNewThreadHotKey()
+                            handleComputerUsePanicHotKey()
                             true
                         } else {
-                            false
+                            val newThread = KeyCombo.decode(state.voiceNewThreadShortcut)
+                            if (
+                                newThread != null &&
+                                event.type == KeyEventType.KeyDown &&
+                                newThread.matches(event)
+                            ) {
+                                handleVoiceNewThreadHotKey()
+                                true
+                            } else {
+                                false
+                            }
                         }
                     }
                 }

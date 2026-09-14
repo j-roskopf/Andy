@@ -28,6 +28,27 @@ internal fun statusNeedsUnread(
 }
 
 /**
+ * True when a `question.json` decision card should wait for the live turn to leave
+ * [AgentStatus.Working] before parking as Blocked.
+ *
+ * Agents often write the artifact mid-turn (tool call) and keep streaming text.
+ * Surfacing choices during that window lets the user answer early and races the
+ * original turn's finish path (loading orb disappears).
+ */
+internal fun shouldDeferQuestionPark(liveStatus: AgentStatus?): Boolean =
+    liveStatus == AgentStatus.Working
+
+/** Max wait after mid-stream question.json before parking even if status is still Working. */
+internal const val QUESTION_PARK_SETTLE_MS = 1_500L
+
+/**
+ * When the user already answered a grill-me card and a follow-up prompt is in flight,
+ * the prior turn must not call [finishTask] — that would stamp Done and hide Working.
+ */
+internal fun shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp: Boolean): Boolean =
+    pendingFollowUp
+
+/**
  * True when a live-status scrape should not overwrite the task badge.
  *
  * Working must be able to replace Done/Blocked when the turn continues (blocker

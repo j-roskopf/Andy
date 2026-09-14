@@ -312,13 +312,14 @@ private const val ANDY_AGY_HOOK_NAME = "andy-status"
 /**
  * Antigravity (`agy`): project `.agents/hooks.json` + optional title.command.
  *
- * - working ← PreInvocation
- * - done ← Stop when `fullyIdle: true` (gate in andy-status-hook.sh)
+ * - working ← PreInvocation; also Stop when `fullyIdle: false` (background tasks still run)
+ * - done ← Stop when `fullyIdle: true` only (gate in andy-status-hook.sh)
  * - blocked ← title script `tool_confirmation_pending` (no PreToolUse decision hooks —
  *   those require a permission `decision` and would alter agy's default gating)
  *
- * Title script ([AndyAgyTitleInstaller]) maps `agent_state` continuously and is the
- * primary mid-turn Working/Blocked signal; hooks cover start/stop if title is unset.
+ * Title script ([AndyAgyTitleInstaller]) maps mid-turn Working/Blocked from `agent_state`;
+ * idle only sets the OSC marker — it must not author Done (that would ding while
+ * Gradle/etc. run in the background). Screen scrape also keeps Working on `· N task`.
  */
 fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     if (shouldSkipProjectHooks(worktreeOrCwd)) return

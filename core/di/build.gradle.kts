@@ -15,6 +15,7 @@ kotlin {
                 implementation(project(":data:bug-capture"))
                 implementation(project(":data:platform-tools"))
                 implementation(project(":data:host"))
+                implementation(project(":data:computer-use"))
                 implementation(project(":data:updates"))
                 implementation(project(":data:remote"))
                 implementation(project(":agent-store"))

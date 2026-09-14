@@ -70,6 +70,19 @@ data class WorkspaceState(
      * reaches the user's full host screen.
      */
     val hostScreenshotEnabled: Boolean = false,
+    /**
+     * Master switch for host computer-use MCP tools. Off by default, per-project via
+     * workspace.properties. Input injection is gated separately by per-session arming.
+     */
+    val computerUseEnabled: Boolean = false,
+    /** JSON blob of [ComputerUseGrantProfile] list (§11). */
+    val computerUseProfilesJson: String = "[]",
+    /** Encoded panic hotkey [app.andy.ui.components.KeyCombo]; null = unbound. */
+    val computerUsePanicShortcut: String? = null,
+    /** Default attended wall-clock ceiling in seconds. */
+    val computerUseDefaultWallClockSeconds: Int = 600,
+    /** Opt-in disk retention for attended session screenshots (unattended is Phase 4). */
+    val computerUsePersistScreenshots: Boolean = false,
     /** When true, MCP/HTTP binds to 0.0.0.0 so other devices on the user's network can reach Andy. */
     val networkAccessEnabled: Boolean = false,
     /**

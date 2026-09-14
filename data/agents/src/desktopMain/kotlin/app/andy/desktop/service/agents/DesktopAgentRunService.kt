@@ -238,6 +238,13 @@ class DesktopAgentRunService(
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
     private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
+    /** Terminal grill-me: wait for Working → settled before parking on question.json. */
+    private val deferredQuestionJobs = ConcurrentHashMap<String, Job>()
+    /**
+     * Set while an ACP grill-me answer follow-up is queued/running so the prior turn's
+     * [completeAcpPromptTurn] does not stamp Done and clear the Working orb.
+     */
+    private val pendingGrillMeFollowUps = ConcurrentHashMap.newKeySet<String>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val _viewingTaskId = MutableStateFlow<String?>(null)
     override val viewingTaskId: StateFlow<String?> = _viewingTaskId
@@ -2012,8 +2019,13 @@ class DesktopAgentRunService(
             updateTask(taskId) {
                 it.copy(status = AgentStatus.Working, userInputRequest = null, finishedAtMillis = null, unread = false)
             }
+            pendingGrillMeFollowUps.add(taskId)
             scope.launch(Dispatchers.IO) {
-                runAcpFollowUp(taskId, response, emptyList())
+                try {
+                    runAcpFollowUp(taskId, response, emptyList())
+                } finally {
+                    pendingGrillMeFollowUps.remove(taskId)
+                }
             }
             return
         }
@@ -2818,7 +2830,11 @@ class DesktopAgentRunService(
                         )
                     }
                     is AgentWorkflowArtifacts.Event.QuestionReady -> {
-                        waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
+                        scheduleParkWorkflowQuestion(
+                            taskId = taskId,
+                            request = event.request,
+                            statusTracker = terminalHandle.statusTracker,
+                        )
                     }
                 }
             }
@@ -3067,6 +3083,11 @@ class DesktopAgentRunService(
         promptSuccess: Boolean,
     ): Boolean {
         if (deferAcpFinishIfAwaitingInput(taskId)) return promptSuccess
+        // User already answered while this turn was still finishing — the follow-up owns
+        // Working/Done. Finalizing here would flash Done and hide the loading orb.
+        if (shouldSkipAcpFinishForPendingGrillMeFollowUp(taskId in pendingGrillMeFollowUps)) {
+            return promptSuccess
+        }
 
         val stalled = transcriptHasConnectionStall(taskId)
         if (!stalled) {
@@ -3558,6 +3579,45 @@ class DesktopAgentRunService(
         }
     }
 
+    /**
+     * Parks on [request] once the live turn is no longer [AgentStatus.Working], or after a
+     * short settle window if the agent stays Working while waiting for the decision.
+     * Mid-stream `question.json` must not show choices until output has a chance to finish.
+     */
+    private fun scheduleParkWorkflowQuestion(
+        taskId: String,
+        request: AgentUserInputRequest,
+        statusTracker: AgentStatusTracker?,
+    ) {
+        val live = statusTracker?.status?.value?.status ?: currentTask(taskId)?.status
+        if (!shouldDeferQuestionPark(live)) {
+            waitForUserInput(taskId, request, exitCode = 0, keepTerminal = true)
+            return
+        }
+        deferredQuestionJobs.remove(taskId)?.cancel()
+        val job = scope.launch {
+            // Prefer leaving Working (idle/Blocked scrape). If the agent keeps Working while
+            // blocked on stdin for the answer, park after the settle window anyway.
+            withTimeoutOrNull(QUESTION_PARK_SETTLE_MS) {
+                if (statusTracker != null) {
+                    statusTracker.status.first { snap -> !shouldDeferQuestionPark(snap.status) }
+                } else {
+                    while (isActive && shouldDeferQuestionPark(currentTask(taskId)?.status)) {
+                        delay(50)
+                    }
+                }
+            }
+            val task = currentTask(taskId) ?: return@launch
+            // Already showing a decision card — nothing to do. Scrape may set Blocked
+            // without a request; still attach question.json in that case.
+            if (task.userInputRequest != null) return@launch
+            val pending = readPendingWorkflowQuestion(task) ?: return@launch
+            waitForUserInput(taskId, pending, exitCode = 0, keepTerminal = true)
+        }
+        deferredQuestionJobs[taskId] = job
+        job.invokeOnCompletion { deferredQuestionJobs.remove(taskId, job) }
+    }
+
     override fun completeWorkflowRun(taskId: String) {
         val task = currentTask(taskId) ?: return
         if (!task.isActive || task.workflowStage != ProjectWorkflowStage.Build) return
@@ -3581,6 +3641,7 @@ class DesktopAgentRunService(
     }
 
     private fun stopNow(taskId: String) {
+        deferredQuestionJobs.remove(taskId)?.cancel()
         if (currentTask(taskId)?.connectionRecovery != null) {
             // Cancel the delayed resume, then fall through so a live ACP child is torn down
             // the same way as a normal Stop (instead of leaving the provider session running).
@@ -3664,6 +3725,8 @@ class DesktopAgentRunService(
         terminals.clear(taskId)
         failedReattachTaskIds.remove(taskId)
         acpArtifactJobs.remove(taskId)?.cancel()
+        deferredQuestionJobs.remove(taskId)?.cancel()
+        pendingGrillMeFollowUps.remove(taskId)
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
@@ -6310,7 +6373,14 @@ class DesktopAgentRunService(
                     }
                     is AgentWorkflowArtifacts.Event.ReviewReady -> updateTask(taskId) { it.copy(completedResultText = event.json) }
                     is AgentWorkflowArtifacts.Event.VerificationReady -> updateTask(taskId) { it.copy(completedResultText = event.json) }
-                    is AgentWorkflowArtifacts.Event.QuestionReady -> waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
+                    is AgentWorkflowArtifacts.Event.QuestionReady -> {
+                        // While Working, keep streaming; completeAcpPromptTurn →
+                        // deferAcpFinishIfAwaitingInput parks after the turn settles.
+                        // Late writes after the turn ends still park immediately.
+                        if (!shouldDeferQuestionPark(currentTask(taskId)?.status)) {
+                            waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
+                        }
+                    }
                 }
                 persist()
             }
@@ -6592,6 +6662,7 @@ class DesktopAgentRunService(
                 queuedAcpPermissions.remove(taskId)
             }
         } else {
+            deferredQuestionJobs.remove(taskId)?.cancel()
             when {
                 forceKillTerminal || stoppedByUser -> {
                     // tmux hasSession/killSession can block up to 30s each — keep off Main.

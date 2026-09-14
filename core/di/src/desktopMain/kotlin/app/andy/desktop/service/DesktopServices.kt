@@ -1,5 +1,6 @@
 package app.andy.desktop.service
 
+import app.andy.desktop.service.computeruse.LocalComputerUseService
 import app.andy.desktop.service.remote.AndroidBackendSwitcher
 import app.andy.desktop.service.remote.DesktopRemoteSessionService
 import app.andy.desktop.service.remote.SwappableAgentBackend
@@ -191,6 +192,8 @@ fun createDaemonRuntime(
     val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val emulatorControls = DesktopEmulatorControls(devices, apps)
+    val computerUseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val computerUse = LocalComputerUseService(workspaceStore = store, scope = computerUseScope)
     val mcp = DesktopMcpServerService(
         devices = devices,
         emulatorControls = emulatorControls,
@@ -211,6 +214,7 @@ fun createDaemonRuntime(
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
         iosDevices = iosDevices,
+        computerUse = computerUse,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
@@ -307,6 +311,7 @@ fun createDaemonRuntime(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         ),
         mcp = mcp,
+        computerUse = computerUse,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = agentRuns,
@@ -479,6 +484,8 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val emulatorControls = DesktopEmulatorControls(localDevices, apps)
+    val computerUseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val computerUse = LocalComputerUseService(workspaceStore = store, scope = computerUseScope)
     val mcp = DesktopMcpServerService(
         devices = localDevices,
         emulatorControls = emulatorControls,
@@ -499,6 +506,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
         iosDevices = iosDevices,
+        computerUse = computerUse,
     )
 
     val socket = File(System.getProperty("user.home"), ".andy/andyd.sock")
@@ -661,6 +669,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         ),
         mcp = mcp,
+        computerUse = computerUse,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = swappableAgents,
@@ -760,6 +769,8 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val evidenceService = DesktopInvestigationEvidenceService(bugService)
 
     val emulatorControls = DesktopEmulatorControls(localDevices, apps)
+    val computerUseScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val computerUse = LocalComputerUseService(workspaceStore = store, scope = computerUseScope)
     val mcp = DesktopMcpServerService(
         devices = localDevices,
         emulatorControls = emulatorControls,
@@ -780,6 +791,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         recordingExport = recordingExportService,
         actionConfig = actionConfig,
         iosDevices = iosDevices,
+        computerUse = computerUse,
     )
 
     val agentTaskStore = DesktopAgentTaskStore()
@@ -974,6 +986,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
         ),
         mcp = mcp,
+        computerUse = computerUse,
         actionConfig = actionConfig,
         actionRuns = actionRuns,
         agentRuns = swappableAgents,

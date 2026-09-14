@@ -299,6 +299,11 @@ fun SettingsScreen(
                     workspaceState = workspaceState,
                     onUpdateWorkspace = onUpdateWorkspace,
                 )
+                ComputerUseSettingsPanel(
+                    workspaceState = workspaceState,
+                    onUpdateWorkspace = onUpdateWorkspace,
+                    services = services,
+                )
                 McpToolsPanel(toolNames)
                 McpClientsPanel(
                     mcpService = services.mcp,
@@ -3204,6 +3209,110 @@ private fun HostScreenshotSettingsPanel(
                 onUpdateWorkspace { it.copy(hostScreenshotEnabled = checked) }
             },
         )
+    }
+}
+
+@Composable
+private fun ComputerUseSettingsPanel(
+    workspaceState: WorkspaceState,
+    onUpdateWorkspace: ((WorkspaceState) -> WorkspaceState) -> Unit,
+    services: AndyServices,
+) {
+    val refreshScope = rememberCoroutineScope()
+    var capsText by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val panicShortcut = remember(workspaceState.computerUsePanicShortcut) {
+        KeyCombo.decode(workspaceState.computerUsePanicShortcut)
+    }
+    val profileCount = remember(workspaceState.computerUseProfilesJson) {
+        // Count objects without pulling serialization into feature/settings.
+        workspaceState.computerUseProfilesJson.count { it == '{' }
+    }
+
+    suspend fun refreshCaps() {
+        busy = true
+        capsText = runCatching {
+            val c = services.computerUse.capabilities()
+            buildString {
+                append(c.platform.name)
+                append(" · available=").append(c.available)
+                append(" · Accessibility=").append(c.accessibility.name)
+                append(" · Screen Recording=").append(c.screenRecording.name)
+                if (c.processOutsideAppChain) append(" · process outside Andy.app chain")
+                c.unavailableReason?.let { append("\n").append(it) }
+            }
+        }.getOrElse { it.message }
+        busy = false
+    }
+
+    LaunchedEffect(workspaceState.computerUseEnabled) { refreshCaps() }
+
+    SettingsGroup(
+        title = "Computer Use",
+        description = "Let agents navigate the host desktop via accessibility and input injection. " +
+            "Off by default. Each run must arm a session; a HUD and panic hotkey stay visible while armed.",
+    ) {
+        SettingsToggleRow(
+            label = "Enable computer use",
+            checked = workspaceState.computerUseEnabled,
+            description = "Master switch. Agents still need computer_request_control before acting.",
+            onCheckedChange = { checked ->
+                onUpdateWorkspace { it.copy(computerUseEnabled = checked) }
+            },
+        )
+        Text(
+            if (busy) "Checking permissions…" else (capsText ?: "—"),
+            color = TextSecondary,
+            fontSize = 11.sp,
+            fontFamily = MonoFont,
+            lineHeight = 15.sp,
+        )
+        OutlinedButton(
+            onClick = { refreshScope.launch { refreshCaps() } },
+        ) { Text("Refresh status") }
+        VoiceDictationShortcutRow(
+            shortcut = panicShortcut,
+            label = "Panic hotkey (instant disarm)",
+            contentDescription = "Computer use panic hotkey",
+            onChange = { combo ->
+                onUpdateWorkspace { it.copy(computerUsePanicShortcut = combo?.encode()) }
+            },
+        )
+        SettingsToggleRow(
+            label = "Persist attended screenshots to disk",
+            checked = workspaceState.computerUsePersistScreenshots,
+            description = "Off by default. Screenshots still reach the model provider in context.",
+            onCheckedChange = { checked ->
+                onUpdateWorkspace { it.copy(computerUsePersistScreenshots = checked) }
+            },
+        )
+        Text(
+            "Grant profiles ($profileCount)",
+            color = TextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            "Named reusable scopes for unattended runs (Phase 4). Stored in workspace.properties.",
+            color = TextSecondary,
+            fontSize = 11.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    val id = "profile-${profileCount + 1}"
+                    val json =
+                        """[{"id":"$id","name":"Chrome attended","scope":{"appNames":["Google Chrome"],"wholeDesktop":false},"attended":true,"wallClockCapSeconds":${workspaceState.computerUseDefaultWallClockSeconds},"highConsequenceLabels":[]}]"""
+                    onUpdateWorkspace { it.copy(computerUseProfilesJson = json) }
+                },
+            ) { Text("Add Chrome profile") }
+            if (profileCount > 0) {
+                TextButton(
+                    onClick = { onUpdateWorkspace { it.copy(computerUseProfilesJson = "[]") } },
+                ) { Text("Clear profiles") }
+            }
+        }
     }
 }
 

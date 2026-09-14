@@ -120,6 +120,7 @@ kotlin {
             implementation(project(":data:network"))
             implementation(project(":data:platform-tools"))
             implementation(project(":data:workspace"))
+            implementation(project(":data:computer-use"))
             implementation(libs.mcp.kotlin.sdk)
             implementation(libs.acp)
             implementation(libs.pty4j)

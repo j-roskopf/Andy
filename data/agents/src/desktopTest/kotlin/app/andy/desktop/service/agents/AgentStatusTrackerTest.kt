@@ -1127,7 +1127,7 @@ class AgentStatusTrackerTest {
     }
 
     @Test
-    fun statusHookScriptFullyIdleGateSkipsDoneUntilIdle() {
+    fun statusHookScriptFullyIdleGateWritesWorkingUntilIdle() {
         val home = File.createTempFile("andy-home", null).also { it.delete(); it.mkdirs() }
         val previousHome = System.getProperty("user.home")
         val project = File(home, "project").also { it.mkdirs() }
@@ -1147,7 +1147,11 @@ class AgentStatusTrackerTest {
                 stdin = """{"fullyIdle":false,"terminationReason":"model_stop"}""",
             )
             assertEquals("{}", skippedOut)
-            assertFalse(statusFile.exists(), "fullyIdle:false must not write done")
+            assertTrue(
+                statusFile.readText().contains("\"status\":\"working\""),
+                "fullyIdle:false must coerce done→working (background tasks still running)",
+            )
+            assertFalse(statusFile.readText().contains("\"status\":\"done\""))
 
             val (_, idleOut) = runStatusHook(
                 script,
@@ -1567,7 +1571,10 @@ class AgentStatusTrackerTest {
                 env = env,
             )
             assertEquals("agy andy:idle", idleOut)
-            assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"done\""))
+            // Idle must not author Done — leave the prior Working stamp so background
+            // tasks do not look like a finished turn. Stop + fullyIdle owns Done.
+            assertTrue(File(artifacts, "status.json").readText().contains("\"status\":\"working\""))
+            assertFalse(File(artifacts, "status.json").readText().contains("\"status\":\"done\""))
 
             val (_, blockedOut) = runAgyTitleScript(
                 script,
@@ -1944,6 +1951,26 @@ class AgentStatusTrackerTest {
             DetectionInput(screen = screen),
         )
         assertEquals(ScreenState.Working, match.state)
+        assertTrue(match.visibleWorking)
+        assertFalse(match.visibleIdle)
+    }
+
+    @Test
+    fun antigravityBackgroundTasksChromeOverridesOscIdle() {
+        val screen = """
+            Running ./gradlew test in the background.
+            · 1 task
+            >
+        """.trimIndent()
+        val match = evaluateScreenManifest(
+            AgentKind.Antigravity,
+            DetectionInput(
+                screen = screen,
+                oscTitle = "agy andy:idle",
+            ),
+        )
+        assertEquals(ScreenState.Working, match.state)
+        assertEquals("background_tasks_working", match.ruleId)
         assertTrue(match.visibleWorking)
         assertFalse(match.visibleIdle)
     }
