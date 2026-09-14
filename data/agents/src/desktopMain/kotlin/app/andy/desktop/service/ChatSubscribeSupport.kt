@@ -222,6 +222,18 @@ internal fun AgentEvent.toWire(): JsonObject = buildJsonObject {
             put("type", "user")
             put("text", text)
             put("images", JsonArray(imagePaths.map(::JsonPrimitive)))
+            put(
+                "skills",
+                JsonArray(
+                    skills.map { skill ->
+                        buildJsonObject {
+                            put("name", skill.name)
+                            put("path", skill.path)
+                        }
+                    },
+                ),
+            )
+            put("attachments", JsonArray(attachments.map { attachmentDescriptorJson(it) }))
         }
         is AgentEvent.ToolCall -> {
             put("type", "tool")
@@ -231,6 +243,8 @@ internal fun AgentEvent.toWire(): JsonObject = buildJsonObject {
             put("detail", detail)
             put("kind", kind?.name.orEmpty())
             put("state", state.name)
+            put("startedAtMillis", startedAtMillis ?: 0L)
+            put("endedAtMillis", endedAtMillis ?: 0L)
             put("locations", JsonArray(locations.map(::JsonPrimitive)))
         }
         is AgentEvent.ToolResult -> {

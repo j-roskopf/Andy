@@ -506,4 +506,49 @@ class AcpToolCallPresentationTest {
         assertEquals("Edit", merged.toolName)
         assertEquals("Foo.kt", merged.summary)
     }
+
+    @Test
+    fun mergePreservesFirstSeenStartAndStampsEndOnTerminal() {
+        val pending = AgentEvent.ToolCall(
+            atMillis = 100,
+            toolName = "bash",
+            summary = "pwd",
+            detail = """{"command":"pwd"}""",
+            toolCallId = "c1",
+            state = AgentToolState.Pending,
+            startedAtMillis = 100,
+        )
+        val inProgress = AgentEvent.ToolCall(
+            atMillis = 150,
+            toolName = "bash",
+            summary = "pwd",
+            detail = """{"command":"pwd"}""",
+            toolCallId = "c1",
+            state = AgentToolState.InProgress,
+            startedAtMillis = 150,
+        )
+        val mid = AcpToolCallPresentation.mergeToolCalls(pending, inProgress)
+        assertEquals(100, mid.startedAtMillis)
+        assertEquals(null, mid.endedAtMillis)
+
+        val done = AgentEvent.ToolCall(
+            atMillis = 200,
+            toolName = "bash",
+            summary = "pwd",
+            detail = """{"command":"pwd"}""" + AcpToolCallPresentation.DetailSeparator + "/tmp",
+            toolCallId = "c1",
+            state = AgentToolState.Completed,
+        )
+        val completed = AcpToolCallPresentation.mergeToolCalls(mid, done)
+        assertEquals(100, completed.startedAtMillis)
+        assertEquals(200, completed.endedAtMillis)
+
+        // Idempotent across repeated completed updates.
+        val again = AcpToolCallPresentation.mergeToolCalls(
+            completed,
+            done.copy(atMillis = 250, endedAtMillis = 250),
+        )
+        assertEquals(100, again.startedAtMillis)
+        assertEquals(200, again.endedAtMillis)
+    }
 }

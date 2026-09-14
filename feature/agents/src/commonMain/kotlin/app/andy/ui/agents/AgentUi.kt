@@ -44,6 +44,7 @@ import app.andy.andy.generated.resources.agent_hermes
 import app.andy.andy.generated.resources.agent_openclaw
 import app.andy.andy.generated.resources.agent_ollama
 import app.andy.andy.generated.resources.agent_lmstudio
+import app.andy.andy.generated.resources.agent_openrouter
 import app.andy.currentTimeMillis
 import app.andy.model.AgentKind
 import app.andy.model.AgentStatus
@@ -83,6 +84,7 @@ private fun agentIconResource(kind: AgentKind): DrawableResource = when (kind) {
     AgentKind.Goose -> Res.drawable.agent_goose
     AgentKind.Ollama -> Res.drawable.agent_ollama
     AgentKind.LMStudio -> Res.drawable.agent_lmstudio
+    AgentKind.OpenRouter -> Res.drawable.agent_openrouter
 }
 
 private val PiViolet = Color(0xFFA78BFA)
@@ -99,6 +101,7 @@ fun agentColor(kind: AgentKind): Color = when (kind) {
     AgentKind.Goose -> Color(0xFFE5E5E5)
     AgentKind.Ollama -> Color(0xFF14B8A6)
     AgentKind.LMStudio -> Color(0xFF818CF8)
+    AgentKind.OpenRouter -> Color(0xFF7624F4)
 }
 
 fun agentStatusColor(status: AgentStatus?): Color = when (status) {

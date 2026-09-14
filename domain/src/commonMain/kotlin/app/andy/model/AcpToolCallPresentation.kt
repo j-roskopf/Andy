@@ -108,14 +108,20 @@ object AcpToolCallPresentation {
             kind = kind,
             locations = mergedLocations,
         )
+        val mergedState = mergeToolState(previous.state, incoming.state)
+        val startedAtMillis = previous.startedAtMillis ?: previous.atMillis
+        val isTerminal = mergedState == AgentToolState.Completed || mergedState == AgentToolState.Failed
+        val endedAtMillis = previous.endedAtMillis ?: incoming.endedAtMillis ?: if (isTerminal) incoming.atMillis else null
         return incoming.copy(
             toolName = presented.toolName.ifBlank { mergedName },
             summary = resolvedSummary,
             detail = presented.detail.ifBlank { mergedDetail },
             kind = kind,
-            state = mergeToolState(previous.state, incoming.state),
+            state = mergedState,
             locations = mergedLocations,
             images = mergedImages,
+            startedAtMillis = startedAtMillis,
+            endedAtMillis = endedAtMillis,
         )
     }
 
@@ -559,13 +565,23 @@ object AcpToolCallPresentation {
     private fun isRenderedFileDiff(text: String): Boolean =
         text.contains("\n--- old\n") && text.contains("\n+++ new\n")
 
-    private fun extractLikelyInput(detail: String): String? {
+    /** Payload side of [detail] when framed with [DetailSeparator]; otherwise a likely arguments line. */
+    fun extractLikelyInput(detail: String): String? {
+        val separatorIndex = detail.indexOf(DetailSeparator)
+        if (separatorIndex >= 0) {
+            return detail.substring(0, separatorIndex).trim().takeIf { it.isNotBlank() }
+        }
         val lines = detail.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
         if (lines.isEmpty()) return null
         return lines.firstOrNull { looksLikeArguments(it) }
     }
 
-    private fun extractLikelyOutput(detail: String): String? {
+    /** Result side of [detail] when framed with [DetailSeparator]; otherwise a likely JSON/output line. */
+    fun extractLikelyOutput(detail: String): String? {
+        val separatorIndex = detail.indexOf(DetailSeparator)
+        if (separatorIndex >= 0) {
+            return detail.substring(separatorIndex + DetailSeparator.length).trim().takeIf { it.isNotBlank() }
+        }
         val lines = detail.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
         if (lines.isEmpty()) return null
         return lines.lastOrNull { isMinimalOutput(it) || looksLikeJson(it) }

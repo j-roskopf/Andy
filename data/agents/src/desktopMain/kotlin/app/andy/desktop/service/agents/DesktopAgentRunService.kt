@@ -41,7 +41,7 @@ import app.andy.model.fallbackTitle
 import app.andy.model.shouldAdoptProviderSessionTitle
 import app.andy.model.AgentStatus
 import app.andy.model.hasVendorCli
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelLaunchError
 import app.andy.model.prefixedLocalModelId
 import app.andy.model.runtimeKind
@@ -4235,7 +4235,7 @@ class DesktopAgentRunService(
                 .toMap()
         }
         _providerModels.update { current ->
-            current.filterKeys { !it.isLocalModelBackend } + models
+            current.filterKeys { !it.isModelBackend } + models
         }
         AgentModelCatalog.publishDiscovered(_providerModels.value)
         // Local HTTP probes must not block CLI refresh or occupy unbounded IO
@@ -4255,7 +4255,7 @@ class DesktopAgentRunService(
         }
         publishLocalModels(localModels)
         _providerModels.update { current ->
-            current.filterKeys { !it.isLocalModelBackend } + localModels
+            current.filterKeys { !it.isModelBackend } + localModels
         }
         AgentModelCatalog.publishDiscovered(_providerModels.value)
     }
@@ -4282,7 +4282,7 @@ class DesktopAgentRunService(
     }
 
     private fun publishLocalModels(localModels: Map<AgentKind, List<AgentModelOption>>) {
-        _localModelBackends.value = AgentKind.entries.filter { it.isLocalModelBackend }
+        _localModelBackends.value = AgentKind.entries.filter { it.isModelBackend }
             .associateWith { it in localModels }
     }
 
@@ -4292,15 +4292,27 @@ class DesktopAgentRunService(
             workspace.ollamaBearerToken,
             workspace.lmStudioBaseUrl,
             workspace.lmStudioBearerToken,
+            workspace.openRouterBaseUrl,
+            OpenRouterCredentialStore.isPresent().toString(),
         ).joinToString("\u0000")
 
     override suspend fun refreshProviderQuotas() {
         ready.await()
         quotaRefreshMutex.withLock {
+            val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
             val fetched = withContext(Dispatchers.IO) {
-                _cliStatuses.value.mapNotNull { status ->
-                    status.binaryPath?.let { binary -> quotaProbe.query(status.kind, binary, _quotaAccess.value) }
+                val fromCli = _cliStatuses.value.mapNotNull { status ->
+                    status.binaryPath?.let { binary ->
+                        quotaProbe.query(status.kind, binary, _quotaAccess.value, workspace.openRouterBaseUrl)
+                    }
                 }
+                val openRouter = quotaProbe.query(
+                    AgentKind.OpenRouter,
+                    binary = "",
+                    access = _quotaAccess.value,
+                    openRouterBaseUrl = workspace.openRouterBaseUrl,
+                )
+                fromCli + listOfNotNull(openRouter)
             }
             if (fetched.isNotEmpty()) {
                 _providerQuotas.update { current -> current + fetched.toMap() }
@@ -4422,6 +4434,29 @@ class DesktopAgentRunService(
         }
     }
 
+    override fun openRouterApiKeyPresent(): Boolean = OpenRouterCredentialStore.isPresent()
+
+    override suspend fun setOpenRouterApiKey(key: String): CommandResult = withContext(Dispatchers.IO) {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) return@withContext CommandResult.failure("API key is blank")
+        OpenRouterCredentialStore.save(trimmed)
+        if (!OpenRouterCredentialStore.isPresent()) {
+            return@withContext CommandResult.failure("Could not save OpenRouter API key to the OS keychain")
+        }
+        // Await catalog refresh so composer_options / localModelBackends see OpenRouter as ready
+        // before Settings or MCP returns success (avoids a race that left Send disabled).
+        refreshLocalModelCatalog()
+        refreshProviderQuotas()
+        CommandResult.success("OpenRouter API key saved on this host")
+    }
+
+    override suspend fun clearOpenRouterApiKey(): CommandResult = withContext(Dispatchers.IO) {
+        OpenRouterCredentialStore.delete()
+        _providerQuotas.update { it - AgentKind.OpenRouter }
+        refreshLocalModelCatalog()
+        CommandResult.success("OpenRouter API key cleared")
+    }
+
     private suspend fun prepareMcp(agent: AgentKind, taskId: String, cwd: File? = null): String? = mcpMutex.withLock {
         val workspace = runCatching { workspaceStore.load() }.getOrElse { app.andy.model.WorkspaceState() }
         val port = workspace.mcpServerPort
@@ -4470,8 +4505,8 @@ class DesktopAgentRunService(
                 writeProviderMcpConfig(McpClientConfig.ClientType.Goose, port, cwd, bearerToken = bearer)
                 mcpUrlWithCallerTaskId("http://127.0.0.1:$port/mcp-http", taskId)
             }
-            AgentKind.Ollama, AgentKind.LMStudio ->
-                error("local model backends must launch through OpenCode, Pi, or Goose")
+            AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter ->
+                error("model backends must launch through OpenCode, Pi, or Goose")
         }
     }
 
@@ -4723,7 +4758,7 @@ class DesktopAgentRunService(
         sandboxMode = if (planMode) AgentSandboxMode.ReadOnly else sandboxMode,
         planMode = planMode,
         confirmToolCalls = confirmToolCalls,
-        model = model?.let { if (agent.isLocalModelBackend) prefixedLocalModelId(agent, it) else it },
+        model = model?.let { if (agent.isModelBackend) prefixedLocalModelId(agent, it) else it },
         reasoningEffort = reasoningEffort,
         fastMode = fastMode,
         imagePaths = imagePaths,

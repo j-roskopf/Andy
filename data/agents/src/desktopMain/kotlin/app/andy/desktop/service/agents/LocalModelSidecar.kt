@@ -2,8 +2,9 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
+import app.andy.model.DefaultOpenRouterBaseUrl
 import app.andy.model.WorkspaceState
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelBaseUrl
 import app.andy.model.localModelBearerToken
 import app.andy.model.localModelIdWithoutProviderPrefix
@@ -24,8 +25,11 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Andy-owned spawn overlay so OpenCode/Pi talk to Ollama/LM Studio without rewriting
- * the user's global provider catalog. Goose is env-only.
+ * Andy-owned spawn overlay so OpenCode/Pi talk to Ollama/LM Studio/OpenRouter without
+ * rewriting the user's global provider catalog. Goose is mostly env-only.
+ *
+ * OpenRouter + OpenCode uses the native OpenRouter provider (`OPENROUTER_API_KEY`) rather
+ * than the openai-compatible overlay used for local backends.
  */
 internal object LocalModelSidecar {
     private val json = Json { prettyPrint = true }
@@ -33,26 +37,28 @@ internal object LocalModelSidecar {
     fun rootDir(home: File = File(System.getProperty("user.home"))): File =
         File(home, ".andy/local-models")
 
-    fun envFor(task: AgentTask, workspace: WorkspaceState, home: File = File(System.getProperty("user.home"))): Map<String, String> {
-        if (!task.agent.isLocalModelBackend) return emptyMap()
+    fun envFor(
+        task: AgentTask,
+        workspace: WorkspaceState,
+        home: File = File(System.getProperty("user.home")),
+        openRouterApiKey: String? = OpenRouterCredentialStore.load(),
+    ): Map<String, String> {
+        if (!task.agent.isModelBackend) return emptyMap()
         val runtime = task.runtimeKind()
         val baseUrl = workspace.localModelBaseUrl(task.agent)
-        val token = workspace.localModelBearerToken(task.agent)
+        val token = workspace.localModelBearerToken(task.agent, openRouterApiKey)
         val host = openaiCompatUrlToProviderHost(baseUrl)
         return when (runtime) {
-            AgentKind.Goose -> buildMap {
-                put(
-                    if (task.agent == AgentKind.Ollama) "OLLAMA_HOST" else "LMSTUDIO_HOST",
-                    host,
-                )
-                token?.let { put("GOOSE_PROVIDER__API_KEY", it) }
-            }
-            AgentKind.OpenCode -> {
-                val file = writeOpenCodeConfig(task.agent, baseUrl, token, home, task.modelForCli())
-                mapOf(
-                    "OPENCODE_CONFIG" to file.absolutePath,
-                    "OPENCODE_CONFIG_CONTENT" to file.readText(),
-                )
+            AgentKind.Goose -> gooseEnv(task.agent, host, token)
+            AgentKind.OpenCode -> when (task.agent) {
+                AgentKind.OpenRouter -> openRouterNativeOpenCodeEnv(baseUrl, token, home, task.modelForCli())
+                else -> {
+                    val file = writeOpenCodeCompatConfig(task.agent, baseUrl, token, home, task.modelForCli())
+                    mapOf(
+                        "OPENCODE_CONFIG" to file.absolutePath,
+                        "OPENCODE_CONFIG_CONTENT" to file.readText(),
+                    )
+                }
             }
             AgentKind.Pi -> {
                 val agentDir = writePiAgentDir(task, baseUrl, token, home)
@@ -61,14 +67,82 @@ internal object LocalModelSidecar {
                     if (task.agent == AgentKind.Ollama) {
                         put("OLLAMA_HOST", host)
                     }
-                    put("OPENAI_API_KEY", token ?: "andy-local")
+                    put("OPENAI_API_KEY", token ?: if (task.agent == AgentKind.OpenRouter) "" else "andy-local")
+                    if (task.agent == AgentKind.OpenRouter && !token.isNullOrBlank()) {
+                        put("OPENROUTER_API_KEY", token)
+                    }
                 }
             }
             else -> emptyMap()
         }
     }
 
-    internal fun writeOpenCodeConfig(
+    private fun gooseEnv(backend: AgentKind, host: String, token: String?): Map<String, String> = buildMap {
+        when (backend) {
+            AgentKind.Ollama -> put("OLLAMA_HOST", host)
+            AgentKind.LMStudio -> put("LMSTUDIO_HOST", host)
+            AgentKind.OpenRouter -> {
+                put("OPENROUTER_HOST", host)
+                put("GOOSE_PROVIDER", "openrouter")
+            }
+            else -> Unit
+        }
+        token?.let { put("GOOSE_PROVIDER__API_KEY", it) }
+        if (backend == AgentKind.OpenRouter && !token.isNullOrBlank()) {
+            put("OPENROUTER_API_KEY", token)
+        }
+    }
+
+    /**
+     * Native OpenCode OpenRouter provider: key via env, optional baseURL override when
+     * Settings diverge from the public endpoint.
+     */
+    private fun openRouterNativeOpenCodeEnv(
+        baseUrl: String,
+        token: String?,
+        home: File,
+        model: String?,
+    ): Map<String, String> = buildMap {
+        if (!token.isNullOrBlank()) put("OPENROUTER_API_KEY", token)
+        val normalized = baseUrl.trim().trimEnd('/')
+        val needsOverride = !normalized.equals(DefaultOpenRouterBaseUrl.trimEnd('/'), ignoreCase = true)
+        if (needsOverride || !model.isNullOrBlank()) {
+            val file = writeOpenCodeNativeOpenRouterConfig(normalized, home, model)
+            put("OPENCODE_CONFIG", file.absolutePath)
+            put("OPENCODE_CONFIG_CONTENT", file.readText())
+        }
+    }
+
+    internal fun writeOpenCodeNativeOpenRouterConfig(
+        baseUrl: String,
+        home: File,
+        model: String? = null,
+    ): File {
+        val dir = rootDir(home).apply { mkdirs() }
+        val file = File(dir, "opencode-openrouter.json")
+        val selected = model?.trim()?.takeIf { it.isNotBlank() }
+        val provider = buildJsonObject {
+            put("name", JsonPrimitive("OpenRouter"))
+            put(
+                "options",
+                buildJsonObject {
+                    put("baseURL", JsonPrimitive(baseUrl))
+                },
+            )
+        }
+        val body = buildJsonObject {
+            put("\$schema", "https://opencode.ai/config.json")
+            selected?.let {
+                put("model", JsonPrimitive(it))
+                put("small_model", JsonPrimitive(it))
+            }
+            put("provider", buildJsonObject { put("openrouter", provider) })
+        }
+        file.writeText(json.encodeToString(JsonObject.serializer(), body) + "\n")
+        return file
+    }
+
+    internal fun writeOpenCodeCompatConfig(
         backend: AgentKind,
         baseUrl: String,
         token: String?,
@@ -116,6 +190,15 @@ internal object LocalModelSidecar {
         return file
     }
 
+    /** @deprecated Use [writeOpenCodeCompatConfig]; kept for older tests. */
+    internal fun writeOpenCodeConfig(
+        backend: AgentKind,
+        baseUrl: String,
+        token: String?,
+        home: File,
+        model: String? = null,
+    ): File = writeOpenCodeCompatConfig(backend, baseUrl, token, home, model)
+
     internal fun writePiAgentDir(
         task: AgentTask,
         baseUrl: String,
@@ -132,7 +215,7 @@ internal object LocalModelSidecar {
         val localProvider = buildJsonObject {
             put("baseUrl", JsonPrimitive(baseUrl.trimEnd('/')))
             put("api", JsonPrimitive("openai-completions"))
-            put("apiKey", JsonPrimitive(token ?: "andy-local"))
+            put("apiKey", JsonPrimitive(token ?: if (backend == AgentKind.OpenRouter) "" else "andy-local"))
             put(
                 "compat",
                 buildJsonObject {

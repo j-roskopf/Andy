@@ -149,6 +149,9 @@ private data class TranscriptEvent(
     val detail: String = "",
     val toolKind: String = "",
     val toolState: String = AgentToolState.Completed.name,
+    /** 0 = unknown (pre-dates this field); legacy rows fall back to gap-approximation in the timeline builder. */
+    val startedAtMillis: Long = 0,
+    val endedAtMillis: Long = 0,
     val locations: List<String> = emptyList(),
     val isError: Boolean = false,
     val quotaWindows: List<TranscriptQuotaWindow> = emptyList(),
@@ -237,7 +240,7 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
             )
         },
     )
-    is AgentEvent.ToolCall -> TranscriptEvent("tool", atMillis, toolName = toolName, toolCallId = toolCallId.orEmpty(), summary = summary, detail = detail, toolKind = kind?.name.orEmpty(), toolState = state.name, locations = locations, toolImages = images.map { it.dataUri })
+    is AgentEvent.ToolCall -> TranscriptEvent("tool", atMillis, toolName = toolName, toolCallId = toolCallId.orEmpty(), summary = summary, detail = detail, toolKind = kind?.name.orEmpty(), toolState = state.name, startedAtMillis = startedAtMillis ?: 0, endedAtMillis = endedAtMillis ?: 0, locations = locations, toolImages = images.map { it.dataUri })
     is AgentEvent.ToolResult -> TranscriptEvent("tool-result", atMillis, toolName = toolName.orEmpty(), summary = summary, detail = detail, isError = isError, quotaWindows = quotaWindows.map { TranscriptQuotaWindow(it.label, it.remainingFraction, it.resetAtMillis, it.detail) })
     is AgentEvent.TaskError -> TranscriptEvent("error", atMillis, text = message)
     is AgentEvent.TaskResult -> TranscriptEvent("result", atMillis, success = success, finalText = finalText.orEmpty(), costUsd = costUsd ?: 0.0, costIsEstimated = costIsEstimated, inputTokens = inputTokens ?: 0, outputTokens = outputTokens ?: 0, durationMs = durationMs ?: 0)
@@ -313,7 +316,19 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
         } else {
             storedKind
         }
-        AgentEvent.ToolCall(atMillis, toolName, summary, detail.ifBlank { summary }, toolCallId.takeIf { it.isNotBlank() }, resolvedKind, AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed, locations, toolImages.map { AgentToolImage(it) })
+        AgentEvent.ToolCall(
+            atMillis = atMillis,
+            toolName = toolName,
+            summary = summary,
+            detail = detail.ifBlank { summary },
+            toolCallId = toolCallId.takeIf { it.isNotBlank() },
+            kind = resolvedKind,
+            state = AgentToolState.entries.firstOrNull { it.name == toolState } ?: AgentToolState.Completed,
+            locations = locations,
+            images = toolImages.map { AgentToolImage(it) },
+            startedAtMillis = startedAtMillis.takeIf { it > 0 },
+            endedAtMillis = endedAtMillis.takeIf { it > 0 },
+        )
     }
     "tool-result" -> AgentEvent.ToolResult(atMillis, toolName.takeIf { it.isNotBlank() }, summary, detail.ifBlank { summary }, isError, quotaWindows.map { AgentQuotaWindow(it.label, it.fraction, it.resetAt, it.detail) })
     "error" -> AgentEvent.TaskError(atMillis, text)

@@ -228,7 +228,7 @@ internal fun screenManifestFor(agent: AgentKind): List<ScreenRule> = when (agent
     AgentKind.Hermes -> HermesScreenManifest
     AgentKind.OpenClaw -> OpenClawScreenManifest
     AgentKind.Goose -> GooseScreenManifest
-    AgentKind.Ollama, AgentKind.LMStudio -> emptyList()
+    AgentKind.Ollama, AgentKind.LMStudio, AgentKind.OpenRouter -> emptyList()
 }
 
 // region Ported Herdr manifests (+ Andy extras)

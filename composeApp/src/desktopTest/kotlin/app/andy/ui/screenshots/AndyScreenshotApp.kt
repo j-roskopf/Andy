@@ -1,13 +1,34 @@
 package app.andy.ui.screenshots
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.andy.AndyApp
 import app.andy.AndyDestination
 import app.andy.AndyMirrorPopOut
+import app.andy.model.AcpToolCallPresentation
+import app.andy.model.AgentEvent
+import app.andy.model.AgentSkill
+import app.andy.model.TimelineAxis
+import app.andy.model.TimelineRowKind
+import app.andy.model.buildChatTimeline
+import app.andy.model.timelineBrushSelection
+import app.andy.model.timelineFilterRows
+import app.andy.model.timelineRowDetail
 import app.andy.service.AndyServices
+import app.andy.ui.agents.ChatTimelineDetailPane
+import app.andy.ui.agents.ChatTimelineView
+import app.andy.ui.theme.AndyColors
+import app.andy.ui.theme.AndyTheme
 
 /**
  * A stable catalog for desktop visual regression captures. Each scenario is an
@@ -44,6 +65,8 @@ internal enum class AndyScreenshotScenario(
     ProjectsKanbanBoard("desktop-projects-kanban-board.png", AndyDestination.Actions),
     ProjectsAutomations("desktop-projects-automations.png", AndyDestination.Actions),
     AgentsCompletedDiff("desktop-agents-completed-diff.png", AndyDestination.Agents),
+    /** Isolated timeline surface — avoids Agents inbox/composer navigation for a stable baseline. */
+    AgentsTimeline("desktop-agents-timeline.png"),
     SnapshotsPopulated("desktop-snapshots-populated.png", AndyDestination.Snapshots),
     ControlsHardware("desktop-controls-hardware.png", AndyDestination.Controls),
     PerformanceSamples("desktop-performance-samples.png", AndyDestination.Performance),
@@ -75,6 +98,7 @@ internal fun AndyScreenshotApp(
             deviceName = "Pixel 8 API 36",
             controlsVisible = true,
         )
+        AndyScreenshotScenario.AgentsTimeline -> AgentsTimelineScreenshot(modifier.fillMaxSize())
         else -> AndyApp(
             services = services,
             requestedDestination = scenario.destination,
@@ -98,6 +122,92 @@ internal fun AndyScreenshotApp(
                 else -> null
             },
         )
+    }
+}
+
+@Composable
+private fun AgentsTimelineScreenshot(modifier: Modifier = Modifier) {
+    val now = ScreenshotFixture.nowMillis
+    val events = remember {
+        listOf(
+            AgentEvent.SessionStarted(now - 39_500, sessionId = "sess-1", model = "gpt-5.2-codex"),
+            AgentEvent.UserMessage(
+                atMillis = now - 39_000,
+                text = "Fix the empty postal code validation and add a regression test.",
+                skills = listOf(AgentSkill("compose-expert", "Compose UI guidance", "/skills/compose-expert/SKILL.md")),
+            ),
+            AgentEvent.ToolCall(
+                atMillis = now - 31_000,
+                toolName = "rg",
+                summary = "Find validation reducer",
+                detail = """{"pattern":"postalCode"}""" + AcpToolCallPresentation.DetailSeparator + "CheckoutReducer.kt",
+                toolCallId = "call-1",
+                startedAtMillis = now - 31_500,
+                endedAtMillis = now - 31_000,
+            ),
+            AgentEvent.AssistantText(now - 5_000, "Updated the reducer and added a focused test."),
+            AgentEvent.TaskResult(
+                atMillis = now - 3_000,
+                success = true,
+                finalText = "Checkout validation is covered.",
+                costUsd = 0.18,
+                inputTokens = 2420,
+                outputTokens = 860,
+                durationMs = 36_000,
+            ),
+        )
+    }
+    val model = remember(events) { buildChatTimeline(events) }
+    var selected by remember { mutableStateOf(model.rows.firstOrNull { it.kind == TimelineRowKind.Tool }?.key) }
+    var brushStart by remember { mutableStateOf<Float?>(0f) }
+    var brushEnd by remember { mutableStateOf<Float?>(0.45f) }
+    val brushed = remember(model, brushStart, brushEnd) {
+        val start = brushStart ?: return@remember emptySet()
+        val end = brushEnd ?: return@remember emptySet()
+        timelineBrushSelection(model, TimelineAxis.Calls, start, end, durationMode = false)
+    }
+    val detail = remember(selected, model, events) {
+        val row = model.rows.firstOrNull { it.key == selected } ?: return@remember null
+        val event = row.eventIndex.takeIf { it >= 0 }?.let { events.getOrNull(it) }
+        timelineRowDetail(row, event, model.turns.firstOrNull { it.number == row.turnNumber })
+    }
+
+    AndyTheme {
+        Column(
+            modifier
+                .background(AndyColors.PaneBg)
+                .fillMaxSize(),
+        ) {
+            Row(Modifier.weight(1f).fillMaxSize()) {
+                ChatTimelineView(
+                    model = model,
+                    axis = TimelineAxis.Calls,
+                    onAxisChange = {},
+                    durationMode = false,
+                    onDurationModeChange = {},
+                    selectedRowKey = selected,
+                    onSelectRow = { selected = it },
+                    brushedKeys = brushed,
+                    brushStart = brushStart,
+                    brushEnd = brushEnd,
+                    onBrushChange = { start, end ->
+                        brushStart = start
+                        brushEnd = end
+                    },
+                    searchQuery = "",
+                    onSearchQueryChange = {},
+                    matchingKeys = timelineFilterRows(model, ""),
+                    modifier = Modifier.weight(1f).fillMaxSize(),
+                )
+                detail?.let {
+                    ChatTimelineDetailPane(
+                        detail = it,
+                        onClose = { selected = null },
+                        modifier = Modifier.width(420.dp).fillMaxSize(),
+                    )
+                }
+            }
+        }
     }
 }
 

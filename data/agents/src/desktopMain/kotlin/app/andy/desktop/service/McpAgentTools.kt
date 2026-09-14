@@ -25,7 +25,7 @@ import app.andy.model.importedThreadTitle
 import app.andy.model.withImportedVendorSession
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.hasVendorCli
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelComboReady
 import app.andy.model.localModelLaunchError
 import app.andy.model.parseLocalAgentRuntime
@@ -323,13 +323,13 @@ fun Server.registerAgentProjectTools(
         val agents = buildJsonArray {
             AgentKind.entries.forEach { kind ->
                 val status = statuses[kind]
-                val reachable = if (kind.isLocalModelBackend) localBackends[kind] == true else status?.ready == true
+                val reachable = if (kind.isModelBackend) localBackends[kind] == true else status?.ready == true
                 add(
                     buildJsonObject {
                         put("id", kind.name)
                         put("label", kind.label)
                         put("cliName", kind.cliName)
-                        put("ready", if (kind.isLocalModelBackend) {
+                        put("ready", if (kind.isModelBackend) {
                             LocalAgentRuntime.entries.any { runtime ->
                                 localModelComboReady(reachable, statuses[runtime.agent])
                             }
@@ -340,7 +340,7 @@ fun Server.registerAgentProjectTools(
                         put("available", status?.available ?: false)
                         put("version", status?.version.orEmpty())
                         put("issue", status?.issue?.title.orEmpty())
-                        if (kind.isLocalModelBackend) {
+                        if (kind.isModelBackend) {
                             put("reachable", reachable)
                             put(
                                 "runtimes",
@@ -538,7 +538,7 @@ fun Server.registerAgentProjectTools(
             },
             "agent" to buildJsonObject {
                 put("type", "string")
-                put("description", "ClaudeCode | Codex | Cursor | Antigravity | OpenCode | Pi | Hermes | OpenClaw | Goose | Ollama | LMStudio")
+                put("description", "ClaudeCode | Codex | Cursor | Antigravity | OpenCode | Pi | Hermes | OpenClaw | Goose | Ollama | LMStudio | OpenRouter")
             },
             "title" to buildJsonObject {
                 put("type", "string")
@@ -594,11 +594,11 @@ fun Server.registerAgentProjectTools(
             },
             "model" to buildJsonObject {
                 put("type", "string")
-                put("description", "Optional model id (empty = provider default). Required for Ollama and LM Studio.")
+                put("description", "Optional model id (empty = provider default). Required for Ollama, LM Studio, and OpenRouter.")
             },
             "runtime" to buildJsonObject {
                 put("type", "string")
-                put("description", "Required for Ollama and LM Studio: OpenCode | Pi | Goose")
+                put("description", "Required for Ollama, LM Studio, and OpenRouter: OpenCode | Pi | Goose")
             },
             "lane" to buildJsonObject {
                 put("type", "string")
@@ -690,7 +690,7 @@ fun Server.registerAgentProjectTools(
         val runtime = parseLocalAgentRuntime(str(args, "runtime"))
             ?: parentTask?.takeIf { it.agent == agent }?.localRuntime
         val model = str(args, "model")?.takeIf { it.isNotBlank() }?.let { raw ->
-            if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
+            if (agent.isModelBackend) prefixedLocalModelId(agent, raw) else raw
         }
         val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
         val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
@@ -1215,6 +1215,53 @@ fun Server.registerAgentProjectTools(
                 put("taskId", id)
                 put("status", status.name.lowercase())
                 put("artifactDir", artifactDir.absolutePath)
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "settings.openrouter_key_status",
+        description = "Whether an OpenRouter API key is saved on the agent host (OS keychain). Never returns the secret.",
+    ) {
+        textResult(
+            buildJsonObject {
+                put("present", agentRuns.openRouterApiKeyPresent())
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "settings.openrouter_key_set",
+        description = "Save the OpenRouter API key to the agent-host OS keychain (not workspace.properties).",
+        properties = mapOf(
+            "apiKey" to buildJsonObject {
+                put("type", "string")
+                put("description", "OpenRouter API key (sk-or-...)")
+            },
+        ),
+        required = listOf("apiKey"),
+    ) { args ->
+        val key = str(args, "apiKey")?.trim().orEmpty()
+        val result = agentRuns.setOpenRouterApiKey(key)
+        if (!result.isSuccess) error(result.stderr.ifBlank { result.stdout.ifBlank { "failed to save key" } })
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("message", result.stdout)
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "settings.openrouter_key_clear",
+        description = "Remove the OpenRouter API key from the agent-host OS keychain.",
+    ) {
+        val result = agentRuns.clearOpenRouterApiKey()
+        if (!result.isSuccess) error(result.stderr.ifBlank { result.stdout.ifBlank { "failed to clear key" } })
+        textResult(
+            buildJsonObject {
+                put("ok", true)
+                put("message", result.stdout)
             }.toString(),
         )
     }

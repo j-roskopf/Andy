@@ -2,7 +2,7 @@ package app.andy.desktop.service.agents.acp
 
 import app.andy.model.AgentKind
 import app.andy.model.AgentTask
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelProviderId
 import app.andy.model.modelForCli
 import app.andy.model.runtimeKind
@@ -53,7 +53,7 @@ internal fun piAcpModelArgs(task: AgentTask): List<String> {
     if (task.runtimeKind() != AgentKind.Pi) return emptyList()
     val model = task.modelForCli()?.trim()?.takeIf { it.isNotBlank() } ?: return emptyList()
     return buildList {
-        if (task.agent.isLocalModelBackend) {
+        if (task.agent.isModelBackend) {
             add("--provider")
             add(task.agent.localModelProviderId)
         }

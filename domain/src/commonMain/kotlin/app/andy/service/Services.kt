@@ -654,12 +654,17 @@ interface AgentRunService {
     fun setProviderLane(agent: AgentKind, lane: app.andy.model.AgentLaneKind) = Unit
     /** Provider used most recently for a chat, used as the next composer selection. */
     val lastUsedAgent: StateFlow<AgentKind?>
-    /**
-     * Reachability of Andy Settings URLs for Ollama / LM Studio (`GET /v1/models`).
-     * Combo rows also require the selected runtime CLI.
-     */
+    /** Reachability of Andy Settings URLs for Ollama / LM Studio / OpenRouter (`GET /v1/models`). */
     val localModelBackends: StateFlow<Map<AgentKind, Boolean>>
         get() = NoLocalModelBackends
+    /** True when an OpenRouter API key is saved on the agent host keychain. */
+    fun openRouterApiKeyPresent(): Boolean = false
+    /** Saves the OpenRouter API key to the agent-host OS keychain (never workspace.properties). */
+    suspend fun setOpenRouterApiKey(key: String): CommandResult =
+        CommandResult.failure("OpenRouter API keys are only managed on desktop")
+    /** Removes the OpenRouter API key from the agent-host OS keychain. */
+    suspend fun clearOpenRouterApiKey(): CommandResult =
+        CommandResult.failure("OpenRouter API keys are only managed on desktop")
     /**
      * Skills this provider will load for a task rooted at [directory]. The provider's
      * native global and workspace skill locations are discovered independently, so

@@ -144,6 +144,7 @@ import app.andy.ui.components.primaryButtonColors
 import app.andy.ui.agents.AgentPillIcon
 import app.andy.ui.agents.AgentTaskComposerPane
 import app.andy.ui.agents.AgentTaskDetail
+import app.andy.ui.agents.ChatTimelinePane
 import app.andy.ui.agents.ChatInboxSectionLabel
 import app.andy.ui.agents.ChatSessionSidebarRow
 import app.andy.ui.agents.ChatFollowUpDraftMemory
@@ -194,6 +195,7 @@ private fun isWorkflowAgentBusy(task: AgentTask): Boolean =
 
 private enum class ProjectCanvas(val label: String) {
     Chat("Chat"),
+    Timeline("Timeline"),
     Tasks("Tasks"),
     Artifacts("Artifacts"),
     Automations("Automations"),
@@ -631,7 +633,9 @@ private fun ProjectCockpit(
     // Only while Projects is the active destination: RetainedDestination keeps this
     // screen composed off-page, and clearing unread there would hide the badge.
     DisposableEffect(active, selectedProjectTask?.id, canvas) {
-        val taskId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
+        val taskId = selectedProjectTask?.id?.takeIf {
+            active && (canvas == ProjectCanvas.Chat || canvas == ProjectCanvas.Timeline)
+        }
         if (taskId != null) {
             services.agentRuns.setChatViewing(taskId, viewing = true)
             onViewedTaskChange(taskId)
@@ -643,7 +647,9 @@ private fun ProjectCockpit(
             }
         }
     }
-    val viewingChatId = selectedProjectTask?.id?.takeIf { active && canvas == ProjectCanvas.Chat }
+    val viewingChatId = selectedProjectTask?.id?.takeIf {
+        active && (canvas == ProjectCanvas.Chat || canvas == ProjectCanvas.Timeline)
+    }
     SideEffect {
         if (viewingChatId != null) onViewedTaskChange(viewingChatId)
     }
@@ -866,7 +872,13 @@ private fun ProjectCockpit(
                                 .weight(1f)
                                 .fillMaxWidth()
                                 .padding(top = AndySpace.Space3)
-                                .testTag(if (canvas == ProjectCanvas.Chat) "project-chat-pane" else "project-task-dock"),
+                                .testTag(
+                                    when (canvas) {
+                                        ProjectCanvas.Chat -> "project-chat-pane"
+                                        ProjectCanvas.Timeline -> "project-timeline-pane-host"
+                                        else -> "project-task-dock"
+                                    },
+                                ),
                         ) {
                             // Keep visited project tabs mounted so composer/follow-up drafts
                             // (and other local pane state) survive Chat ↔ Tasks ↔ … switches.
@@ -903,6 +915,15 @@ private fun ProjectCockpit(
                                         )
                                     }
                                 }
+                            }
+                            RetainedDestination(active = canvas == ProjectCanvas.Timeline) {
+                                val selected = agentTasks.firstOrNull { it.id == selectedTaskId && it.projectId == current.id }
+                                ChatTimelinePane(
+                                    services = services,
+                                    task = selected,
+                                    workspaceState = workspaceState,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                             RetainedDestination(active = canvas == ProjectCanvas.Tasks) {
                                 val workflow = effectiveProjectWorkflow ?: ProjectWorkflowState(current.id)

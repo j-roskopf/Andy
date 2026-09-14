@@ -17,7 +17,7 @@ import app.andy.model.LocalAgentRuntime
 import app.andy.model.ProjectWorkflowStage
 import app.andy.model.acpSupported
 import app.andy.model.hasVendorCli
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.localModelIdWithoutProviderPrefix
 import app.andy.model.localModelLaunchError
 import app.andy.model.mergedComposerSlashCommands
@@ -234,20 +234,20 @@ internal fun Application.installWebChatRoutes(
                 if (!agent.acpSupported) {
                     return@get call.respondJsonError(
                         HttpStatusCode.BadRequest,
-                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio, OpenRouter)",
                     )
                 }
                 val discovered = agents.providerModels.value
                 val options = discovered[agent].orEmpty().ifEmpty { AgentModelCatalog.options(agent) }
                 val defaults = agents.providerDefaults.value[agent]
                 val defaultModel = defaults?.model?.let { raw ->
-                    if (agent.isLocalModelBackend) {
+                    if (agent.isModelBackend) {
                         localModelIdWithoutProviderPrefix(agent, raw)
                     } else {
                         AgentModelCatalog.option(agent, raw, discovered)?.id ?: raw
                     }
                 }
-                val defaultRuntime = if (agent.isLocalModelBackend) {
+                val defaultRuntime = if (agent.isModelBackend) {
                     (defaults?.localRuntime ?: LocalAgentRuntime.OpenCode).name
                 } else {
                     null
@@ -255,7 +255,7 @@ internal fun Application.installWebChatRoutes(
                 call.respondText(
                     buildJsonObject {
                         put("agent", agent.name)
-                        put("requiresModel", agent.isLocalModelBackend)
+                        put("requiresModel", agent.isModelBackend)
                         if (defaultModel != null) put("defaultModel", defaultModel) else put("defaultModel", JsonNull)
                         if (defaultRuntime != null) put("defaultRuntime", defaultRuntime)
                         putJsonArray("models") {
@@ -269,7 +269,7 @@ internal fun Application.installWebChatRoutes(
                             }
                             val seen = mutableSetOf<String>()
                             options.forEach { opt ->
-                                val id = if (agent.isLocalModelBackend) {
+                                val id = if (agent.isModelBackend) {
                                     localModelIdWithoutProviderPrefix(agent, opt.id)
                                 } else {
                                     opt.id
@@ -363,7 +363,7 @@ internal fun Application.installWebChatRoutes(
                 if (!agent.acpSupported) {
                     return@get call.respondJsonError(
                         HttpStatusCode.BadRequest,
-                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio, OpenRouter)",
                     )
                 }
                 agents.refreshSlashCommands(agent, directory)
@@ -823,7 +823,7 @@ internal fun Application.installWebChatRoutes(
                 if (!agent.acpSupported) {
                     return@post call.respondJsonError(
                         HttpStatusCode.BadRequest,
-                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio)",
+                        "agent must be ACP-lane (ClaudeCode, Codex, Cursor, OpenCode, Pi, Goose, Ollama, LMStudio, OpenRouter)",
                     )
                 }
                 val autonomy = if (autonomyName.isBlank()) {
@@ -848,13 +848,13 @@ internal fun Application.installWebChatRoutes(
                         }
                     }?.takeIf { it.isNotBlank() }
                 val runtime = parseLocalAgentRuntime(body.requiredString("runtime")?.trim())
-                    ?: if (agent.isLocalModelBackend) {
+                    ?: if (agent.isModelBackend) {
                         agents.providerDefaults.value[agent]?.localRuntime ?: LocalAgentRuntime.OpenCode
                     } else {
                         null
                     }
                 val model = body.requiredString("model")?.trim()?.takeIf { it.isNotBlank() }?.let { raw ->
-                    if (agent.isLocalModelBackend) prefixedLocalModelId(agent, raw) else raw
+                    if (agent.isModelBackend) prefixedLocalModelId(agent, raw) else raw
                 }
                 val draft = AgentTaskDraft(
                         title = title?.takeIf { it.isNotBlank() }

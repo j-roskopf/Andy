@@ -73,6 +73,21 @@ class DesktopWorkspaceStoreTest {
         assertEquals(false, DesktopWorkspaceStore(file).load().agentAdoptProviderSessionTitles)
         assertEquals(true, DesktopWorkspaceStore(createTempDirectory("andy-workspace-adopt-default").toFile().resolve("missing.properties")).load().agentAdoptProviderSessionTitles)
 
+        DesktopWorkspaceStore(file).save(saved.copy(agentTimelineAxis = "Turns", agentTimelineDuration = false))
+        assertEquals("Turns", DesktopWorkspaceStore(file).load().agentTimelineAxis)
+        assertEquals(false, DesktopWorkspaceStore(file).load().agentTimelineDuration)
+        assertEquals("Turns", DesktopWorkspaceStore(createTempDirectory("andy-workspace-timeline-axis-default").toFile().resolve("missing.properties")).load().agentTimelineAxis)
+        assertEquals(false, DesktopWorkspaceStore(createTempDirectory("andy-workspace-timeline-duration-default").toFile().resolve("missing.properties")).load().agentTimelineDuration)
+
+        // Legacy axis=Duration migrates to Turns + duration on.
+        val legacyDurationFile = createTempDirectory("andy-workspace-timeline-legacy-duration").toFile().resolve("workspace.properties")
+        DesktopWorkspaceStore(legacyDurationFile).save(saved.copy(agentTimelineAxis = "Duration"))
+        // Rewrite raw property as a user who only had the old key.
+        legacyDurationFile.writeText("agentTimelineAxis=Duration\n")
+        val migrated = DesktopWorkspaceStore(legacyDurationFile).load()
+        assertEquals("Turns", migrated.agentTimelineAxis)
+        assertEquals(true, migrated.agentTimelineDuration)
+
         DesktopWorkspaceStore(file).save(
             saved.copy(
                 agentTranscriptAutoExpandThinking = true,

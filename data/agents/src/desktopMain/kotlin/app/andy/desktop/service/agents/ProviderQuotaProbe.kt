@@ -25,17 +25,71 @@ internal class ProviderQuotaProbe {
     @Volatile private var cachedClaudeToken: String? = null
     @Volatile private var claudeKeychainAttempted = false
 
-    fun query(agent: AgentKind, binary: String, access: AgentQuotaAccess): Pair<AgentKind, AgentProviderQuota>? = when (agent) {
+    fun query(
+        agent: AgentKind,
+        binary: String,
+        access: AgentQuotaAccess,
+        openRouterBaseUrl: String = app.andy.model.DefaultOpenRouterBaseUrl,
+    ): Pair<AgentKind, AgentProviderQuota>? = when (agent) {
         AgentKind.Codex -> queryCodex(binary)?.let { agent to it }
         AgentKind.ClaudeCode -> if (access.claudeAccountAccess) queryClaude()?.let { agent to it } else null
         AgentKind.Cursor -> if (access.cursorAccountAccess) queryCursor()?.let { agent to it } else null
         // Antigravity's quota surface is an internal local language-server protocol.
         // Its opt-in is stored now; the probe intentionally waits for a stable versioned endpoint.
         AgentKind.Antigravity -> null
+        AgentKind.OpenRouter -> queryOpenRouter(openRouterBaseUrl)?.let { agent to it }
         // Multi-provider auth; no stable single-account probe yet.
         AgentKind.OpenCode, AgentKind.Pi, AgentKind.Hermes, AgentKind.OpenClaw, AgentKind.Goose,
         AgentKind.Ollama, AgentKind.LMStudio -> null
     }
+
+    private fun queryOpenRouter(baseUrl: String): AgentProviderQuota? = runCatching {
+        val key = OpenRouterCredentialStore.load()?.takeIf { it.isNotBlank() } ?: return@runCatching null
+        val url = baseUrl.trim().trimEnd('/') + "/key"
+        val response = getJson(
+            url,
+            mapOf(
+                "Authorization" to "Bearer $key",
+                "HTTP-Referer" to app.andy.model.OpenRouterAttribution.HttpReferer,
+                "X-OpenRouter-Title" to app.andy.model.OpenRouterAttribution.Title,
+            ),
+        ) ?: return@runCatching null
+        val data = response.objectOrNull("data") ?: response
+        val windows = buildList {
+            val limit = data.doubleOrNull("limit")
+            val remaining = data.doubleOrNull("limit_remaining")
+            if (limit != null && limit > 0 && remaining != null) {
+                add(
+                    AgentQuotaWindow(
+                        label = "key limit",
+                        remainingFraction = (remaining / limit).toFloat().coerceIn(0f, 1f),
+                        detail = "${formatCredits(remaining)} / ${formatCredits(limit)} remaining",
+                    ),
+                )
+            } else if (remaining != null) {
+                add(AgentQuotaWindow(label = "key limit", detail = "${formatCredits(remaining)} remaining"))
+            }
+            data.doubleOrNull("usage_daily")?.let {
+                add(AgentQuotaWindow(label = "usage today", detail = formatCredits(it)))
+            }
+            data.doubleOrNull("usage_weekly")?.let {
+                add(AgentQuotaWindow(label = "usage this week", detail = formatCredits(it)))
+            }
+            data.doubleOrNull("usage_monthly")?.let {
+                add(AgentQuotaWindow(label = "usage this month", detail = formatCredits(it)))
+            }
+        }
+        if (windows.isEmpty()) return@runCatching null
+        AgentProviderQuota(
+            windows = windows,
+            updatedAtMillis = System.currentTimeMillis(),
+            source = AgentQuotaSource.ProviderQuery,
+            accountLabel = data.stringOrNull("label"),
+        )
+    }.getOrNull()
+
+    private fun formatCredits(value: Double): String =
+        if (value == value.toLong().toDouble()) value.toLong().toString() else "%.2f".format(value)
 
     fun clearAccountAccess(agent: AgentKind) {
         if (agent == AgentKind.ClaudeCode) cachedClaudeToken = null

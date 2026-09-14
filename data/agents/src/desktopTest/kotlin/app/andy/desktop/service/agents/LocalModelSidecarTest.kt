@@ -206,13 +206,50 @@ class LocalModelSidecarTest {
             home.deleteRecursively()
         }
     }
+    @Test
+    fun openRouterOpenCodeUsesNativeKeyEnv() {
+        val home = File.createTempFile("andy-opencode-openrouter", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            val task = AgentTask(
+                id = "t1",
+                title = "or",
+                prompt = "hi",
+                agent = AgentKind.OpenRouter,
+                localRuntime = LocalAgentRuntime.OpenCode,
+                model = "openrouter/anthropic/claude-sonnet-4",
+                createdAtMillis = 0,
+            )
+            val env = LocalModelSidecar.envFor(
+                task,
+                WorkspaceState(),
+                home,
+                openRouterApiKey = "sk-or-test",
+            )
+            assertEquals("sk-or-test", env["OPENROUTER_API_KEY"])
+            val body = env["OPENCODE_CONFIG_CONTENT"].orEmpty()
+            assertTrue("openrouter" in body)
+            assertTrue("openrouter/anthropic/claude-sonnet-4" in body)
+            assertFalse("@ai-sdk/openai-compatible" in body)
+        } finally {
+            home.deleteRecursively()
+        }
+    }
 }
 
 class AgentCliLocatorLocalModelsTest {
     @Test
-    fun locateAllDoesNotEmitOllamaOrLmStudioRows() {
+    fun locateAllDoesNotEmitModelBackendRows() {
         val statuses = AgentCliLocator().locateAll(emptyMap())
         assertTrue(statuses.none { !it.kind.hasVendorCli })
-        assertTrue(statuses.none { it.kind == AgentKind.Ollama || it.kind == AgentKind.LMStudio })
+        assertTrue(
+            statuses.none {
+                it.kind == AgentKind.Ollama ||
+                    it.kind == AgentKind.LMStudio ||
+                    it.kind == AgentKind.OpenRouter
+            },
+        )
     }
 }

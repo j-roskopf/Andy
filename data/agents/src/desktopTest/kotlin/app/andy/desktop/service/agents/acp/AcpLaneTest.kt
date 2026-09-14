@@ -633,6 +633,40 @@ class AcpLaneTest {
     }
 
     @Test
+    fun transcriptStoreRoundTripsToolCallTimingFields() {
+        val root = createTempDirectory("andy-acp-tool-timing").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.append(
+                "task-1",
+                AgentEvent.ToolCall(
+                    atMillis = 200,
+                    toolName = "bash",
+                    summary = "pwd",
+                    detail = "pwd",
+                    toolCallId = "call-1",
+                    startedAtMillis = 100,
+                    endedAtMillis = 200,
+                ),
+            )
+            val loaded = store.load("task-1").single() as AgentEvent.ToolCall
+            assertEquals(100, loaded.startedAtMillis)
+            assertEquals(200, loaded.endedAtMillis)
+
+            // Legacy row without the new fields still loads (0 → null).
+            val file = root.resolve("task-1/transcript.jsonl")
+            file.writeText(
+                """{"type":"tool","atMillis":5,"toolName":"read","summary":"x","detail":"x","toolCallId":"legacy"}""" + "\n",
+            )
+            val legacy = store.load("task-1").single() as AgentEvent.ToolCall
+            assertEquals(null, legacy.startedAtMillis)
+            assertEquals(null, legacy.endedAtMillis)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun transcriptStoreCoalescesStreamDeltasOnDisk() {
         val root = createTempDirectory("andy-acp-coalesce").toFile()
         try {

@@ -60,7 +60,7 @@ When Andy Desktop uses `andyd`, scratchpad and profile writes do not save throug
 
 ### 2. Coding agents
 
-Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, or local Ollama / LM Studio backends (through OpenCode, Pi, or Goose).
+Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, or local Ollama / LM Studio / OpenRouter backends (through OpenCode, Pi, or Goose).
 
 - Compose prompts with images, `@file` mentions, and `/` skills.
 - Choose model, autonomy, and provider sandbox or approvals.
@@ -72,6 +72,7 @@ Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes,
 - Open side chats for a read-only second opinion.
 - Pin priority chats at the top of project and agent inboxes.
 - Follow the live transcript (thinking, tools, images, mermaid, cost and tokens).
+- Open the chat timeline to scrub turns, calls, and tool spans, then inspect a selected step.
 - Review file diffs when a task ends. Open file links in Andy's code viewer.
 - Send or queue follow-ups. Archive chats or mark them unread.
 - Check provider quota from the inbox. Use voice dictation when enabled in Settings.
@@ -167,7 +168,7 @@ andy device screenshot -o /tmp/screen.png
 andy tool list
 ```
 
-Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`, `Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`.
+Provider ids: `ClaudeCode`, `Codex`, `Cursor`, `Antigravity`, `OpenCode`, `Pi`, `Hermes`, `OpenClaw`, `Goose`, `Ollama`, `LMStudio`, `OpenRouter`.
 
 Curated groups cover `device`, `emulator`, `avd`, `system-image`, `snapshot`, `input`, `app`, `intent`, `file`, `network`, and `ios`. Other MCP tools stay under `andy tool call`. Device MCP tools are listed in [MCP for device control](#10-mcp-for-device-control); the full CLI reference is in [docs/ANDYD.md](docs/ANDYD.md).
 
@@ -277,27 +278,27 @@ The images below are approved macOS visual-test baselines. The full [screenshot 
 | Project profiles | Project kanban |
 | --- | --- |
 | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-profiles.png" alt="Andy project profiles" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-projects-kanban-board.png" alt="Andy project kanban board" width="480"> |
-| Agents | Snapshots |
+| Agents | Agents timeline |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="480"> |
-| Controls | Performance |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-agents-completed-diff.png" alt="Andy agents" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-agents-timeline.png" alt="Andy agents chat timeline" width="480"> |
+| Snapshots | Controls |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="480"> |
-| Tracing | Design |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-snapshots-populated.png" alt="Andy snapshots" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-controls-hardware.png" alt="Andy controls" width="480"> |
+| Performance | Tracing |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-tracing-perfetto.png" alt="Andy Perfetto tracing" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> |
-| Accessibility | Inspector |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-performance-samples.png" alt="Andy performance" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-tracing-perfetto.png" alt="Andy Perfetto tracing" width="480"> |
+| Design | Accessibility |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-hierarchy.png" alt="Andy view hierarchy inspector" width="480"> |
-| Inspector layers | Bug Capture |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-design-overlay.png" alt="Andy design tools" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-accessibility-hierarchy.png" alt="Andy accessibility inspector" width="480"> |
+| Inspector | Inspector layers |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-layers.png" alt="Andy view hierarchy 2.5D layer view" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> |
-| Recordings export | Settings |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-hierarchy.png" alt="Andy view hierarchy inspector" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-inspector-layers.png" alt="Andy view hierarchy 2.5D layer view" width="480"> |
+| Bug Capture | Recordings export |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-recordings-export.png" alt="Andy recordings export" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> |
-| Mirror pop-out | |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-bugs-replay.png" alt="Andy bug replay" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-recordings-export.png" alt="Andy recordings export" width="480"> |
+| Settings | Mirror pop-out |
 | --- | --- |
-| <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> | |
+| <img src="src/screenshotTest/roborazzi/macos/desktop-settings-mcp.png" alt="Andy settings" width="480"> | <img src="src/screenshotTest/roborazzi/macos/desktop-mirror-pop-out.png" alt="Andy mirror pop-out" width="480"> |
 
 ## Building from source
 
@@ -317,7 +318,7 @@ Open a new terminal after install if `cargo` is still not found.
 - Xcode command-line tools on macOS for iOS Simulator work, physical-device status, Live mirror, and crash symbolication.
 - Network capture uses Andy's pinned mitmproxy runtime at `~/.andy/proxy/venv` (needs Python 3.12+). Optional fallback: `brew install mitmproxy`.
 - Andy bundles `scrcpy-server` for Android mirroring and installs managed `tmux` at `~/.andy/bin/tmux` for agent sessions.
-- Optional agent CLIs: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`). Ollama and LM Studio work as OpenAI-compatible backends when a server is running and configured in Settings.
+- Optional agent CLIs: Claude Code (`claude`), Codex (`codex`), Cursor Agent (`cursor-agent`), Antigravity (`agy`), OpenCode (`opencode`), Pi (`pi`), Hermes (`hermes`), OpenClaw (`openclaw`), or Goose (`goose`). Ollama, LM Studio, and OpenRouter work as OpenAI-compatible backends when a server is running and configured in Settings.
 
 ## Icon attribution
 

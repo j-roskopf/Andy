@@ -10,8 +10,8 @@ class LocalModelsTest {
     @Test
     fun pickerExpandsEachBackendAcrossOpenCodePiGoose() {
         val options = agentPickerOptions()
-        val local = options.filter { it.agent.isLocalModelBackend }
-        assertEquals(6, local.size)
+        val local = options.filter { it.agent.isModelBackend }
+        assertEquals(9, local.size)
         assertEquals(
             listOf(
                 "Ollama · OpenCode",
@@ -20,6 +20,9 @@ class LocalModelsTest {
                 "LM Studio · OpenCode",
                 "LM Studio · Pi",
                 "LM Studio · Goose",
+                "OpenRouter · OpenCode",
+                "OpenRouter · Pi",
+                "OpenRouter · Goose",
             ),
             local.map { it.label },
         )
@@ -47,6 +50,17 @@ class LocalModelsTest {
             localModelIdWithoutProviderPrefix(AgentKind.LMStudio, "qwen/qwen3.8-27b"),
         )
         assertEquals(
+            "openrouter/anthropic/claude-sonnet-4",
+            prefixedLocalModelId(AgentKind.OpenRouter, "anthropic/claude-sonnet-4"),
+        )
+        assertEquals(
+            "anthropic/claude-sonnet-4",
+            localModelIdWithoutProviderPrefix(
+                AgentKind.OpenRouter,
+                "openrouter/anthropic/claude-sonnet-4",
+            ),
+        )
+        assertEquals(
             "http://127.0.0.1:11434",
             openaiCompatUrlToProviderHost("http://127.0.0.1:11434/v1/"),
         )
@@ -67,6 +81,30 @@ class LocalModelsTest {
         assertEquals(
             listOf("lmstudio/qwen/qwen3.8-27b", "lmstudio/already-prefixed"),
             lmStudio.map { it.id },
+        )
+    }
+
+    @Test
+    fun openRouterModelsSortAlphabeticallyByLabel() {
+        val options = parseOpenAiCompatModels(
+            """{"data":[
+              {"id":"openai/gpt-4o","name":"GPT-4o"},
+              {"id":"anthropic/claude-sonnet-4","name":"Claude Sonnet 4"},
+              {"id":"google/gemini-2.5-pro","name":"Gemini 2.5 Pro"}
+            ]}""",
+            AgentKind.OpenRouter,
+        )
+        assertEquals(
+            listOf("Claude Sonnet 4", "Gemini 2.5 Pro", "GPT-4o"),
+            options.map { it.label },
+        )
+        assertEquals(
+            listOf(
+                "openrouter/anthropic/claude-sonnet-4",
+                "openrouter/google/gemini-2.5-pro",
+                "openrouter/openai/gpt-4o",
+            ),
+            options.map { it.id },
         )
     }
 

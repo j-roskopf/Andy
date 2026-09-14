@@ -59,7 +59,7 @@ import app.andy.model.AgentPickerOption
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.agentPickerOptions
 import app.andy.model.comboReady
-import app.andy.model.isLocalModelBackend
+import app.andy.model.isModelBackend
 import app.andy.model.prefixedLocalModelId
 import app.andy.model.runtimeKind
 import app.andy.model.composerSkillsForSlashMenu
@@ -184,7 +184,7 @@ fun AgentTaskComposerPane(
             },
             onImport = { agent, sessionId ->
                 form.state.agent = agent
-                if (!agent.isLocalModelBackend) form.state.localRuntime = null
+                if (!agent.isModelBackend) form.state.localRuntime = null
                 importingThread = false
                 onSubmit(form.buildDraft().withImportedVendorSession(sessionId))
                 form.clearPrompt()
@@ -416,7 +416,7 @@ private class AgentTaskComposerFormState(
         attachMcp = defaults?.attachAndyMcp == true
         budgetText = defaults?.maxBudgetUsd?.toString().orEmpty()
         localRuntime = when {
-            !agent.isLocalModelBackend -> null
+            !agent.isModelBackend -> null
             else -> localRuntime ?: defaults?.localRuntime ?: LocalAgentRuntime.OpenCode
         }
     }
@@ -454,7 +454,7 @@ private fun rememberAgentTaskComposerForm(
     LaunchedEffect(runtimeKind, directory) {
         services.agentRuns.refreshSlashCommands(runtimeKind, directory)
     }
-    val selectedOption = AgentPickerOption(state.agent, state.localRuntime.takeIf { state.agent.isLocalModelBackend })
+    val selectedOption = AgentPickerOption(state.agent, state.localRuntime.takeIf { state.agent.isModelBackend })
     val selectedCliAvailable = selectedOption.comboReady(cliStatuses, localBackends)
     // An empty status list means discovery has not completed yet, so preserve the optimistic
     // initial composer state. Once discovery has reported every option unavailable, do not
@@ -492,7 +492,7 @@ private fun rememberAgentTaskComposerForm(
         availableSkills.filter { skill -> state.prompt.referencesComposerSkill(skill) }
     }
     val validBudget = state.budgetText.toMaxBudgetUsd()
-    val localModelChosen = !state.agent.isLocalModelBackend ||
+    val localModelChosen = !state.agent.isModelBackend ||
         (state.localRuntime != null && (
             (state.usesCustomModel && state.customModel.isNotBlank()) ||
                 (!state.usesCustomModel && !state.modelId.isNullOrBlank())
@@ -509,7 +509,7 @@ private fun rememberAgentTaskComposerForm(
             val preferred = lastUsedAgent
             val preferredRuntime = preferred?.let { kind ->
                 providerDefaults[kind]?.localRuntime
-                    ?: LocalAgentRuntime.OpenCode.takeIf { kind.isLocalModelBackend }
+                    ?: LocalAgentRuntime.OpenCode.takeIf { kind.isModelBackend }
             }
             val preferredOption = preferred?.let { AgentPickerOption(it, preferredRuntime) }
             if (preferredOption != null && preferredOption.comboReady(cliStatuses, localBackends)) {
@@ -657,7 +657,7 @@ private class AgentTaskComposerForm(
             planMode = state.planMode,
             confirmToolCalls = state.confirmToolCalls,
             model = (if (state.usesCustomModel) state.customModel.trim().ifBlank { null } else state.modelId)
-                ?.let { if (state.agent.isLocalModelBackend) prefixedLocalModelId(state.agent, it) else it },
+                ?.let { if (state.agent.isModelBackend) prefixedLocalModelId(state.agent, it) else it },
             reasoningEffort = if (state.usesCustomModel) null else state.reasoningEffort,
             fastMode = if (state.usesCustomModel) false else state.fastMode,
             openClawNewSession = state.openClawNewSession,
@@ -1118,7 +1118,7 @@ private fun AgentChatComposer(
                 if (hasAvailableProvider) {
                     val providerLabel = AgentPickerOption(
                         state.agent,
-                        state.localRuntime.takeIf { state.agent.isLocalModelBackend },
+                        state.localRuntime.takeIf { state.agent.isModelBackend },
                     ).label
                     val permissionsLabel = (state.sandboxMode ?: state.autonomy.defaultSandboxMode())
                         .labelFor(state.agent.runtimeKind(state.localRuntime))
@@ -1136,7 +1136,7 @@ private fun AgentChatComposer(
                                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             AgentPillIcon(option.agent)
                                             Text(
-                                                "${option.label}${if (ready) "" else " · ${if (!option.agent.isLocalModelBackend && form.cliStatuses.firstOrNull { it.kind == option.agent }?.issue != null) "needs repair" else "unavailable"}"}",
+                                                "${option.label}${if (ready) "" else " · ${if (!option.agent.isModelBackend && form.cliStatuses.firstOrNull { it.kind == option.agent }?.issue != null) "needs repair" else "unavailable"}"}",
                                                 color = TextPrimary,
                                             )
                                         }
@@ -1182,7 +1182,7 @@ private fun AgentChatComposer(
                             onClick = { modelMenuExpanded = true },
                         )
                         DropdownMenu(expanded = modelMenuExpanded, onDismissRequest = { modelMenuExpanded = false }) {
-                            if (!state.agent.isLocalModelBackend) {
+                            if (!state.agent.isModelBackend) {
                                 DropdownMenuItem(
                                     text = { Text("provider default", color = TextPrimary) },
                                     onClick = {
