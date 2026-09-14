@@ -153,6 +153,7 @@ class SwappableAgentBackend(
 
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = runs().setQuotaAccess(agent, enabled)
     override fun openRouterApiKeyPresent(): Boolean = runs().openRouterApiKeyPresent()
+    override val openRouterKeyPresent: StateFlow<Boolean> get() = runs().openRouterKeyPresent
     override suspend fun setOpenRouterApiKey(key: String) = runs().setOpenRouterApiKey(key)
     override suspend fun clearOpenRouterApiKey() = runs().clearOpenRouterApiKey()
     override fun setProviderLane(agent: AgentKind, lane: AgentLaneKind) = runs().setProviderLane(agent, lane)

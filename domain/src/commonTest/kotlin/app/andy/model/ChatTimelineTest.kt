@@ -406,4 +406,33 @@ class ChatTimelineTest {
         assertEquals(1, model.rows.count { it.kind == TimelineRowKind.Assistant })
         assertEquals("Hello", model.rows.first { it.kind == TimelineRowKind.Assistant }.title)
     }
+
+    @Test
+    fun suppressesResultRowWhenMatchingStoredCallExists() {
+        val paired = buildChatTimeline(
+            listOf(
+                AgentEvent.UserMessage(atMillis = 1, text = "hi"),
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "bash",
+                    summary = "pwd",
+                    detail = "pwd",
+                    toolCallId = "call-1",
+                    startedAtMillis = 1,
+                    endedAtMillis = 2,
+                ),
+                AgentEvent.ToolResult(atMillis = 3, toolName = "bash", summary = "pwd", detail = "/tmp", isError = false),
+            ),
+        )
+        assertEquals(1, paired.rows.count { it.kind == TimelineRowKind.Tool })
+        assertEquals(1, paired.turns.first().toolCallCount)
+
+        val orphan = buildChatTimeline(
+            listOf(
+                AgentEvent.UserMessage(atMillis = 1, text = "hi"),
+                AgentEvent.ToolResult(atMillis = 3, toolName = "bash", summary = "pwd", detail = "/tmp", isError = false),
+            ),
+        )
+        assertTrue(orphan.rows.any { it.key == "tool-result-1" })
+    }
 }

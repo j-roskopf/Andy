@@ -128,6 +128,9 @@ fun buildChatTimeline(
     var callIndex = 0
     var seenUserInCurrentTurn = false
     var previousEventAtMillis = task?.createdAtMillis ?: coalesced.firstOrNull()?.atMillis ?: 0L
+    // Tool names from stored ToolCall rows not yet paired with a ToolResult, so the fallback
+    // result row is only added for orphan results instead of double-counting a stored call.
+    val unmatchedToolCalls = ArrayList<String?>()
     // Latest TaskResult token counts, applied when the turn closes / next user starts.
     var pendingInputTokens: Long? = null
     var pendingOutputTokens: Long? = null
@@ -362,11 +365,23 @@ fun buildChatTimeline(
                         callIndex = callIndex++,
                     ),
                 )
+                unmatchedToolCalls += event.toolName.trim().ifBlank { null }
                 previousEventAtMillis = event.atMillis
             }
 
             is AgentEvent.ToolResult -> {
                 // Prefer ToolCall rows; orphan results still appear when no matching call was stored.
+                val resultName = event.toolName?.trim()?.ifBlank { null }
+                val matchIndex = when {
+                    unmatchedToolCalls.isEmpty() -> -1
+                    resultName != null -> unmatchedToolCalls.indexOfLast { it == resultName }
+                    else -> unmatchedToolCalls.lastIndex
+                }
+                if (matchIndex >= 0) {
+                    unmatchedToolCalls.removeAt(matchIndex)
+                    previousEventAtMillis = event.atMillis
+                    return@forEachIndexed
+                }
                 val turn = ensureTurn()
                 addRow(
                     TimelineRow(

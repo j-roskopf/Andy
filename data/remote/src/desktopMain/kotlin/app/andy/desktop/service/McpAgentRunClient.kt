@@ -190,6 +190,7 @@ class McpAgentRunClient(
     private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
     override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends.asStateFlow()
     private val _openRouterKeyPresent = MutableStateFlow(false)
+    override val openRouterKeyPresent: StateFlow<Boolean> = _openRouterKeyPresent.asStateFlow()
 
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects.asStateFlow()

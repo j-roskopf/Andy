@@ -631,6 +631,7 @@ interface PluginService {
 private val NoInteractiveTerminals: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 private val NoViewingTask: StateFlow<String?> = MutableStateFlow(null)
 private val NoLocalModelBackends: StateFlow<Map<AgentKind, Boolean>> = MutableStateFlow(emptyMap())
+private val NoOpenRouterKey: StateFlow<Boolean> = MutableStateFlow(false)
 private val DefaultTerminalSessionsRevision: StateFlow<Long> = MutableStateFlow(0L)
 
 interface AgentRunService {
@@ -659,6 +660,11 @@ interface AgentRunService {
         get() = NoLocalModelBackends
     /** True when an OpenRouter API key is saved on the agent host keychain. */
     fun openRouterApiKeyPresent(): Boolean = false
+    /**
+     * Observable form of [openRouterApiKeyPresent], so Settings reacts when a remote backend
+     * reports key status after mount. Never carries the secret itself.
+     */
+    val openRouterKeyPresent: StateFlow<Boolean> get() = NoOpenRouterKey
     /** Saves the OpenRouter API key to the agent-host OS keychain (never workspace.properties). */
     suspend fun setOpenRouterApiKey(key: String): CommandResult =
         CommandResult.failure("OpenRouter API keys are only managed on desktop")

@@ -1276,8 +1276,9 @@ private fun LocalModelsPanel(
     var openRouterKeyDraft by remember { mutableStateOf("") }
     var openRouterKeyPresent by remember { mutableStateOf(services.agentRuns.openRouterApiKeyPresent()) }
     var openRouterKeyMessage by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        openRouterKeyPresent = services.agentRuns.openRouterApiKeyPresent()
+    val observedKeyPresent by services.agentRuns.openRouterKeyPresent.collectAsState()
+    LaunchedEffect(observedKeyPresent) {
+        openRouterKeyPresent = observedKeyPresent
     }
     SettingsGroup(
         title = "Model backends",

@@ -216,6 +216,9 @@ class DesktopAgentRunService(
     private val _localModelBackends = MutableStateFlow<Map<AgentKind, Boolean>>(emptyMap())
     override val localModelBackends: StateFlow<Map<AgentKind, Boolean>> = _localModelBackends
 
+    private val _openRouterKeyPresent = MutableStateFlow(false)
+    override val openRouterKeyPresent: StateFlow<Boolean> = _openRouterKeyPresent
+
     private val _projects = MutableStateFlow<Map<String, ProjectWorkflowState>>(emptyMap())
     override val projects: StateFlow<Map<String, ProjectWorkflowState>> = _projects
 
@@ -351,6 +354,9 @@ class DesktopAgentRunService(
             refreshCliStatuses()
             refreshSlashCommandsForReadyProviders()
             watchLocalModelSettings()
+            scope.launch(Dispatchers.IO) {
+                _openRouterKeyPresent.value = OpenRouterCredentialStore.isPresent()
+            }
             scope.launch(Dispatchers.IO) {
                 runCatching {
                     transcriptSearch.backfill(
@@ -4449,6 +4455,7 @@ class DesktopAgentRunService(
         // before Settings or MCP returns success (avoids a race that left Send disabled).
         refreshLocalModelCatalog()
         refreshProviderQuotas()
+        _openRouterKeyPresent.value = true
         CommandResult.success("OpenRouter API key saved on this host")
     }
 
@@ -4460,6 +4467,7 @@ class DesktopAgentRunService(
         }
         _providerQuotas.update { it - AgentKind.OpenRouter }
         refreshLocalModelCatalog()
+        _openRouterKeyPresent.value = false
         CommandResult.success("OpenRouter API key cleared")
     }
 
