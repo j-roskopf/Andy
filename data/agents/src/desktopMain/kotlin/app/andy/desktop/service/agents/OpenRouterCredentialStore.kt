@@ -134,6 +134,7 @@ object OpenRouterCredentialStore {
         }.getOrDefault(false)
 
     // Windows: DPAPI-encrypted (current-user) SecureString via PowerShell's Export/Import-Clixml.
+    // Scripts are passed with -EncodedCommand (UTF-16LE base64) so no shell quoting is involved.
 
     private fun windowsFile(): File =
         File(System.getProperty("user.home"), ".andy/openrouter-key.dpapi")
@@ -144,7 +145,7 @@ object OpenRouterCredentialStore {
         val script = """
             ${'$'}ErrorActionPreference = 'Stop'
             ${'$'}sec = Import-Clixml -LiteralPath '${powerShellLiteral(file.absolutePath)}'
-            [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${'$'}sec))
+            [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${'$'}sec)))
         """.trimIndent()
         val output = runPowerShell(script, emptyMap()) ?: return null
         return output.trim().takeIf { it.isNotEmpty() }
@@ -167,9 +168,10 @@ object OpenRouterCredentialStore {
 
     /** Runs a PowerShell script, returning stdout, or null on failure/timeout. */
     private fun runPowerShell(script: String, environment: Map<String, String>): String? = runCatching {
+        val encoded = java.util.Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
         val builder = ProcessBuilder(
-            "powershell", "-NoProfile", "-NonInteractive", "-Command", script,
-        ).redirectErrorStream(false)
+            powerShellExecutable(), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded,
+        )
         builder.environment().putAll(environment)
         val process = builder.start()
         // Drain stdout/err concurrently so a full pipe cannot deadlock waitFor.
@@ -179,15 +181,31 @@ object OpenRouterCredentialStore {
         val errThread = Thread { process.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
         outThread.start()
         errThread.start()
-        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+        if (!process.waitFor(15, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             return@runCatching null
         }
         outThread.join(1_000)
         errThread.join(1_000)
-        if (process.exitValue() != 0) return@runCatching null
+        if (process.exitValue() != 0) {
+            System.err.println("OpenRouterCredentialStore: PowerShell exited ${process.exitValue()}: ${err.toString().trim()}")
+            return@runCatching null
+        }
         out.toString()
-    }.getOrNull()
+    }.getOrElse {
+        System.err.println("OpenRouterCredentialStore: PowerShell invocation failed: ${it.message}")
+        null
+    }
+
+    private fun powerShellExecutable(): String {
+        val root = System.getenv("SystemRoot")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("WINDIR")?.takeIf { it.isNotBlank() }
+        if (root != null) {
+            val exe = File(root, "System32/WindowsPowerShell/v1.0/powershell.exe")
+            if (exe.isFile) return exe.absolutePath
+        }
+        return "powershell"
+    }
 
     private fun powerShellLiteral(path: String): String = path.replace("'", "''")
 }

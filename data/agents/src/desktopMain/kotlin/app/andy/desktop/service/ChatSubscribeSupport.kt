@@ -228,7 +228,9 @@ internal fun AgentEvent.toWire(): JsonObject = buildJsonObject {
                     skills.map { skill ->
                         buildJsonObject {
                             put("name", skill.name)
+                            put("description", skill.description)
                             put("path", skill.path)
+                            put("userInvocable", skill.userInvocable)
                         }
                     },
                 ),

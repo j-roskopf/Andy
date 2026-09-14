@@ -408,7 +408,12 @@ class McpAgentRunClient(
                 text = obj.string("text").orEmpty(),
                 skills = obj["skills"]?.jsonArray?.map { skill ->
                     val value = skill.jsonObject
-                    AgentSkill(name = value.string("name").orEmpty(), description = "", path = value.string("path").orEmpty())
+                    AgentSkill(
+                        name = value.string("name").orEmpty(),
+                        description = value.string("description").orEmpty(),
+                        path = value.string("path").orEmpty(),
+                        userInvocable = value["userInvocable"]?.jsonPrimitive?.booleanOrNull ?: true,
+                    )
                 }.orEmpty(),
                 imagePaths = obj["images"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
                 attachments = obj["attachments"]?.jsonArray?.map { it.jsonObject.toAgentAttachment() }.orEmpty(),

@@ -4471,6 +4471,7 @@ class DesktopAgentRunService(
             )
         }
         _providerQuotas.update { it - AgentKind.OpenRouter }
+        LocalModelSidecar.clearGeneratedArtifacts(AgentKind.OpenRouter)
         refreshLocalModelCatalog()
         _openRouterKeyPresent.value = false
         CommandResult.success("OpenRouter API key cleared")

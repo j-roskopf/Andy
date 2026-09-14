@@ -37,6 +37,29 @@ internal object LocalModelSidecar {
     fun rootDir(home: File = File(System.getProperty("user.home"))): File =
         File(home, ".andy/local-models")
 
+    /**
+     * Removes Andy-generated sidecar files for [backend] that can embed its credential
+     * (Pi's `models.json`, OpenCode overlay configs). Called when the credential is cleared.
+     */
+    fun clearGeneratedArtifacts(backend: AgentKind, home: File = File(System.getProperty("user.home"))) {
+        val dir = rootDir(home)
+        File(dir, "pi-${backend.localModelProviderId}-agent").deleteRecursively()
+        File(dir, "opencode-${backend.localModelProviderId}.json").delete()
+        if (backend == AgentKind.OpenRouter) {
+            File(dir, "opencode-openrouter.json").delete()
+        }
+    }
+
+    /** Best-effort owner-only permissions for a file that may embed a credential. */
+    private fun restrictToOwner(file: File) {
+        runCatching {
+            Files.setPosixFilePermissions(
+                file.toPath(),
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+            )
+        }
+    }
+
     fun envFor(
         task: AgentTask,
         workspace: WorkspaceState,
@@ -139,6 +162,7 @@ internal object LocalModelSidecar {
             put("provider", buildJsonObject { put("openrouter", provider) })
         }
         file.writeText(json.encodeToString(JsonObject.serializer(), body) + "\n")
+        restrictToOwner(file)
         return file
     }
 
@@ -187,6 +211,7 @@ internal object LocalModelSidecar {
             put("provider", buildJsonObject { put(providerId, provider) })
         }
         file.writeText(json.encodeToString(JsonObject.serializer(), body) + "\n")
+        restrictToOwner(file)
         return file
     }
 
@@ -242,7 +267,9 @@ internal object LocalModelSidecar {
             localProvider = localProvider,
         )
         val body = buildJsonObject { put("providers", providers) }
-        File(agentDir, "models.json").writeText(json.encodeToString(JsonObject.serializer(), body) + "\n")
+        val modelsFile = File(agentDir, "models.json")
+        modelsFile.writeText(json.encodeToString(JsonObject.serializer(), body) + "\n")
+        restrictToOwner(modelsFile)
         linkUserPiAgentFiles(File(home, ".pi/agent"), agentDir)
         writePiSettings(File(home, ".pi/agent/settings.json"), agentDir, providerId, modelId)
         return agentDir

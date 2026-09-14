@@ -13,6 +13,39 @@ import kotlin.test.assertTrue
 
 class LocalModelSidecarTest {
     @Test
+    fun clearGeneratedArtifactsRemovesOpenRouterCredentialBearingFiles() {
+        val home = File.createTempFile("andy-sidecar-cleanup", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            val task = AgentTask(
+                id = "t1",
+                title = "router",
+                prompt = "hi",
+                agent = AgentKind.OpenRouter,
+                localRuntime = LocalAgentRuntime.Pi,
+                model = "openai/gpt-5.4",
+                createdAtMillis = 0,
+            )
+            val env = LocalModelSidecar.envFor(
+                task,
+                WorkspaceState(),
+                home,
+                openRouterApiKey = "sk-or-secret",
+            )
+            val agentDir = File(env.getValue("PI_CODING_AGENT_DIR"))
+            assertTrue(File(agentDir, "models.json").isFile)
+            assertTrue(File(agentDir, "models.json").readText().contains("sk-or-secret"))
+
+            LocalModelSidecar.clearGeneratedArtifacts(AgentKind.OpenRouter, home)
+            assertFalse(File(agentDir, "models.json").exists())
+        } finally {
+            home.deleteRecursively()
+        }
+    }
+
+    @Test
     fun gooseEnvSetsHostWithoutV1AndDoesNotWriteUserGooseConfig() {
         val home = File.createTempFile("andy-local-models-home", null).also {
             it.delete()

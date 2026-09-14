@@ -73,4 +73,22 @@ class ProviderAuthRecoveryTest {
             task.copy(errorMessage = "exited with code 1").providerAuthRecoveryOrNull(),
         )
     }
+
+    @Test
+    fun openRouterPointsAtSettingsInsteadOfAVendorCli() {
+        assertEquals(
+            "Not authorized — update the OpenRouter API key in Settings, then retry",
+            providerAuthFailureHint(AgentKind.OpenRouter, "Unauthorized: authentication required"),
+        )
+        val task = AgentTask(
+            id = "t2",
+            title = "t",
+            prompt = "p",
+            agent = AgentKind.OpenRouter,
+            createdAtMillis = 1L,
+            errorMessage = "Unauthorized: authentication required",
+        )
+        // No `openrouter` CLI exists, so never offer a terminal login action.
+        assertNull(task.providerAuthRecoveryOrNull())
+    }
 }
