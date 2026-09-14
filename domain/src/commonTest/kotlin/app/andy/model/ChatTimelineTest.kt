@@ -435,4 +435,26 @@ class ChatTimelineTest {
         )
         assertTrue(orphan.rows.any { it.key == "tool-result-1" })
     }
+
+    @Test
+    fun toolResultPairingIsScopedToItsTurn() {
+        val model = buildChatTimeline(
+            listOf(
+                AgentEvent.UserMessage(atMillis = 1, text = "first"),
+                AgentEvent.ToolCall(
+                    atMillis = 2,
+                    toolName = "bash",
+                    summary = "pwd",
+                    detail = "pwd",
+                    toolCallId = "call-1",
+                    startedAtMillis = 1,
+                    endedAtMillis = 2,
+                ),
+                // New turn: the earlier unpaired call must not suppress this orphan result.
+                AgentEvent.UserMessage(atMillis = 3, text = "second"),
+                AgentEvent.ToolResult(atMillis = 4, toolName = "bash", summary = "pwd", detail = "/tmp", isError = false),
+            ),
+        )
+        assertTrue(model.rows.any { it.key == "tool-result-3" })
+    }
 }

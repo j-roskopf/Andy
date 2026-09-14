@@ -6,6 +6,7 @@ import app.andy.model.AgentFileChange
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
 import app.andy.model.AgentSlashCommand
+import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
 import app.andy.model.AgentThreadChangeSnapshot
 import app.andy.model.AgentToolKind
@@ -701,6 +702,27 @@ class AcpLaneTest {
             val legacy = store.load("task-1").single() as AgentEvent.ToolCall
             assertEquals(null, legacy.startedAtMillis)
             assertEquals(null, legacy.endedAtMillis)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun transcriptStoreRoundTripsSkillMetadata() {
+        val root = createTempDirectory("andy-acp-skill-meta").toFile()
+        try {
+            val store = AcpTranscriptStore(fileFor = { id -> root.resolve(id).resolve("transcript.jsonl") })
+            store.append(
+                "task-skills",
+                AgentEvent.UserMessage(
+                    atMillis = 10,
+                    text = "hi",
+                    skills = listOf(AgentSkill("s", "desc", "/p", userInvocable = false)),
+                ),
+            )
+            val loaded = store.load("task-skills").single() as AgentEvent.UserMessage
+            assertEquals("desc", loaded.skills.single().description)
+            assertFalse(loaded.skills.single().userInvocable)
         } finally {
             root.deleteRecursively()
         }

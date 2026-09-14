@@ -14,12 +14,17 @@ object OpenRouterCredentialStore {
     private const val Account = "api-key"
     private const val WindowsKeyEnv = "ANDY_OPENROUTER_KEY"
 
-    fun load(): String? = when {
-        isMac() -> macFind()
-        isLinux() -> linuxLookup()
-        isWindows() -> runCatching { windowsLoad() }.getOrNull()
-        else -> null
+    /**
+     * Tri-state lookup so a locked/unavailable store is never confused with a confirmed absence.
+     * Without this, a failed lookup would make [delete] report success while the secret remains.
+     */
+    private sealed interface Lookup {
+        data class Found(val value: String) : Lookup
+        data object Absent : Lookup
+        data object Unavailable : Lookup
     }
+
+    fun load(): String? = (lookup() as? Lookup.Found)?.value
 
     fun save(secret: String) {
         if (secret.isEmpty()) return
@@ -30,17 +35,24 @@ object OpenRouterCredentialStore {
         }
     }
 
-    /** Removes the stored key. Returns true only when it is verifiably gone afterwards. */
+    /** Removes the stored key. Returns true only when a follow-up lookup confirms absence. */
     fun delete(): Boolean {
         when {
             isMac() -> macDelete()
             isLinux() -> linuxClear()
             isWindows() -> windowsDelete()
         }
-        return !isPresent()
+        return lookup() is Lookup.Absent
     }
 
-    fun isPresent(): Boolean = !load().isNullOrBlank()
+    fun isPresent(): Boolean = lookup() is Lookup.Found
+
+    private fun lookup(): Lookup = when {
+        isMac() -> macLookup()
+        isLinux() -> linuxLookup()
+        isWindows() -> windowsLookup()
+        else -> Lookup.Absent
+    }
 
     private fun isMac(): Boolean {
         val os = System.getProperty("os.name").orEmpty().lowercase()
@@ -53,15 +65,21 @@ object OpenRouterCredentialStore {
     private fun isWindows(): Boolean =
         System.getProperty("os.name").orEmpty().lowercase().contains("win")
 
-    private fun macFind(): String? {
+    private fun macLookup(): Lookup {
         val process = ProcessBuilder(
             "security", "find-generic-password",
             "-s", ServiceName,
             "-a", Account,
             "-w",
         ).redirectErrorStream(true).start()
-        if (!process.waitFor(5, TimeUnit.SECONDS) || process.exitValue() != 0) return null
-        return process.inputStream.bufferedReader().readText().trim().takeIf { it.isNotEmpty() }
+        if (!process.waitFor(5, TimeUnit.SECONDS)) return Lookup.Unavailable
+        val value = process.inputStream.bufferedReader().readText().trim()
+        return when {
+            process.exitValue() == 0 -> if (value.isNotEmpty()) Lookup.Found(value) else Lookup.Absent
+            // 44 = errSecItemNotFound; anything else (locked keychain, denied access) is unavailable.
+            process.exitValue() == 44 -> Lookup.Absent
+            else -> Lookup.Unavailable
+        }
     }
 
     private fun macAdd(secret: String) {
@@ -88,15 +106,17 @@ object OpenRouterCredentialStore {
         }
     }
 
-    private fun linuxLookup(): String? {
-        if (!commandExists("secret-tool")) return null
+    private fun linuxLookup(): Lookup {
+        if (!commandExists("secret-tool")) return Lookup.Unavailable
         val process = ProcessBuilder(
             "secret-tool", "lookup",
             "service", ServiceName,
             "account", Account,
         ).redirectErrorStream(true).start()
-        if (!process.waitFor(5, TimeUnit.SECONDS) || process.exitValue() != 0) return null
-        return process.inputStream.bufferedReader().readText().trim().takeIf { it.isNotEmpty() }
+        if (!process.waitFor(5, TimeUnit.SECONDS)) return Lookup.Unavailable
+        val value = process.inputStream.bufferedReader().readText().trim()
+        if (process.exitValue() != 0) return Lookup.Absent // secret-tool exits 1 when no match.
+        return if (value.isNotEmpty()) Lookup.Found(value) else Lookup.Absent
     }
 
     private fun linuxStore(secret: String) {
@@ -138,6 +158,14 @@ object OpenRouterCredentialStore {
 
     private fun windowsFile(): File =
         File(System.getProperty("user.home"), ".andy/openrouter-key.dpapi")
+
+    private fun windowsLookup(): Lookup {
+        if (!windowsFile().isFile) return Lookup.Absent
+        return runCatching {
+            val value = windowsLoad()
+            if (value.isNullOrBlank()) Lookup.Absent else Lookup.Found(value)
+        }.getOrElse { Lookup.Unavailable }
+    }
 
     internal fun windowsLoad(): String? {
         val file = windowsFile()

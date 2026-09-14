@@ -150,6 +150,9 @@ fun buildChatTimeline(
             pendingOutputTokens = null
             turnNumber++
             stepInTurn = 0
+            // Pairing is per-turn: an unpaired call from a finished turn must not suppress a
+            // later turn's orphan result that happens to share a tool name.
+            unmatchedToolCalls.clear()
         } else if (turnNumber == 0) {
             turnNumber = 1
         }

@@ -1274,7 +1274,8 @@ private fun LocalModelsPanel(
     val quotas by services.agentRuns.providerQuotas.collectAsState()
     val openRouterQuota = quotas[app.andy.model.AgentKind.OpenRouter]
     var openRouterKeyDraft by remember { mutableStateOf("") }
-    var openRouterKeyPresent by remember { mutableStateOf(services.agentRuns.openRouterApiKeyPresent()) }
+    // Populated from the observed flow below; never read the OS keychain during composition.
+    var openRouterKeyPresent by remember { mutableStateOf(false) }
     var openRouterKeyMessage by remember { mutableStateOf<String?>(null) }
     val observedKeyPresent by services.agentRuns.openRouterKeyPresent.collectAsState()
     LaunchedEffect(observedKeyPresent) {

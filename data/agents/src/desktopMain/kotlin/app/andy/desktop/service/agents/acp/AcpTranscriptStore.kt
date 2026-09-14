@@ -200,7 +200,12 @@ private data class TranscriptEvent(
     val newLineNumber: Int? = null,
 )
 
-@Serializable private data class TranscriptSkill(val name: String, val path: String)
+@Serializable private data class TranscriptSkill(
+    val name: String,
+    val path: String,
+    val description: String = "",
+    val userInvocable: Boolean = true,
+)
 @Serializable private data class TranscriptAttachment(
     val id: String,
     val displayName: String,
@@ -225,7 +230,7 @@ private fun AgentEvent.toDto(): TranscriptEvent = when (this) {
         "user",
         atMillis,
         text = text,
-        skills = skills.map { TranscriptSkill(it.name, it.path) },
+        skills = skills.map { TranscriptSkill(it.name, it.path, it.description, it.userInvocable) },
         images = imagePaths,
         attachments = attachments.map {
             TranscriptAttachment(
@@ -292,7 +297,7 @@ private fun TranscriptEvent.toModel(): AgentEvent? = when (type) {
     "user" -> AgentEvent.UserMessage(
         atMillis,
         text,
-        skills.map { AgentSkill(it.name, "", it.path) },
+        skills.map { AgentSkill(it.name, it.description, it.path, it.userInvocable) },
         images,
         attachments.map {
             AgentAttachment(
