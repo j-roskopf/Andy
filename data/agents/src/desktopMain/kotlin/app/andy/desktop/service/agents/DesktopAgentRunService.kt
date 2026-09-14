@@ -268,6 +268,11 @@ class DesktopAgentRunService(
     private val pendingEditBatches = ConcurrentHashMap<String, PendingEditBatch>()
     private val fileChangesEnrichmentJobs = ConcurrentHashMap<String, Job>()
     private val fileChangesEnrichmentMutex = ConcurrentHashMap<String, Mutex>()
+    private val followUpMutexes = ConcurrentHashMap<String, Mutex>()
+    private val followUpQueueDispatcher = Dispatchers.IO.limitedParallelism(1)
+
+    private fun followUpMutex(taskId: String): Mutex =
+        followUpMutexes.computeIfAbsent(taskId) { Mutex() }
 
     private val mutatingToolKinds = setOf(AgentToolKind.Edit, AgentToolKind.Delete, AgentToolKind.Move)
 
@@ -2093,7 +2098,7 @@ class DesktopAgentRunService(
         provenance: AgentContextualProvenance?,
         attachments: List<AgentAttachment>,
     ) {
-        scope.launch(Dispatchers.IO) {
+        scope.launch(followUpQueueDispatcher) {
             queueFollowUpPrepared(
                 taskId = taskId,
                 followUp = followUp,
@@ -2114,95 +2119,97 @@ class DesktopAgentRunService(
         contextBundleIds: List<String>,
         provenance: AgentContextualProvenance?,
         attachments: List<AgentAttachment>,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        val task = currentTask(taskId)
-            ?: return@withContext Result.failure(IllegalStateException("Unknown task"))
-        val preferQueue = agentMessageDeliveryMode() == AgentMessageDeliveryMode.Queue
-        // Leftover queue rows (e.g. after stop) must stay FIFO even if the workspace
-        // was later switched to Immediate — never drop or jump the line.
-        val hasQueued = task.queuedFollowUps.isNotEmpty()
-        if (!task.isActive && !isLaneLive(taskId) && !preferQueue && !hasQueued) {
-            return@withContext Result.failure(IllegalStateException("Chat is not ready for a follow-up"))
-        }
+    ): Result<Unit> = followUpMutex(taskId).withLock {
+        withContext(Dispatchers.IO) {
+            val task = currentTask(taskId)
+                ?: return@withContext Result.failure(IllegalStateException("Unknown task"))
+            val preferQueue = agentMessageDeliveryMode() == AgentMessageDeliveryMode.Queue
+            // Leftover queue rows (e.g. after stop) must stay FIFO even if the workspace
+            // was later switched to Immediate — never drop or jump the line.
+            val hasQueued = task.queuedFollowUps.isNotEmpty()
+            if (!task.isActive && !isLaneLive(taskId) && !preferQueue && !hasQueued) {
+                return@withContext Result.failure(IllegalStateException("Chat is not ready for a follow-up"))
+            }
 
-        val text = followUp.trim()
-        if (text.isBlank() && imagePaths.isEmpty() && attachments.isEmpty()) {
-            return@withContext Result.failure(IllegalStateException("Follow-up is empty"))
-        }
-        val skillDirectory = task.worktreePath ?: task.cwd
-        val selectedSkills = skills.filter { skill ->
-            this@DesktopAgentRunService.skills(task.runtimeKind(), skillDirectory).value.any { it.path == skill.path }
-        }
+            val text = followUp.trim()
+            if (text.isBlank() && imagePaths.isEmpty() && attachments.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Follow-up is empty"))
+            }
+            val skillDirectory = task.worktreePath ?: task.cwd
+            val selectedSkills = skills.filter { skill ->
+                this@DesktopAgentRunService.skills(task.runtimeKind(), skillDirectory).value.any { it.path == skill.path }
+            }
 
-        if (!preferQueue && !hasQueued) {
-            if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
-                val materialized = try {
-                    if (attachments.isNotEmpty()) {
-                        chatAttachments.materializeForTask(taskId, task.cwd, attachments)
-                    } else {
-                        emptyList()
+            if (!preferQueue && !hasQueued) {
+                if (task.lane == AgentLaneKind.Acp && acpManager.isAlive(taskId)) {
+                    val materialized = try {
+                        if (attachments.isNotEmpty()) {
+                            chatAttachments.materializeForTask(taskId, task.cwd, attachments)
+                        } else {
+                            emptyList()
+                        }
+                    } catch (error: Exception) {
+                        reportAttachmentFailure(taskId, error)
+                        return@withContext Result.failure(error)
                     }
-                } catch (error: Exception) {
-                    reportAttachmentFailure(taskId, error)
-                    return@withContext Result.failure(error)
+                    val now = System.currentTimeMillis()
+                    val raw = task.followUpCliPayload(text, imagePaths, selectedSkills, materialized).prompt
+                    val acpPrompt = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, raw)
+                    appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths, materialized)))
+                    updateTask(taskId) { current ->
+                        current.copy(
+                            status = AgentStatus.Working,
+                            finishedAtMillis = null,
+                            latestPrompt = text.ifBlank { current.latestPrompt },
+                            unread = false,
+                        )
+                    }
+                    scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
+                    return@withContext Result.success(Unit)
                 }
-                val now = System.currentTimeMillis()
-                val raw = task.followUpCliPayload(text, imagePaths, selectedSkills, materialized).prompt
-                val acpPrompt = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, raw)
-                appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths, materialized)))
-                updateTask(taskId) { current ->
-                    current.copy(
-                        status = AgentStatus.Working,
-                        finishedAtMillis = null,
-                        latestPrompt = text.ifBlank { current.latestPrompt },
-                        unread = false,
+
+                if (terminals.isAlive(taskId)) {
+                    val materialized = try {
+                        if (attachments.isNotEmpty()) {
+                            chatAttachments.materializeForTask(taskId, task.cwd, attachments)
+                        } else {
+                            emptyList()
+                        }
+                    } catch (error: Exception) {
+                        reportAttachmentFailure(taskId, error)
+                        return@withContext Result.failure(error)
+                    }
+                    val now = System.currentTimeMillis()
+                    appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths, materialized)))
+                    updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
+                    val liveText = task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills, materialized)
+                    val evidenceSuffix = materializeTaskEvidence(taskId, contextBundleIds)
+                    val spilled = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, liveText + evidenceSuffix)
+                    terminals.write(taskId, spilled)
+                    return@withContext Result.success(Unit)
+                }
+
+                if (task.isActive && !isLaunchInProgress(taskId)) {
+                    return@withContext resumePrepared(
+                        taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance, attachments,
                     )
                 }
-                scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
-                return@withContext Result.success(Unit)
-            }
-
-            if (terminals.isAlive(taskId)) {
-                val materialized = try {
-                    if (attachments.isNotEmpty()) {
-                        chatAttachments.materializeForTask(taskId, task.cwd, attachments)
-                    } else {
-                        emptyList()
-                    }
-                } catch (error: Exception) {
-                    reportAttachmentFailure(taskId, error)
-                    return@withContext Result.failure(error)
-                }
-                val now = System.currentTimeMillis()
-                appendEvents(taskId, listOf(AgentEvent.UserMessage(now, text, selectedSkills, imagePaths, materialized)))
-                updateTask(taskId) { current -> current.copy(latestPrompt = text.ifBlank { current.latestPrompt }) }
-                val liveText = task.followUpPromptForLiveTerminal(text, imagePaths, selectedSkills, materialized)
-                val evidenceSuffix = materializeTaskEvidence(taskId, contextBundleIds)
-                val spilled = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, liveText + evidenceSuffix)
-                terminals.write(taskId, spilled)
-                return@withContext Result.success(Unit)
-            }
-
-            if (task.isActive && !isLaunchInProgress(taskId)) {
+            } else if (!task.isActive && !isLaunchInProgress(taskId) && !hasQueued) {
                 return@withContext resumePrepared(
                     taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance, attachments,
                 )
             }
-        } else if (!task.isActive && !isLaunchInProgress(taskId) && !hasQueued) {
-            return@withContext resumePrepared(
-                taskId, text, imagePaths, selectedSkills, contextBundleIds, provenance, attachments,
+
+            enqueueFollowUpPrepared(
+                taskId = taskId,
+                text = text,
+                imagePaths = imagePaths,
+                selectedSkills = selectedSkills,
+                contextBundleIds = contextBundleIds,
+                provenance = provenance,
+                attachments = attachments,
             )
         }
-
-        enqueueFollowUpPrepared(
-            taskId = taskId,
-            text = text,
-            imagePaths = imagePaths,
-            selectedSkills = selectedSkills,
-            contextBundleIds = contextBundleIds,
-            provenance = provenance,
-            attachments = attachments,
-        )
     }
 
     override fun sendQueuedFollowUp(taskId: String, queueIndex: Int) {
