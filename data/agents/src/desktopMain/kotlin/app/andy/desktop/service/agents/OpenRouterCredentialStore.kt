@@ -24,11 +24,13 @@ object OpenRouterCredentialStore {
         }
     }
 
-    fun delete() {
+    /** Removes the stored key. Returns true only when it is verifiably gone afterwards. */
+    fun delete(): Boolean {
         when {
             isMac() -> macDelete()
             isLinux() -> linuxClear()
         }
+        return !isPresent()
     }
 
     fun isPresent(): Boolean = !load().isNullOrBlank()

@@ -35,6 +35,8 @@ import app.andy.model.AgentProviderDefaults
 import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentQueuedFollowUp
 import app.andy.model.AgentQuotaAccess
+import app.andy.model.AgentQuotaSource
+import app.andy.model.AgentQuotaWindow
 import app.andy.model.AgentSessionMode
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
@@ -89,6 +91,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.BufferedReader
@@ -708,7 +711,40 @@ class McpAgentRunClient(
             }
         }
 
-    override suspend fun refreshProviderQuotas() = Unit
+    override suspend fun refreshProviderQuotas() {
+        val raw = runCatching { callTool("settings.provider_quotas", emptyMap()) }.getOrNull() ?: return
+        val quotas = runCatching { json.parseToJsonElement(raw).jsonObject["quotas"]?.jsonObject }.getOrNull() ?: return
+        _providerQuotas.value = quotas.mapNotNull { (key, value) ->
+            val kind = AgentKind.entries.firstOrNull { it.name == key } ?: return@mapNotNull null
+            parseProviderQuota(value.jsonObject)?.let { kind to it }
+        }.toMap()
+    }
+
+    private fun parseProviderQuota(obj: JsonObject): AgentProviderQuota? {
+        val windows = obj["windows"]?.jsonArray?.mapNotNull { element ->
+            val window = element.jsonObject
+            val label = window.string("label")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            AgentQuotaWindow(
+                label = label,
+                remainingFraction = window["remainingFraction"]?.jsonPrimitive?.floatOrNull,
+                resetAtMillis = window.long("resetAtMillis"),
+                detail = window.string("detail"),
+            )
+        }.orEmpty()
+        if (windows.isEmpty()) return null
+        return AgentProviderQuota(
+            windows = windows,
+            updatedAtMillis = obj.long("updatedAtMillis") ?: System.currentTimeMillis(),
+            source = AgentQuotaSource.entries.firstOrNull { it.name == obj.string("source") }
+                ?: AgentQuotaSource.ProviderEvent,
+            accountLabel = obj.string("accountLabel"),
+            lifetimeTokens = obj.long("lifetimeTokens"),
+            providerTokenDays = obj["providerTokenDays"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.longOrNull }
+                .orEmpty(),
+        )
+    }
+
     override fun setQuotaAccess(agent: AgentKind, enabled: Boolean) = Unit
 
     override fun openRouterApiKeyPresent(): Boolean = _openRouterKeyPresent.value
@@ -726,6 +762,7 @@ class McpAgentRunClient(
     override suspend fun clearOpenRouterApiKey(): CommandResult = runCatching {
         callTool("settings.openrouter_key_clear", emptyMap())
         _openRouterKeyPresent.value = false
+        _providerQuotas.update { it - AgentKind.OpenRouter }
         refreshComposerOptions()
         CommandResult.success("OpenRouter API key cleared")
     }.getOrElse { CommandResult.failure(it.message.orEmpty()) }

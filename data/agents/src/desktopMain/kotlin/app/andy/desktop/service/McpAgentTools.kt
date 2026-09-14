@@ -19,6 +19,7 @@ import app.andy.model.permissionSandbox
 import app.andy.model.AgentModelCatalog
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
+import app.andy.model.AgentProviderQuota
 import app.andy.model.AgentAttachment
 import app.andy.model.AgentAttachmentKind
 import app.andy.model.importedThreadTitle
@@ -1267,6 +1268,25 @@ fun Server.registerAgentProjectTools(
     }
 
     register(
+        name = "settings.provider_quotas",
+        description = "Refresh and return provider account quota windows known to the agent host.",
+    ) {
+        agentRuns.refreshProviderQuotas()
+        textResult(
+            buildJsonObject {
+                put(
+                    "quotas",
+                    buildJsonObject {
+                        agentRuns.providerQuotas.value.forEach { (kind, quota) ->
+                            put(kind.name, quota.toJsonObject())
+                        }
+                    },
+                )
+            }.toString(),
+        )
+    }
+
+    register(
         name = "chat.provider_login",
         description = "Open a host terminal to sign into a provider CLI (Claude /login, etc.). " +
             "OAuth still requires the user on the Andy host. Returns the login command for copy/paste clients.",
@@ -1583,6 +1603,32 @@ fun Server.registerAgentProjectTools(
         val uploadId = str(args, "uploadId") ?: error("uploadId required")
         val cancelled = chatAttachments.cancelUpload(uploadId)
         textResult("""{"ok":$cancelled,"uploadId":"$uploadId"}""")
+    }
+}
+
+/** Wire form of a provider quota for MCP clients (e.g. the Desktop daemon-client quota panel). */
+private fun AgentProviderQuota.toJsonObject(): JsonObject = buildJsonObject {
+    put("updatedAtMillis", updatedAtMillis)
+    put("source", source.name)
+    accountLabel?.let { put("accountLabel", it) }
+    lifetimeTokens?.let { put("lifetimeTokens", it) }
+    put(
+        "windows",
+        buildJsonArray {
+            windows.forEach { window ->
+                add(
+                    buildJsonObject {
+                        put("label", window.label)
+                        window.remainingFraction?.let { put("remainingFraction", it) }
+                        window.resetAtMillis?.let { put("resetAtMillis", it) }
+                        window.detail?.let { put("detail", it) }
+                    },
+                )
+            }
+        },
+    )
+    if (providerTokenDays.isNotEmpty()) {
+        put("providerTokenDays", buildJsonArray { providerTokenDays.forEach { add(JsonPrimitive(it)) } })
     }
 }
 

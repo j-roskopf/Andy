@@ -225,6 +225,46 @@ class AcpLaneTest {
     }
 
     @Test
+    fun mapperOnlyStampsStartOnNonTerminalObservations() {
+        val pending = AcpEventMapper.map(
+            SessionUpdate.ToolCall(
+                toolCallId = com.agentclientprotocol.model.ToolCallId("timing-1"),
+                title = "bash",
+                kind = ToolKind.EXECUTE,
+                status = ToolCallStatus.PENDING,
+                content = emptyList(),
+                locations = emptyList(),
+                rawInput = buildJsonObject { put("command", "pwd") },
+                rawOutput = null,
+            ),
+            atMillis = 100,
+        ) as AgentEvent.ToolCall
+        assertEquals(100L, pending.startedAtMillis)
+        assertEquals(null, pending.endedAtMillis)
+
+        val completed = AcpEventMapper.map(
+            SessionUpdate.ToolCallUpdate(
+                toolCallId = com.agentclientprotocol.model.ToolCallId("timing-1"),
+                title = null,
+                kind = ToolKind.EXECUTE,
+                status = ToolCallStatus.COMPLETED,
+                content = null,
+                locations = null,
+                rawInput = null,
+                rawOutput = null,
+            ),
+            atMillis = 200,
+        ) as AgentEvent.ToolCall
+        // Terminal-only observation: no observed start, so the timeline gap-approximates.
+        assertEquals(null, completed.startedAtMillis)
+        assertEquals(200L, completed.endedAtMillis)
+
+        val merged = AcpEventMapper.reduce(listOf(pending), completed).single() as AgentEvent.ToolCall
+        assertEquals(100L, merged.startedAtMillis)
+        assertEquals(200L, merged.endedAtMillis)
+    }
+
+    @Test
     fun mapperSplitsEditActionTitlesAndKeepsPendingEnrichment() {
         val pending = AcpEventMapper.map(
             SessionUpdate.ToolCall(

@@ -4451,7 +4451,11 @@ class DesktopAgentRunService(
     }
 
     override suspend fun clearOpenRouterApiKey(): CommandResult = withContext(Dispatchers.IO) {
-        OpenRouterCredentialStore.delete()
+        if (!OpenRouterCredentialStore.delete()) {
+            return@withContext CommandResult.failure(
+                "Could not remove the OpenRouter API key from the OS keychain",
+            )
+        }
         _providerQuotas.update { it - AgentKind.OpenRouter }
         refreshLocalModelCatalog()
         CommandResult.success("OpenRouter API key cleared")
