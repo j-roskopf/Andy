@@ -71,10 +71,6 @@ internal fun shouldIgnoreStatusSnapshot(
     ) {
         return true
     }
-    // Live interactive sessions: always accept Working (soft or confident).
-    if (terminalLive && snapshot.status == AgentStatus.Working) {
-        return false
-    }
     // Soft Working after confident Done/Error is remount / boot noise.
     // Soft Working after Blocked is a real turn continuation — allow it.
     if (snapshot.status == AgentStatus.Working &&
@@ -92,6 +88,10 @@ internal fun shouldIgnoreStatusSnapshot(
         task.status != AgentStatus.Working
     ) {
         return true
+    }
+    // Live interactive sessions: always accept Working (soft or confident).
+    if (terminalLive && snapshot.status == AgentStatus.Working) {
+        return false
     }
     return false
 }

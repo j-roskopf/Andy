@@ -70,8 +70,17 @@ class ProjectWorkflowServiceTest {
                 harness.service.tasks.value.first { it.id == buildRun.id }.status == AgentStatus.Done
             }
             await {
-                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review && it.isActive }
+                harness.service.tasks.value.any { it.workflowStage == ProjectWorkflowStage.Review }
             }
+            await {
+                harness.service.projects.value["project-1"]?.tasks?.firstOrNull { it.id == buildId }?.state ==
+                    ProjectTaskState.Completed
+            }
+            val workflow = harness.service.projects.value.getValue("project-1")
+            val build = workflow.tasks.first { it.id == buildId }
+            val review = workflow.tasks.first { it.id == build.linkedReviewTaskId }
+            assertEquals(1, review.attempts.size)
+            assertEquals(ProjectReviewStatus.Approved, review.reviewVerdicts.single().status)
         }
     }
 

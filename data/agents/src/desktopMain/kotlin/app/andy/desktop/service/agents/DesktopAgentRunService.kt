@@ -2547,6 +2547,14 @@ class DesktopAgentRunService(
             }
         } + extraProviderLaunchEnv(taskForLaunch)
 
+        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
+            val current = currentTask(taskId)
+            if (current != null && current.finishedAtMillis == null) {
+                finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
+            }
+            return
+        }
+
         if (quietResume) {
             // View-only reattach: stay Done. Publishing Working here made the idle prompt
             // scrape look like a freshly finished turn (notification ding).
@@ -2560,15 +2568,23 @@ class DesktopAgentRunService(
                 )
             }
         } else {
-            updateTask(taskId) { it.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis()) }
+            updateTask(taskId) { task ->
+                if (task.finishedAtMillis != null || task.status == AgentStatus.Done || handle.stopRequested) {
+                    task
+                } else {
+                    task.copy(status = AgentStatus.Working, startedAtMillis = System.currentTimeMillis())
+                }
+            }
+        }
+        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
+            val current = currentTask(taskId)
+            if (current != null && current.finishedAtMillis == null) {
+                finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
+            }
+            return
         }
         persist()
         reconcileWorkflowRun(taskId)
-
-        if (handle.stopRequested) {
-            finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
-            return
-        }
 
         val launchTask = currentTask(taskId) ?: taskForLaunch
         // Only a genuine fresh mint (no id `agy` can already resume) needs capture — and
@@ -2748,9 +2764,12 @@ class DesktopAgentRunService(
             writeInitialPromptWhenReady(taskId, handle, text)
         }
 
-        if (handle.stopRequested) {
+        if (handle.stopRequested || currentTask(taskId)?.finishedAtMillis != null) {
             terminals.stop(taskId)
-            finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
+            val current = currentTask(taskId)
+            if (current != null && current.finishedAtMillis == null) {
+                finishTask(taskId, AgentStatus.Done, exitCode = null, error = null, stoppedByUser = true)
+            }
             return
         }
 
@@ -2846,6 +2865,7 @@ class DesktopAgentRunService(
 
         if (outcomeHandled.get()) return
         if (currentTask(taskId)?.status == AgentStatus.Blocked) return
+        if (currentTask(taskId)?.finishedAtMillis != null) return
         // If the question artifact landed while we were tearing down the monitor, still wait.
         if (!artifacts.answerFile.isFile) {
             artifacts.questionFile.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotBlank() }
@@ -2919,6 +2939,7 @@ class DesktopAgentRunService(
                 },
             )
         }
+        if (currentTask(taskId)?.finishedAtMillis != null) return
         finishTask(
             taskId = taskId,
             status = status,
@@ -6514,6 +6535,10 @@ class DesktopAgentRunService(
 
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
+        if (handles[taskId]?.stopRequested == true) return
+        if (task.finishedAtMillis != null && !task.isActive && (snapshot.status == AgentStatus.Working || snapshot.status == AgentStatus.Blocked)) {
+            return
+        }
         val terminalLive = isLaneLive(taskId)
         if (shouldIgnoreStatusSnapshot(task, snapshot, terminalLive = terminalLive)) return
         val previous = previousTaskStatuses.put(taskId, snapshot.status)
@@ -6649,7 +6674,8 @@ class DesktopAgentRunService(
                 task
             }
         }
-        if (finalized && lane == AgentLaneKind.Acp) {
+        if (!finalized) return
+        if (lane == AgentLaneKind.Acp) {
             appendTurnCompletionEvent(taskId, success = status == AgentStatus.Done)
         }
         val queuedFollowUp = currentTask(taskId)?.queuedFollowUps?.firstOrNull()
