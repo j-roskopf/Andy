@@ -144,8 +144,10 @@ object OpenRouterCredentialStore {
         if (!file.isFile) return null
         val script = """
             ${'$'}ErrorActionPreference = 'Stop'
-            ${'$'}sec = Import-Clixml -LiteralPath '${powerShellLiteral(file.absolutePath)}'
-            [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR(${'$'}sec)))
+            Add-Type -AssemblyName System.Security
+            ${'$'}enc = [IO.File]::ReadAllBytes('${powerShellLiteral(file.absolutePath)}')
+            ${'$'}bytes = [Security.Cryptography.ProtectedData]::Unprotect(${'$'}enc, ${'$'}null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+            [Console]::Out.Write([Text.Encoding]::UTF8.GetString(${'$'}bytes))
         """.trimIndent()
         val output = runPowerShell(script, emptyMap())
         return output.trim().takeIf { it.isNotEmpty() }
@@ -156,8 +158,10 @@ object OpenRouterCredentialStore {
         file.parentFile?.mkdirs()
         val script = """
             ${'$'}ErrorActionPreference = 'Stop'
-            ${'$'}sec = ConvertTo-SecureString -String ${'$'}env:$WindowsKeyEnv -AsPlainText -Force
-            ${'$'}sec | Export-Clixml -LiteralPath '${powerShellLiteral(file.absolutePath)}'
+            Add-Type -AssemblyName System.Security
+            ${'$'}bytes = [Text.Encoding]::UTF8.GetBytes(${'$'}env:$WindowsKeyEnv)
+            ${'$'}enc = [Security.Cryptography.ProtectedData]::Protect(${'$'}bytes, ${'$'}null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+            [IO.File]::WriteAllBytes('${powerShellLiteral(file.absolutePath)}', ${'$'}enc)
         """.trimIndent()
         runPowerShell(script, mapOf(WindowsKeyEnv to secret))
     }
