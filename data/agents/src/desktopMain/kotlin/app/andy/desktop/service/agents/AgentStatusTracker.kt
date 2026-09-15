@@ -174,6 +174,20 @@ class AgentStatusTracker(
         publish(phaseFinished = true)
     }
 
+    /**
+     * Re-evaluate hook + scrape immediately (e.g. reconcile while the PTY is still alive
+     * at an idle prompt with a stale Working badge).
+     */
+    fun refresh() {
+        if (closed.get() || paused.get()) return
+        scrape.onOsc(
+            title = session.windowTitle.value,
+            progress = session.oscProgress.value,
+        )
+        scrape.tick()
+        publish()
+    }
+
     /** Visible working chrome from the screen manifest (OSC spinner, status line, …). */
     fun showsWorkingIndicator(): Boolean = scrape.showsWorkingIndicator()
 
@@ -319,6 +333,10 @@ internal fun usesStructuredStatusAuthority(agent: AgentKind): Boolean =
  * Blocked from either source wins; for Antigravity (where status.json is authority),
  * an authoritative Done from hooks is not overridden by a lagging OSC working title,
  * but real on-screen visible working chrome or blockers can override.
+ *
+ * Symmetrically, a stale hook Working (Stop missed Done, or `fullyIdle:false` left
+ * working) yields to confident idle scrape when there is no working chrome —
+ * background `· N task` still keeps Working via [scrapeWorking].
  */
 internal fun combineHookAndScrapeStatus(
     agent: AgentKind,
@@ -337,7 +355,12 @@ internal fun combineHookAndScrapeStatus(
             if (scrapeVisibleWorking) AgentStatus.Working else AgentStatus.Done
         }
         hookStatus == AgentStatus.Error -> AgentStatus.Error
-        scrapeWorking || hookStatus == AgentStatus.Working -> AgentStatus.Working
+        hookStatus == AgentStatus.Working -> when {
+            scrapeWorking || scrapeVisibleWorking -> AgentStatus.Working
+            scrapeHint == AgentStatus.Done -> AgentStatus.Done
+            else -> AgentStatus.Working
+        }
+        scrapeWorking -> AgentStatus.Working
         else -> scrapeHint ?: hookStatus
     }
 }

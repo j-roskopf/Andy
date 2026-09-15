@@ -91,4 +91,28 @@ class OrchestrationSkillInstallerTest {
             home.deleteRecursively()
         }
     }
+
+    @Test
+    fun andySwarmInstallsAndOrchestrationHashPropagates() {
+        val home = File.createTempFile("andy-orch-swarm", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        try {
+            OrchestrationSkillInstaller.ensureInstalled(home)
+            assertTrue("andy-swarm" in OrchestrationSkillInstaller.skills)
+            val root = skillRootsFor(AgentKind.Codex, null, home, File(home, ".codex")).first()
+            val swarm = File(root, "andy-swarm/SKILL.md")
+            assertTrue(swarm.isFile)
+            assertEquals(OrchestrationSkillInstaller.skills.getValue("andy-swarm"), swarm.readText())
+            val orch = File(root, "andy-orchestration/SKILL.md").readText()
+            assertTrue(orch.contains("chat.await"), "orchestration should document chat.await")
+            assertTrue(orch.contains("notifyParentOnCompletion"), "orchestration should document parent notify")
+            swarm.writeText("stale")
+            OrchestrationSkillInstaller.ensureInstalled(home)
+            assertEquals(OrchestrationSkillInstaller.skills.getValue("andy-swarm"), swarm.readText())
+        } finally {
+            home.deleteRecursively()
+        }
+    }
 }

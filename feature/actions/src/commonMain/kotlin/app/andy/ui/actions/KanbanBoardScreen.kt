@@ -74,6 +74,9 @@ import androidx.compose.ui.unit.sp
 import app.andy.model.KanbanBoard
 import app.andy.model.KanbanCard
 import app.andy.model.KanbanLane
+import app.andy.model.KanbanLaneRole
+import app.andy.model.childCards
+import app.andy.model.findCard
 import app.andy.model.ActionProject
 import app.andy.model.AgentCliStatus
 import app.andy.model.AgentContextualProvenance
@@ -278,6 +281,7 @@ fun KanbanBoardScreen(
                     KanbanLaneColumn(
                         lane = lane,
                         cards = lane.cards,
+                        board = board,
                         agentTasks = agentTasks,
                         laneIndex = laneIndex,
                         laneCount = board.lanes.size,
@@ -293,6 +297,8 @@ fun KanbanBoardScreen(
                         onOpenChat = onOpenChat,
                         onAddCard = { cardDialog = CardDialogState.Create(lane.id) },
                         onRenameLane = { laneNameDialog = LaneNameDialogState(lane.id, lane.name) },
+                        onSetLaneRole = { role -> services.kanban.setLaneRole(project.id, lane.id, role) },
+                        onUnpinCard = { cardId -> services.kanban.setCardPinned(project.id, cardId, pinned = false) },
                         onDeleteLane = {
                             if (lane.cards.isEmpty()) {
                                 services.kanban.deleteLane(project.id, lane.id)
@@ -464,6 +470,7 @@ private val UNFINISHED_LANE_LABEL =
 private fun KanbanLaneColumn(
     lane: KanbanLane,
     cards: List<KanbanCard>,
+    board: KanbanBoard,
     agentTasks: List<AgentTask>,
     laneIndex: Int,
     laneCount: Int,
@@ -477,6 +484,8 @@ private fun KanbanLaneColumn(
     onOpenChat: (String) -> Unit,
     onAddCard: () -> Unit,
     onRenameLane: () -> Unit,
+    onSetLaneRole: (KanbanLaneRole?) -> Unit,
+    onUnpinCard: (String) -> Unit,
     onDeleteLane: () -> Unit,
     onMoveLaneLeft: () -> Unit,
     onMoveLaneRight: () -> Unit,
@@ -488,6 +497,7 @@ private fun KanbanLaneColumn(
     cardBounds: Map<String, Rect>,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var roleMenuExpanded by remember { mutableStateOf(false) }
     val isDropTarget = dropTarget?.laneId == lane.id && dragState != null
     // Light mode needs an opaque well — PaneBg@alpha washes out on the canvas.
     // Dark keeps a soft translucent pane so lanes sit lightly on the deep content bg.
@@ -529,16 +539,26 @@ private fun KanbanLaneColumn(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
         ) {
-            Text(
-                lane.name,
-                color = TextPrimary,
-                fontFamily = DisplayFont,
-                fontWeight = FontWeight.Medium,
-                fontSize = 13.sp,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    lane.name,
+                    color = TextPrimary,
+                    fontFamily = DisplayFont,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                lane.role?.let { role ->
+                    Text(
+                        role.name,
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                    )
+                }
+            }
             Text(
                 cards.size.toString(),
                 color = TextSecondary,
@@ -562,6 +582,34 @@ private fun KanbanLaneColumn(
                         text = { Text("Rename", color = TextPrimary) },
                         onClick = { menuExpanded = false; onRenameLane() },
                     )
+                    Box {
+                        DropdownMenuItem(
+                            text = { Text("Set role", color = TextPrimary) },
+                            onClick = { roleMenuExpanded = true },
+                        )
+                        DropdownMenu(
+                            expanded = roleMenuExpanded,
+                            onDismissRequest = { roleMenuExpanded = false },
+                            containerColor = Panel,
+                        ) {
+                            (listOf<KanbanLaneRole?>(null) + KanbanLaneRole.entries).forEach { role ->
+                                val label = role?.name ?: "None"
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (lane.role == role) "✓ $label" else label,
+                                            color = TextPrimary,
+                                        )
+                                    },
+                                    onClick = {
+                                        roleMenuExpanded = false
+                                        menuExpanded = false
+                                        onSetLaneRole(role)
+                                    },
+                                )
+                            }
+                        }
+                    }
                     DropdownMenuItem(
                         text = { Text("Delete lane", color = if (laneCount <= 1) TextSecondary else TextPrimary) },
                         enabled = laneCount > 1,
@@ -597,14 +645,24 @@ private fun KanbanLaneColumn(
                     KanbanInsertionIndicator()
                 }
                 val isDragging = dragState?.cardId == card.id
+                val children = board.childCards(card.id)
+                val parentTitle = card.parentCardId?.let { board.findCard(it)?.title }
+                val doneChildren = children.count { child ->
+                    val childLane = board.lanes.firstOrNull { l -> l.cards.any { c -> c.id == child.id } }
+                    childLane?.role == KanbanLaneRole.Done ||
+                        isCompletedKanbanLane(childLane?.id.orEmpty(), childLane?.name.orEmpty())
+                }
                 KanbanCardView(
                     card = card,
+                    parentTitle = parentTitle,
+                    childRollup = if (children.isNotEmpty()) "$doneChildren/${children.size}" else null,
                     activeChat = card.activeChatTaskId?.let { id -> agentTasks.firstOrNull { it.id == id } },
                     suppressHover = dragState != null,
                     onClick = { if (!isDragging) onCardClick(card) },
                     onAssign = { onAssignCard(card) },
                     onCreateSpec = { onCreateSpecCard(card) },
                     onOpenChat = onOpenChat,
+                    onUnpin = if (card.lanePinned) ({ onUnpinCard(card.id) }) else null,
                     modifier = Modifier
                         .alpha(if (isDragging) 0.3f else 1f)
                         .onGloballyPositioned { coordinates ->
@@ -734,6 +792,8 @@ private fun KanbanInsertionIndicator() {
 @Composable
 private fun KanbanCardView(
     card: KanbanCard,
+    parentTitle: String? = null,
+    childRollup: String? = null,
     activeChat: AgentTask? = null,
     suppressHover: Boolean = false,
     modifier: Modifier = Modifier,
@@ -741,6 +801,7 @@ private fun KanbanCardView(
     onAssign: () -> Unit = {},
     onCreateSpec: () -> Unit = {},
     onOpenChat: (String) -> Unit = {},
+    onUnpin: (() -> Unit)? = null,
 ) {
     val interactionSource = remember(card.id) { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -782,6 +843,48 @@ private fun KanbanCardView(
             .padding(horizontal = AndySpace.Space3, vertical = AndySpace.Space2),
         verticalArrangement = Arrangement.spacedBy(AndySpace.Space2),
     ) {
+        if (parentTitle != null || childRollup != null || card.lanePinned) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (parentTitle != null) {
+                    Text(
+                        "↳ $parentTitle",
+                        color = TextSecondary,
+                        fontFamily = DisplayFont,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+                if (childRollup != null) {
+                    Text(
+                        childRollup,
+                        Modifier
+                            .clip(RoundedCornerShape(AndyRadius.Control))
+                            .background(AndyColors.SurfaceHover, RoundedCornerShape(AndyRadius.Control))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 10.sp,
+                    )
+                }
+                if (card.lanePinned) {
+                    Text(
+                        "pinned",
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 9.sp,
+                    )
+                    onUnpin?.let { unpin ->
+                        KanbanTextAction(label = "Unpin", onClick = unpin)
+                    }
+                }
+            }
+        }
         Text(
             card.title,
             color = TextPrimary,

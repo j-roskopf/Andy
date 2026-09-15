@@ -17,6 +17,7 @@ import app.andy.model.defaultLane
 import app.andy.model.permissionAutonomy
 import app.andy.model.permissionSandbox
 import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentProviderQuota
@@ -37,9 +38,11 @@ import app.andy.model.ProjectSpecDraft
 import app.andy.service.AgentRunService
 import app.andy.service.AutomationService
 import app.andy.service.ChatAttachmentService
+import app.andy.service.KanbanService
 import app.andy.service.ProjectWorkflowService
 import app.andy.service.UnavailableAutomationService
 import app.andy.service.UnavailableChatAttachmentService
+import app.andy.service.UnavailableKanbanService
 import app.andy.terminal.TmuxAndy
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
@@ -59,6 +62,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.File
+import kotlin.time.Duration.Companion.seconds
 
 private val ImagePathsSchema = buildJsonObject {
     put("type", "array")
@@ -125,6 +129,8 @@ fun Server.registerAgentProjectTools(
     callerTaskId: String? = null,
     automations: AutomationService = UnavailableAutomationService,
     chatAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
+    kanban: KanbanService = UnavailableKanbanService,
+    chatCompletionNotifier: app.andy.desktop.service.agents.ChatCompletionNotifier? = null,
 ) {
     fun register(
         name: String,
@@ -597,6 +603,15 @@ fun Server.registerAgentProjectTools(
                 put("type", "string")
                 put("description", "Optional model id (empty = provider default). Required for Ollama, LM Studio, and OpenRouter.")
             },
+            "reasoningEffort" to buildJsonObject {
+                put("type", "string")
+                put(
+                    "description",
+                    "Optional reasoning level when the model supports it " +
+                        "(None | Minimal | Low | Medium | High | ExtraHigh | Max | Ultracode, " +
+                        "or provider cli values like low/medium/high/xhigh). Omit for provider default.",
+                )
+            },
             "runtime" to buildJsonObject {
                 put("type", "string")
                 put("description", "Required for Ollama, LM Studio, and OpenRouter: OpenCode | Pi | Goose")
@@ -656,6 +671,14 @@ fun Server.registerAgentProjectTools(
                         "playbackMillis?, networkExchangeId?, crashId?, hierarchyNodeId?, packageName?, kanbanCardId?}",
                 )
             },
+            "notifyParentOnCompletion" to buildJsonObject {
+                put("type", "boolean")
+                put(
+                    "description",
+                    "When true, Andy queues a follow-up into parentChatTaskId when this task " +
+                        "reaches Done/Error so the parent can stop between workers instead of polling",
+                )
+            },
         ),
         required = listOf("prompt", "agent"),
     ) { args ->
@@ -693,6 +716,14 @@ fun Server.registerAgentProjectTools(
         val model = str(args, "model")?.takeIf { it.isNotBlank() }?.let { raw ->
             if (agent.isModelBackend) prefixedLocalModelId(agent, raw) else raw
         }
+        val reasoningEffortName = str(args, "reasoningEffort")?.takeIf { it.isNotBlank() }
+        val reasoningEffort = reasoningEffortName?.let { value ->
+            AgentReasoningEffort.entries.firstOrNull {
+                it.name.equals(value, ignoreCase = true) ||
+                    it.cliValue.equals(value, ignoreCase = true) ||
+                    it.label.equals(value, ignoreCase = true)
+            } ?: error("unknown reasoningEffort: $value")
+        }
         val existingWorktreePath = str(args, "existingWorktreePath")?.takeIf { it.isNotBlank() }
         val requestedUseWorktree = args["useWorktree"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["useWorktree"]?.jsonPrimitive?.booleanOrNull
@@ -710,6 +741,10 @@ fun Server.registerAgentProjectTools(
         val attachAndyMcp = args["attachAndyMcp"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: args["attachAndyMcp"]?.jsonPrimitive?.booleanOrNull
             ?: false
+        val notifyParentOnCompletion =
+            args["notifyParentOnCompletion"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
+                ?: args["notifyParentOnCompletion"]?.jsonPrimitive?.booleanOrNull
+                ?: false
         val imagePaths = parseImagePathsArg(args)
         val draft = AgentTaskDraft(
                 title = str(args, "title")?.takeIf { it.isNotBlank() }
@@ -725,10 +760,12 @@ fun Server.registerAgentProjectTools(
                 baseRef = str(args, "baseRef")?.takeIf { it.isNotBlank() },
                 parentChatTaskId = str(args, "parentChatTaskId")?.takeIf { it.isNotBlank() }
                     ?: parentTask?.id,
+                notifyParentOnCompletion = notifyParentOnCompletion,
                 attachAndyMcp = attachAndyMcp,
                 autonomy = autonomy,
                 sandboxMode = sandboxMode,
                 model = model,
+                reasoningEffort = reasoningEffort,
                 lane = str(args, "lane")?.let { name ->
                     AgentLaneKind.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
                         ?: error("unknown lane; expected ACP or Terminal")
@@ -871,7 +908,7 @@ fun Server.registerAgentProjectTools(
         required = listOf("taskId"),
     ) { args ->
         val id = str(args, "taskId") ?: error("taskId required")
-        (agentRuns as? DesktopAgentRunService)?.reconcileStaleActiveTaskIfNeeded(id)
+        (agentRuns as? DesktopAgentRunService)?.reconcileStaleActiveTaskIfNeeded(id, force = true)
         val task = agentRuns.tasks.value.excludingTemporary().firstOrNull { it.id == id }
         textResult(
             buildJsonObject {
@@ -1179,6 +1216,49 @@ fun Server.registerAgentProjectTools(
                 task?.userInputRequest?.let { request ->
                     put("userInputRequest", userInputRequestJson(request))
                 }
+            }.toString(),
+        )
+    }
+
+    register(
+        name = "chat.await",
+        description = "Long-poll until one of the given chats reaches a matching status " +
+            "(terminal/blocked/any). Bounded timeout; re-arm on timedOut.",
+        properties = mapOf(
+            "taskIds" to buildJsonObject {
+                put("type", "array")
+                put("items", buildJsonObject { put("type", "string") })
+                put("description", "Worker chat task ids to watch")
+            },
+            "until" to buildJsonObject {
+                put("type", "string")
+                put("description", "terminal | blocked | any (default any)")
+            },
+            "timeoutSeconds" to buildJsonObject {
+                put("type", "integer")
+                put("description", "Default 120, max 300")
+            },
+        ),
+        required = listOf("taskIds"),
+    ) { args ->
+        val notifier = chatCompletionNotifier
+            ?: error("chat.await is unavailable in this Andy session")
+        val ids = strList(args, "taskIds")
+        if (ids.isEmpty()) error("taskIds required")
+        val until = app.andy.desktop.service.agents.ChatCompletionNotifier.parseUntil(str(args, "until"))
+        val timeoutSeconds = args["timeoutSeconds"]?.jsonPrimitive?.longOrNull?.toInt()
+            ?: args["timeoutSeconds"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+            ?: 120
+        val result = notifier.awaitAny(
+            taskIds = ids,
+            until = until,
+            timeout = timeoutSeconds.coerceIn(1, 300).seconds,
+        )
+        textResult(
+            buildJsonObject {
+                put("timedOut", result.timedOut)
+                put("taskId", result.taskId?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
+                put("status", result.status?.name?.let { JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
             }.toString(),
         )
     }
@@ -1524,6 +1604,7 @@ fun Server.registerAgentProjectTools(
     }
 
     registerAutomationTools(automations, agentRuns, callerTaskId)
+    registerKanbanTools(kanban)
 
     register(
         name = "chat.attachment_begin",
@@ -1725,6 +1806,7 @@ fun agentProjectToolNames(): List<String> = listOf(
     "chat.set_mode",
     "chat.respond",
     "chat.status",
+    "chat.await",
     "agent_status",
     "chat.attach_command",
     "chat.reattach",
@@ -1732,4 +1814,4 @@ fun agentProjectToolNames(): List<String> = listOf(
     "workflow.save_spec",
     "workflow.run_spec",
     "workflow.start_build",
-) + automationToolNames()
+) + automationToolNames() + kanbanToolNames()

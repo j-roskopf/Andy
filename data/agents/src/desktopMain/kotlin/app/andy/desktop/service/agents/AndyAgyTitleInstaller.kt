@@ -18,6 +18,8 @@ private val agySettingsJson = Json {
  * via the title/statusLine command JSON. Andy installs a title script that maps mid-turn
  * Working/Blocked into `.andy/<taskId>/status.json` and OSC-scrapeable `andy:*` markers.
  * Idle only sets the OSC marker — Done is authored by the Stop hook when `fullyIdle`.
+ * If Stop misses Done (or leaves working while `fullyIdle:false`), screen scrape still
+ * settles Done from `andy:idle` when no background `· N task` chrome is visible.
  */
 object AndyAgyTitleInstaller {
     const val SCRIPT_NAME = "andy-agy-title.sh"

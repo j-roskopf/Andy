@@ -111,6 +111,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -135,6 +136,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Terminal-lane transcript cap; ACP transcripts are coalesced and bounded by disk (8 MB). */
 private const val MAX_TERMINAL_EVENTS_IN_MEMORY = 50_000
@@ -149,6 +151,14 @@ private val LocalModelProbeDispatcher = Dispatchers.IO.limitedParallelism(2)
  * artifacts fail fast into NeedsAttention instead of sleeping for minutes.
  */
 private const val DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS = 3 * 60 * 1000L
+/**
+ * ACP turns normally end when `session/prompt` returns a stop reason; the provider's `done`
+ * status hook lands a beat earlier. This is how long the hook waits for that stop reason
+ * before concluding it was dropped and finalizing the turn itself.
+ */
+private const val DEFAULT_ACP_HOOK_DONE_GRACE_MS = 20_000L
+/** Distinguishes a hook-recovered turn from a real provider stop reason in the stored task. */
+internal const val ACP_HOOK_DONE_STOP_REASON = "andy_hook_done"
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
 private val REVIEW_BLOCK = Regex("""<andy_review>([\s\S]*?)</andy_review>""")
 private val CursorChatIdRegex = Regex(
@@ -168,6 +178,8 @@ class DesktopAgentRunService(
     terminalMode: AgentTerminalMode = AgentTerminalManager.defaultMode(),
     private val artifactPollIntervalMs: Long = AgentWorkflowArtifacts.DEFAULT_POLL_INTERVAL_MS,
     private val artifactWaitMs: Long = DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS,
+    /** Tests inject a short value so the ACP hook-done fallback is observable in-test. */
+    private val acpHookDoneGraceMs: Long = DEFAULT_ACP_HOOK_DONE_GRACE_MS,
     /**
      * False for the GUI attach bridge in daemon-client mode — that process must not
      * kill `tmux -L andy` sessions owned by a running `andyd`.
@@ -237,6 +249,14 @@ class DesktopAgentRunService(
     private val tempArtifacts = TemporaryChatArtifacts()
 
     private val handles = ConcurrentHashMap<String, TaskHandle>()
+    /**
+     * Bumped synchronously in [stop] so an in-flight resume/follow-up that started before
+     * Stop can still notice the cancel after awaits (plan-mode sync, ACP reopen, etc.).
+     * Captured at the start of each user-initiated send; mismatched means "abort".
+     */
+    private val userStopEpochs = ConcurrentHashMap<String, AtomicInteger>()
+    /** In-flight resume / ACP follow-up jobs cancelled immediately when the user hits Stop. */
+    private val followUpJobs = ConcurrentHashMap<String, MutableSet<Job>>()
     private val acpArtifactJobs = ConcurrentHashMap<String, Job>()
     /** Terminal grill-me: wait for Working → settled before parking on question.json. */
     private val deferredQuestionJobs = ConcurrentHashMap<String, Job>()
@@ -245,6 +265,10 @@ class DesktopAgentRunService(
      * [completeAcpPromptTurn] does not stamp Done and clear the Working orb.
      */
     private val pendingGrillMeFollowUps = ConcurrentHashMap.newKeySet<String>()
+    /** Start of the in-flight ACP turn, so a `done` hook line from an earlier turn is ignored. */
+    private val acpTurnStartedAt = ConcurrentHashMap<String, Long>()
+    /** One pending hook-done fallback per ACP task; cancelled the moment the real turn end lands. */
+    private val acpHookDoneJobs = ConcurrentHashMap<String, Job>()
     private val viewingTaskIds = ConcurrentHashMap.newKeySet<String>()
     private val _viewingTaskId = MutableStateFlow<String?>(null)
     override val viewingTaskId: StateFlow<String?> = _viewingTaskId
@@ -558,32 +582,50 @@ class DesktopAgentRunService(
     /**
      * Repairs tasks left [AgentStatus.Working]/[null] after the PTY
      * exited without a clean [finishTask] (e.g. crash). Safe to call when opening history.
-     * Does not mark stale while a `tmux -L andy` session for the task still exists,
-     * except when [AgentTask.finishedAtMillis] contradicts a lingering Working badge.
+     * When a `tmux -L andy` session is still alive, nudges the live status tracker so a
+     * stale Working badge can settle from idle scrape / status.json (Antigravity).
+     * Also repairs when [AgentTask.finishedAtMillis] contradicts a lingering Working badge.
+     *
+     * @param force when true (MCP `chat.reconcile`), run even if the chat is not open on screen.
      */
-    fun reconcileStaleActiveTaskIfNeeded(taskId: String) {
+    fun reconcileStaleActiveTaskIfNeeded(taskId: String, force: Boolean = false) {
         // History repair is tied to the chat on screen. A late reconcile after the user
-        // clicked away must not re-badge chats they already read.
-        if (taskId !in viewingTaskIds) return
+        // clicked away must not re-badge chats they already read — unless explicitly forced.
+        if (!force && taskId !in viewingTaskIds) return
         val task = currentTask(taskId) ?: return
-        val viewing = true
-        val recovered = when {
-            task.finishedAtMillis != null && task.status == AgentStatus.Working ->
-                recoverInterruptedTaskStatus(task, resolvedScrollbackFile(taskId))
-            !task.isActive && task.status != AgentStatus.Blocked -> return
-            handles[taskId]?.job?.isActive == true || terminals.isAlive(taskId) -> return
-            else -> recoverInterruptedTaskStatus(task, resolvedScrollbackFile(taskId))
+        val viewing = force || taskId in viewingTaskIds
+        val live = handles[taskId]?.job?.isActive == true || terminals.isAlive(taskId)
+        if (live) {
+            if (task.status == AgentStatus.Working || task.status == null) {
+                // Alive session: refresh scrape/hooks so idle Antigravity (andy:idle + stale
+                // status.json working) can settle to Done without requiring a new hook line.
+                terminals.refreshStatus(taskId)?.let { snapshot ->
+                    applyStatusSnapshot(taskId, snapshot)
+                }
+            }
+            val afterRefresh = currentTask(taskId) ?: return
+            if (afterRefresh.finishedAtMillis == null) return
+            // finishedAt + Working with a live pane still needs the scrollback repair below.
+            if (afterRefresh.status != AgentStatus.Working) return
         }
-        if (recovered == task) return
-        val previousStatus = task.status
+        val latest = currentTask(taskId) ?: return
+        val recovered = when {
+            latest.finishedAtMillis != null && latest.status == AgentStatus.Working ->
+                recoverInterruptedTaskStatus(latest, resolvedScrollbackFile(taskId))
+            !latest.isActive && latest.status != AgentStatus.Blocked -> return
+            live -> return
+            else -> recoverInterruptedTaskStatus(latest, resolvedScrollbackFile(taskId))
+        }
+        if (recovered == latest) return
+        val previousStatus = latest.status
         updateTask(taskId) { recovered }
         if (statusNeedsUnread(
-                task = task,
+                task = latest,
                 previous = previousStatus,
                 next = recovered.status,
                 viewing = viewing,
                 terminalLive = terminals.isAlive(taskId),
-            ) && task.unread
+            ) && latest.unread
         ) {
             markUnread(taskId)
         }
@@ -1292,6 +1334,7 @@ class DesktopAgentRunService(
                 contextBundleIds = draft.contextBundleIds,
                 provenance = draft.provenance,
                 parentChatTaskId = draft.parentChatTaskId,
+                notifyParentOnCompletion = draft.notifyParentOnCompletion,
                 status = AgentStatus.Error,
                 errorMessage = message,
                 lane = draft.lane ?: preferredLane(draft.runtimeKind()),
@@ -1360,6 +1403,7 @@ class DesktopAgentRunService(
                 contextBundleIds = draft.contextBundleIds,
                 provenance = draft.provenance,
                 parentChatTaskId = draft.parentChatTaskId,
+                notifyParentOnCompletion = draft.notifyParentOnCompletion,
                 status = AgentStatus.Error,
                 errorMessage = "existing worktree path is missing or not a directory",
                 vendorSessionId = null,
@@ -1410,6 +1454,7 @@ class DesktopAgentRunService(
             contextBundleIds = draft.contextBundleIds,
             provenance = draft.provenance,
             parentChatTaskId = draft.parentChatTaskId,
+            notifyParentOnCompletion = draft.notifyParentOnCompletion,
             // Import reopens an already-finished vendor thread. Seed Done so the
             // badge is not Working while the TUI sits at an idle prompt with no turn.
             status = if (importedVendorSession != null) AgentStatus.Done else null,
@@ -1540,10 +1585,12 @@ class DesktopAgentRunService(
         // Do not await the PTY on the caller's dispatcher (often Main). BossTerm
         // initializes on the Compose path — awaiting here can stall the UI thread
         // and leave the UI stuck on "Starting terminal…" even after the session is Idle.
+        val stopEpoch = userStopEpoch(task.id)
         launchRun(
             task,
             writeAfterStart = writeAfterStart,
             quietResume = importedVendorSession != null,
+            stopEpoch = stopEpoch,
         ) { nextAdapter, resolvedBinary, mcpUrl ->
             val current = currentTask(task.id) ?: task
             // When the prompt spilled to a file, adapters that embed argv still need the short hint.
@@ -1591,7 +1638,7 @@ class DesktopAgentRunService(
         provenance: AgentContextualProvenance?,
         attachments: List<AgentAttachment>,
     ) {
-        scope.launch(Dispatchers.IO) {
+        launchFollowUp(taskId) {
             resumePrepared(
                 taskId = taskId,
                 followUp = followUp,
@@ -1649,7 +1696,7 @@ class DesktopAgentRunService(
             return@withContext Result.failure(error)
         }
         // Provider turn continues asynchronously; attachment readiness is what callers await.
-        scope.launch(Dispatchers.IO) {
+        launchFollowUp(taskId) {
             resumeWithAttachments(
                 taskId = taskId,
                 followUp = followUp,
@@ -1670,10 +1717,13 @@ class DesktopAgentRunService(
         contextBundleIds: List<String>,
         attachments: List<AgentAttachment>,
     ) {
+        val stopEpoch = userStopEpoch(taskId)
+        if (stoppedSince(taskId, stopEpoch)) return
         val task = currentTask(taskId) ?: return
         if (task.lane == AgentLaneKind.Acp) {
             val raw = task.followUpCliPayload(followUp, imagePaths, selectedSkills, attachments).prompt
             val acpFollowUp = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, raw)
+            if (stoppedSince(taskId, stopEpoch)) return
             appendEvents(
                 taskId,
                 listOf(
@@ -1693,15 +1743,18 @@ class DesktopAgentRunService(
                     errorMessage = null,
                     finishedAtMillis = null,
                     unread = false,
+                    stoppedByUser = false,
                     latestPrompt = followUp.trim().ifBlank { it.latestPrompt },
                 )
             }
             // PlanReady "Implement" flips plan mode then resumes; wait for setMode first.
             acpPlanModeSyncJobs.remove(taskId)?.join()
-            val success = runAcpFollowUp(taskId, acpFollowUp, imagePaths)
+            if (stoppedSince(taskId, stopEpoch)) return
+            val success = runAcpFollowUp(taskId, acpFollowUp, imagePaths, stopEpoch)
             // ACP-capable providers stay on ACP. A failed resume must not demote to terminal.
             if (!success) {
                 val current = currentTask(taskId) ?: return
+                if (stoppedSince(taskId, stopEpoch)) return
                 if (current.status == AgentStatus.Working || current.status == null) {
                     finishTask(
                         taskId = taskId,
@@ -1722,6 +1775,7 @@ class DesktopAgentRunService(
             selectedSkills = selectedSkills,
             contextBundleIds = contextBundleIds,
             attachments = attachments,
+            stopEpoch = stopEpoch,
         )
     }
 
@@ -1732,7 +1786,9 @@ class DesktopAgentRunService(
         selectedSkills: List<AgentSkill>,
         contextBundleIds: List<String>,
         attachments: List<AgentAttachment>,
+        stopEpoch: Int = userStopEpoch(taskId),
     ) {
+        if (stoppedSince(taskId, stopEpoch)) return
         val task = currentTask(taskId) ?: return
         val adapter = adapters[task.runtimeKind()] ?: return
 
@@ -1741,6 +1797,7 @@ class DesktopAgentRunService(
         val followUpImagePathsForCli = followUpCli.imagePaths
 
         if (terminals.isAlive(taskId)) {
+            if (stoppedSince(taskId, stopEpoch)) return
             val now = System.currentTimeMillis()
             appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths, attachments)))
             updateTask(taskId) {
@@ -1750,12 +1807,14 @@ class DesktopAgentRunService(
                     errorMessage = null,
                     finishedAtMillis = null,
                     unread = false,
+                    stoppedByUser = false,
                 )
             }
             val liveText = task.followUpPromptForLiveTerminal(followUp, imagePaths, selectedSkills, attachments)
             // A tmux session can outlive the app that spawned it. Mount a viewer before
             // typing so a chat resumed from read-only replay comes back interactive.
             attachTerminalIfNeeded(taskId)
+            if (stoppedSince(taskId, stopEpoch)) return
             val evidenceSuffix = materializeTaskEvidence(taskId, contextBundleIds)
             val spilledLive = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, liveText + evidenceSuffix)
             terminals.write(taskId, spilledLive)
@@ -1790,6 +1849,7 @@ class DesktopAgentRunService(
             )
         }.getOrNull()
 
+        if (stoppedSince(taskId, stopEpoch)) return
         val now = System.currentTimeMillis()
         appendEvents(taskId, listOf(AgentEvent.UserMessage(now, followUp, selectedSkills, imagePaths, attachments)))
         val resolvedCwd = AgentScratchWorkspace.resolveCwd(taskForResume.cwd)
@@ -1806,6 +1866,7 @@ class DesktopAgentRunService(
         persist()
         val evidenceSuffix = materializeTaskEvidence(taskId, contextBundleIds)
         val enrichedFollowUp = followUpForCli + evidenceSuffix
+        if (stoppedSince(taskId, stopEpoch)) return
         if (resumeArgv == null) {
             // Provider cannot resume (missing vendor session). Start a fresh
             // interactive session that still includes the original Andy prompt.
@@ -1815,7 +1876,7 @@ class DesktopAgentRunService(
                 boundToConversation = false,
             ) ?: enrichedFollowUp
             val writeAfterStart = seeded.takeUnless { adapter.embedsInitialPrompt }
-            launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { nextAdapter, binary, mcpUrl ->
+            launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart, stopEpoch = stopEpoch) { nextAdapter, binary, mcpUrl ->
                 val current = currentTask(taskId) ?: queued
                 nextAdapter.buildInteractiveCommand(
                     binary,
@@ -1835,7 +1896,7 @@ class DesktopAgentRunService(
         // Await the PTY so the detail pane remounts the live terminal instead of
         // staying on the "session ended" placeholder until a manual refresh.
         val writeAfterStart = enrichedFollowUp.takeUnless { adapter.embedsResumePrompt }
-        launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart) { resumeAdapter, binary, mcpUrl ->
+        launchRunAwaitingTerminal(queued, writeAfterStart = writeAfterStart, stopEpoch = stopEpoch) { resumeAdapter, binary, mcpUrl ->
             resumeAdapter.buildInteractiveResumeCommand(
                 binary,
                 currentTask(taskId) ?: queued,
@@ -2025,9 +2086,11 @@ class DesktopAgentRunService(
                 it.copy(status = AgentStatus.Working, userInputRequest = null, finishedAtMillis = null, unread = false)
             }
             pendingGrillMeFollowUps.add(taskId)
-            scope.launch(Dispatchers.IO) {
+            val stopEpoch = userStopEpoch(taskId)
+            launchFollowUp(taskId) {
                 try {
-                    runAcpFollowUp(taskId, response, emptyList())
+                    if (stoppedSince(taskId, stopEpoch)) return@launchFollowUp
+                    runAcpFollowUp(taskId, response, emptyList(), stopEpoch)
                 } finally {
                     pendingGrillMeFollowUps.remove(taskId)
                 }
@@ -2162,9 +2225,14 @@ class DesktopAgentRunService(
                             finishedAtMillis = null,
                             latestPrompt = text.ifBlank { current.latestPrompt },
                             unread = false,
+                            stoppedByUser = false,
                         )
                     }
-                    scope.launch(Dispatchers.IO) { runAcpFollowUp(taskId, acpPrompt, imagePaths) }
+                    val stopEpoch = userStopEpoch(taskId)
+                    launchFollowUp(taskId) {
+                        if (stoppedSince(taskId, stopEpoch)) return@launchFollowUp
+                        runAcpFollowUp(taskId, acpPrompt, imagePaths, stopEpoch)
+                    }
                     return@withContext Result.success(Unit)
                 }
 
@@ -2411,15 +2479,17 @@ class DesktopAgentRunService(
         task: AgentTask,
         writeAfterStart: String? = null,
         quietResume: Boolean = false,
+        stopEpoch: Int = userStopEpoch(task.id),
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
     ): CompletableDeferred<Boolean> {
-        val handle = TaskHandle()
+        // Preserve an earlier Stop that raced ahead of handle registration.
+        val handle = TaskHandle(stopRequested = handles[task.id]?.stopRequested == true)
         handles[task.id] = handle
         val terminalReady = CompletableDeferred<Boolean>()
         handle.job = scope.launch(Dispatchers.IO) {
             ready.await()
             slots.withPermit {
-                if (handle.stopRequested) {
+                if (handle.stopRequested || stoppedSince(task.id, stopEpoch)) {
                     terminalReady.complete(false)
                     return@withPermit
                 }
@@ -2429,13 +2499,13 @@ class DesktopAgentRunService(
                     })
                 } catch (error: CancellationException) {
                     terminals.stop(task.id)
-                    if (handle.stopRequested || currentTask(task.id)?.isActive == true) {
+                    if (handle.stopRequested || stoppedSince(task.id, stopEpoch) || currentTask(task.id)?.isActive == true) {
                         finishTask(
                             task.id,
                             AgentStatus.Done,
                             exitCode = null,
                             error = null,
-                            stoppedByUser = handle.stopRequested,
+                            stoppedByUser = handle.stopRequested || stoppedSince(task.id, stopEpoch),
                             forceKillTerminal = true,
                         )
                     }
@@ -2460,11 +2530,13 @@ class DesktopAgentRunService(
     private suspend fun launchRunAwaitingTerminal(
         task: AgentTask,
         writeAfterStart: String? = null,
+        stopEpoch: Int = userStopEpoch(task.id),
         argvBuilder: (AgentCliAdapter, String, String?) -> List<String>,
     ) {
         // Await only when not on the UI thread. createAndStart intentionally
         // skips this so Compose Main never blocks across BossTerm initialization.
-        val terminalReady = launchRun(task, writeAfterStart, argvBuilder = argvBuilder)
+        if (stoppedSince(task.id, stopEpoch)) return
+        val terminalReady = launchRun(task, writeAfterStart, stopEpoch = stopEpoch, argvBuilder = argvBuilder)
         withTimeoutOrNull(20_000) { terminalReady.await() }
     }
 
@@ -2862,6 +2934,9 @@ class DesktopAgentRunService(
                             statusTracker = terminalHandle.statusTracker,
                         )
                     }
+                    // Terminal lane already reads status.json through AgentStatusTracker, which
+                    // weighs it against the screen scrape. This event is for the ACP lane only.
+                    is AgentWorkflowArtifacts.Event.StatusReady -> Unit
                 }
             }
         }
@@ -3053,6 +3128,7 @@ class DesktopAgentRunService(
                 ),
             ),
         )
+        markAcpTurnStarted(taskId)
         val success = acpManager.prompt(taskId, acpPrompt, launchTask.imagePaths)
         if (!success) {
             appendLaunchDiagnostics(taskId, "acpPromptFailed=true\n")
@@ -3060,7 +3136,13 @@ class DesktopAgentRunService(
         completeAcpPromptTurn(taskId, success)
     }
 
-    private suspend fun runAcpFollowUp(taskId: String, prompt: String, imagePaths: List<String>): Boolean {
+    private suspend fun runAcpFollowUp(
+        taskId: String,
+        prompt: String,
+        imagePaths: List<String>,
+        stopEpoch: Int = userStopEpoch(taskId),
+    ): Boolean {
+        if (stoppedSince(taskId, stopEpoch)) return false
         // Only a session Andy has to reopen can echo prior turns. Filtering a live stream buys
         // nothing and risks discarding real text that happens to open like an earlier turn.
         val reopeningSession = !acpManager.isAlive(taskId)
@@ -3071,6 +3153,8 @@ class DesktopAgentRunService(
         try {
             val task = currentTask(taskId) ?: return false
             if (reopeningSession) {
+                // Stop already tore the session down — do not silently reopen it.
+                if (stoppedSince(taskId, stopEpoch) || task.stoppedByUser) return false
                 val projectEnv = task.projectId?.let { projectId ->
                     runCatching { actionConfig.load().projects.firstOrNull { it.id == projectId }?.env }.getOrNull()
                 }.orEmpty()
@@ -3087,18 +3171,27 @@ class DesktopAgentRunService(
                         raw = it.message ?: it::class.java.simpleName,
                     )
                     appendLaunchDiagnostics(taskId, "acpResumeFailed=${it.message}\n")
-                    finishTask(
-                        taskId = taskId,
-                        status = AgentStatus.Error,
-                        exitCode = null,
-                        error = message,
-                        statusConfident = true,
-                    )
+                    if (!stoppedSince(taskId, stopEpoch)) {
+                        finishTask(
+                            taskId = taskId,
+                            status = AgentStatus.Error,
+                            exitCode = null,
+                            error = message,
+                            statusConfident = true,
+                        )
+                    }
+                    return false
+                }
+                if (stoppedSince(taskId, stopEpoch)) {
+                    acpManager.stop(taskId)
                     return false
                 }
             }
+            if (stoppedSince(taskId, stopEpoch)) return false
             acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
+            markAcpTurnStarted(taskId)
             val success = acpManager.prompt(taskId, prompt, imagePaths)
+            if (stoppedSince(taskId, stopEpoch)) return false
             return completeAcpPromptTurn(taskId, success)
         } finally {
             acpSuppressProviderReplay.remove(taskId)
@@ -3110,6 +3203,10 @@ class DesktopAgentRunService(
         taskId: String,
         promptSuccess: Boolean,
     ): Boolean {
+        // prompt() returned, so this turn is no longer in flight and the hook-done fallback is moot.
+        // Leave the stamp when a follow-up has already started its turn behind the prompt mutex.
+        if (taskId !in pendingGrillMeFollowUps) acpTurnStartedAt.remove(taskId)
+        acpHookDoneJobs.remove(taskId)?.cancel()
         if (deferAcpFinishIfAwaitingInput(taskId)) return promptSuccess
         // User already answered while this turn was still finishing — the follow-up owns
         // Working/Done. Finalizing here would flash Done and hide the loading orb.
@@ -3663,7 +3760,50 @@ class DesktopAgentRunService(
         )
     }
 
+    private fun userStopEpoch(taskId: String): Int =
+        userStopEpochs[taskId]?.get() ?: 0
+
+    private fun bumpUserStopEpoch(taskId: String): Int =
+        userStopEpochs.getOrPut(taskId) { AtomicInteger(0) }.incrementAndGet()
+
+    private fun stoppedSince(taskId: String, epoch: Int): Boolean =
+        userStopEpoch(taskId) != epoch
+
+    private fun trackFollowUpJob(taskId: String, job: Job) {
+        followUpJobs.getOrPut(taskId) { ConcurrentHashMap.newKeySet() }.add(job)
+        job.invokeOnCompletion { followUpJobs[taskId]?.remove(job) }
+    }
+
+    private fun cancelFollowUpJobs(taskId: String) {
+        followUpJobs.remove(taskId)?.forEach { it.cancel() }
+    }
+
+    /**
+     * Launch a follow-up/resume job that Stop can cancel. Registered before start so a
+     * concurrent Stop cannot miss it; aborted if Stop already bumped the epoch.
+     */
+    private fun launchFollowUp(taskId: String, block: suspend CoroutineScope.() -> Unit): Job {
+        val epochAtStart = userStopEpoch(taskId)
+        val job = scope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            if (stoppedSince(taskId, epochAtStart)) return@launch
+            block()
+        }
+        trackFollowUpJob(taskId, job)
+        if (stoppedSince(taskId, epochAtStart)) {
+            job.cancel()
+        } else {
+            job.start()
+        }
+        return job
+    }
+
     override fun stop(taskId: String) {
+        // Stamp the epoch and cancel follow-ups on the caller thread so a Stop that races
+        // an in-flight resume is visible before any further awaits in that resume.
+        bumpUserStopEpoch(taskId)
+        handles.getOrPut(taskId) { TaskHandle() }.stopRequested = true
+        cancelFollowUpJobs(taskId)
+        acpPlanModeSyncJobs.remove(taskId)?.cancel()
         // Teardown can block on tmux/git; never run that on the Compose main thread.
         scope.launch(Dispatchers.IO) { stopNow(taskId) }
     }
@@ -3678,7 +3818,10 @@ class DesktopAgentRunService(
         }
         val acpTask = currentTask(taskId)?.takeIf { it.lane == AgentLaneKind.Acp }
         if (acpTask != null) {
-            handles[taskId]?.stopRequested = true
+            handles.getOrPut(taskId) { TaskHandle() }.stopRequested = true
+            acpTurnStartedAt.remove(taskId)
+            acpHookDoneJobs.remove(taskId)?.cancel()
+            acpManager.cancelTurn(taskId)
             acpManager.stop(taskId)
             finishTask(
                 taskId = taskId,
@@ -3708,9 +3851,9 @@ class DesktopAgentRunService(
             }
             return
         }
-        val handle = handles[taskId]
-        handle?.stopRequested = true
-        handle?.job?.cancel()
+        val handle = handles.getOrPut(taskId) { TaskHandle() }
+        handle.stopRequested = true
+        handle.job?.cancel()
         finishTask(
             taskId = taskId,
             status = AgentStatus.Done,
@@ -3752,9 +3895,13 @@ class DesktopAgentRunService(
         handles.remove(taskId)
         terminals.clear(taskId)
         failedReattachTaskIds.remove(taskId)
+        userStopEpochs.remove(taskId)
+        cancelFollowUpJobs(taskId)
         acpArtifactJobs.remove(taskId)?.cancel()
         deferredQuestionJobs.remove(taskId)?.cancel()
         pendingGrillMeFollowUps.remove(taskId)
+        acpTurnStartedAt.remove(taskId)
+        acpHookDoneJobs.remove(taskId)?.cancel()
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
@@ -6409,12 +6556,79 @@ class DesktopAgentRunService(
                             waitForUserInput(taskId, event.request, exitCode = 0, keepTerminal = true)
                         }
                     }
+                    is AgentWorkflowArtifacts.Event.StatusReady -> onAcpHookStatus(taskId, event)
                 }
                 persist()
             }
         }.also { job ->
             job.invokeOnCompletion { acpArtifactJobs.remove(taskId, job) }
         }
+    }
+
+    /**
+     * The ACP lane's only turn-end signal is `session/prompt` returning a stop reason. When that
+     * response is dropped the chat sits on Working forever behind a session that still looks live,
+     * and nothing recovers it — the stall check in [completeAcpPromptTurn] runs only *after* the
+     * prompt returns, so it can never fire on this. The provider's `done` status hook (Claude Code
+     * `Stop`, and the equivalents in [installClaudeStatusHooks] and friends) is an independent
+     * witness that the turn ended, so treat it as a fallback rather than authority: arm a grace
+     * timer, and finalize here only if the real stop reason still has not landed.
+     *
+     * See [acpTurnLooksHung] for what separates a dropped stop reason from a turn ending normally.
+     */
+    private fun onAcpHookStatus(taskId: String, event: AgentWorkflowArtifacts.Event.StatusReady) {
+        if (event.status != AgentStatus.Done) return
+        if (!acpTurnLooksHung(taskId, event.atMillis)) return
+        if (acpHookDoneJobs.containsKey(taskId)) return
+        // Lazy so the completion handler cannot un-register the job before it is registered —
+        // this map gates re-arming, and a stale entry would disable the fallback for good.
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            delay(acpHookDoneGraceMs)
+            if (acpTurnLooksHung(taskId, event.atMillis)) finalizeHungAcpTurn(taskId)
+        }
+        acpHookDoneJobs[taskId] = job
+        job.invokeOnCompletion { acpHookDoneJobs.remove(taskId, job) }
+        job.start()
+    }
+
+    /**
+     * Second-aligned because the status hook stamps `at` in whole epoch seconds — an unaligned
+     * start would read this turn's own first hook line as older than the turn.
+     */
+    private fun markAcpTurnStarted(taskId: String) {
+        acpTurnStartedAt[taskId] = (System.currentTimeMillis() / 1000L) * 1000L
+    }
+
+    private fun acpTurnLooksHung(taskId: String, hookAtMillis: Long): Boolean {
+        val task = currentTask(taskId) ?: return false
+        return acpTurnLooksHung(
+            task = task,
+            hookAtMillis = hookAtMillis,
+            turnStartedAt = acpTurnStartedAt[taskId],
+            stopRequested = handles[taskId]?.stopRequested == true,
+            hasPendingQuestion = readPendingWorkflowQuestion(task) != null,
+            hasPendingGrillMeFollowUp = taskId in pendingGrillMeFollowUps,
+        )
+    }
+
+    private fun finalizeHungAcpTurn(taskId: String) {
+        val task = currentTask(taskId) ?: return
+        appendLaunchDiagnostics(taskId, "acpHookDoneFallback=true\n")
+        // The prompt coroutine is still parked on a response that is not coming, and it holds the
+        // session's prompt mutex — leaving the session up would hang the next follow-up too. Tear it
+        // down the same way Stop does; the stored acpSessionId reopens the same conversation.
+        handles[taskId]?.stopRequested = true
+        acpManager.stop(taskId)
+        finishTask(
+            taskId = taskId,
+            status = AgentStatus.Done,
+            exitCode = null,
+            error = null,
+            resumable = task.acpSessionId?.isNotBlank() == true,
+            statusConfident = true,
+            forceKillTerminal = true,
+            stopReason = ACP_HOOK_DONE_STOP_REASON,
+        )
     }
 
     private fun persistAcpSessionId(taskId: String, sessionId: String) {
@@ -6542,7 +6756,8 @@ class DesktopAgentRunService(
 
     private fun applyStatusSnapshot(taskId: String, snapshot: AgentStatusSnapshot) {
         val task = currentTask(taskId) ?: return
-        if (handles[taskId]?.stopRequested == true) return
+        // Stop can finish and remove the handle before late provider hooks arrive; honor both.
+        if (handles[taskId]?.stopRequested == true || task.stoppedByUser) return
         if (task.workflowStage != null && task.finishedAtMillis != null && !task.isActive && (snapshot.status == AgentStatus.Working || snapshot.status == AgentStatus.Blocked)) {
             return
         }
@@ -6647,8 +6862,11 @@ class DesktopAgentRunService(
             // Grill-me / permission Blocked stamps finishedAtMillis while staying active — cancel
             // must still finalize, or ACP stop leaves the chat Blocked forever.
             val shouldFinalize = when {
-                stoppedByUser && (task.isActive || task.userInputRequest != null || task.status == null) -> true
-                task.finishedAtMillis == null && (task.isActive || task.status != null || stoppedByUser) -> true
+                // User Stop must stamp stoppedByUser even when the chat is already Done
+                // (swarm leads idle between worker turns). Otherwise worker completion
+                // follow-ups keep waking a chat the user thought they stopped.
+                stoppedByUser -> true
+                task.finishedAtMillis == null && (task.isActive || task.status != null) -> true
                 else -> false
             }
             if (shouldFinalize) {

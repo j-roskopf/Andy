@@ -2,6 +2,7 @@ package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
 import app.andy.model.AgentAutonomy
+import app.andy.model.AgentReasoningEffort
 import app.andy.model.OrchestrationPreferences
 import app.andy.model.OrchestrationProviderRole
 import java.io.File
@@ -42,6 +43,10 @@ class DesktopOrchestrationPreferencesServiceTest {
                 .withAgent(OrchestrationProviderRole.Audit, AgentKind.Cursor)
                 .withModel(OrchestrationProviderRole.Impl, "sonnet")
                 .withAutonomy(OrchestrationProviderRole.Impl, AgentAutonomy.Full)
+                .withReasoningEffort(OrchestrationProviderRole.Impl, AgentReasoningEffort.High)
+                .withSwarmWorkers(6)
+                .withSwarmCleanup(true)
+                .withSwarmSkipApproval(true)
                 .withPreferenceNotes(listOf("Prefer Claude for UI copy.", "  ", "Codex for mechanical work."))
             service.save(saved)
             assertTrue(file.isFile)
@@ -51,6 +56,10 @@ class DesktopOrchestrationPreferencesServiceTest {
             assertEquals(AgentKind.ClaudeCode, loaded.agentFor(OrchestrationProviderRole.Ui))
             assertEquals("sonnet", loaded.settingsFor(OrchestrationProviderRole.Impl).model)
             assertEquals(AgentAutonomy.Full, loaded.autonomyFor(OrchestrationProviderRole.Impl))
+            assertEquals(AgentReasoningEffort.High, loaded.reasoningEffortFor(OrchestrationProviderRole.Impl))
+            assertEquals(6, loaded.swarm.workers)
+            assertEquals(true, loaded.swarm.cleanup)
+            assertEquals(true, loaded.swarm.skipApproval)
             assertEquals(
                 listOf("Prefer Claude for UI copy.", "Codex for mechanical work."),
                 loaded.preferences,

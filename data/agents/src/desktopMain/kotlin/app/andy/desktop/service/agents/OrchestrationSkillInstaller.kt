@@ -18,6 +18,7 @@ object OrchestrationSkillInstaller {
         "andy-loop" to ANDY_LOOP_SKILL,
         "andy-advisor" to ANDY_ADVISOR_SKILL,
         "andy-committee" to ANDY_COMMITTEE_SKILL,
+        "andy-swarm" to ANDY_SWARM_SKILL,
     )
 
     fun ensureInstalled(home: File = File(System.getProperty("user.home"))) {

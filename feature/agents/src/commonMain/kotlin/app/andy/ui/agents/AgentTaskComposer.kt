@@ -1383,7 +1383,13 @@ private suspend fun refreshComposerGitState(
 
 /** User-invocable orchestration skills that require Andy MCP attach on new-task submit. */
 fun isOrchestrationSkillName(name: String): Boolean =
-    name.lowercase() in setOf("andy-handoff", "andy-loop", "andy-advisor", "andy-committee")
+    name.lowercase() in setOf(
+        "andy-handoff",
+        "andy-loop",
+        "andy-advisor",
+        "andy-committee",
+        "andy-swarm",
+    )
 
 /** Returns the attachMcp value after selecting [skillName] in the new-task composer. */
 fun attachMcpAfterSkillSelection(skillName: String, currentAttachMcp: Boolean): Boolean =

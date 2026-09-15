@@ -319,7 +319,9 @@ private const val ANDY_AGY_HOOK_NAME = "andy-status"
  *
  * Title script ([AndyAgyTitleInstaller]) maps mid-turn Working/Blocked from `agent_state`;
  * idle only sets the OSC marker — it must not author Done (that would ding while
- * Gradle/etc. run in the background). Screen scrape also keeps Working on `· N task`.
+ * Gradle/etc. run in the background). Screen scrape also keeps Working on `· N task`,
+ * and settles Done from idle OSC when that chrome is gone even if status.json is still
+ * stuck on working.
  */
 fun installAntigravityStatusHooks(worktreeOrCwd: File, artifactDir: File) {
     if (shouldSkipProjectHooks(worktreeOrCwd)) return

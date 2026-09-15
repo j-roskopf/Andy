@@ -86,6 +86,7 @@ Dispatch tasks to Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Hermes,
 | `/andy-loop …` | Runs a worker and a verifier until the goal is done or a limit stops the loop. |
 | `/andy-advisor …` | Starts one read-only advisor for a second opinion. |
 | `/andy-committee …` | Starts two advisors to plan root cause and review. |
+| `/andy-swarm …` | Lead decomposes work into parallel worktree workers and merges results. |
 
 Orchestration commands need Andy MCP on the chat. Select one of these skills in the new-task composer to attach MCP. Set default providers in Settings → Agents → Orchestration.
 

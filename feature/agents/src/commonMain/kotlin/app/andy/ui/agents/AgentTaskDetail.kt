@@ -26,8 +26,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import app.andy.ui.components.bottomBorder
@@ -126,6 +128,7 @@ import app.andy.service.AndyServices
 import app.andy.ui.components.Button
 import app.andy.ui.components.ChatComposerLayout
 import app.andy.ui.components.ChatFindBar
+import app.andy.ui.components.ChatMarkdown
 import app.andy.ui.components.ComposerModelChip
 import app.andy.ui.components.ComposerPermissionsChip
 import app.andy.ui.components.ComposerProviderChip
@@ -601,12 +604,18 @@ fun AgentTaskDetail(
     }
 
     /** Handles a markdown link click that isn't a real web URL — opens it in Andy's own code viewer instead. */
-    fun openFileLink(uri: String): Boolean {
-        filePreviewPane = FileLinkPreviewState(requestedPath = uri, loading = true)
+    fun openFileLink(uri: String, title: String = "Code"): Boolean {
+        filePreviewPane = FileLinkPreviewState(requestedPath = uri, loading = true, title = title)
         scope.launch {
-            filePreviewPane = resolveFileLink(services, fileLinkRoots, uri)
+            filePreviewPane = resolveFileLink(services, fileLinkRoots, uri).copy(title = title)
         }
         return true
+    }
+
+    fun openSkill(skill: AgentSkill) {
+        val path = skill.path.trim()
+        if (path.isBlank()) return
+        openFileLink(path, title = "Skill")
     }
 
     fun saveFilePreview(path: String, text: String) {
@@ -917,6 +926,7 @@ fun AgentTaskDetail(
                         },
                         activePermissionRequestId = pendingPermissionId,
                         onToolFileOpen = ::openToolFile,
+                        onSkillOpen = ::openSkill,
                         onFileChangesReview = ::openFileChangesReview,
                         onFileChangesUndo = ::requestUndoFileChanges,
                         knownTasks = knownAgentTasks,
@@ -1554,6 +1564,8 @@ private data class FileLinkPreviewState(
     /** Unsaved edits typed into the preview editor, kept across failed saves so they are never lost. */
     val draft: String? = null,
     val error: String? = null,
+    /** Side-pane header label — "Skill" when opened from a transcript skill link. */
+    val title: String = "Code",
 )
 
 private fun isAbsoluteHostPath(path: String): Boolean =
@@ -1616,14 +1628,25 @@ private fun FileLinkPreviewPane(
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    "Code",
+                    state.title,
                     color = TextPrimary,
                     fontFamily = DisplayFont,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
                 )
                 Text(
-                    state.requestedPath.substringAfterLast('/').ifBlank { state.requestedPath },
+                    if (state.title == "Skill") {
+                        state.requestedPath
+                            .trimEnd('/', '\\')
+                            .substringBeforeLast('/')
+                            .substringBeforeLast('\\')
+                            .substringAfterLast('/')
+                            .substringAfterLast('\\')
+                            .ifBlank { state.requestedPath.substringAfterLast('/').ifBlank { state.requestedPath } }
+                            .let { name -> if (name.startsWith('/')) name else "/$name" }
+                    } else {
+                        state.requestedPath.substringAfterLast('/').ifBlank { state.requestedPath }
+                    },
                     color = TextSecondary,
                     fontFamily = MonoFont,
                     fontSize = 10.sp,
@@ -1649,15 +1672,28 @@ private fun FileLinkPreviewPane(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     )
                 }
-                HostCodeEditor(
-                    path = state.document.path,
-                    text = state.draft ?: state.document.content,
-                    languageHint = state.document.languageHint,
-                    modifier = Modifier.fillMaxSize(),
-                    onTextChange = onTextChange,
-                    onSave = onSave,
-                    onClose = onClose,
-                )
+                if (state.title == "Skill") {
+                    // Skills are markdown instructions — render them, don't open an editor.
+                    val body = state.draft ?: state.document.content
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        ChatMarkdown(body, lineHeight = 20.sp)
+                    }
+                } else {
+                    HostCodeEditor(
+                        path = state.document.path,
+                        text = state.draft ?: state.document.content,
+                        languageHint = state.document.languageHint,
+                        modifier = Modifier.fillMaxSize(),
+                        onTextChange = onTextChange,
+                        onSave = onSave,
+                        onClose = onClose,
+                    )
+                }
             }
             state.error != null -> Text(
                 state.error,

@@ -14,6 +14,7 @@ class AgentTaskComposerTest {
         assertTrue(isOrchestrationSkillName("Andy-Loop"))
         assertTrue(isOrchestrationSkillName("andy-advisor"))
         assertTrue(isOrchestrationSkillName("andy-committee"))
+        assertTrue(isOrchestrationSkillName("andy-swarm"))
         assertFalse(isOrchestrationSkillName("andy-orchestration"))
         assertFalse(isOrchestrationSkillName("grill-me"))
         assertFalse(isOrchestrationSkillName("babysit"))
@@ -21,6 +22,7 @@ class AgentTaskComposerTest {
         assertTrue(attachMcpAfterSkillSelection("andy-handoff", currentAttachMcp = false))
         assertTrue(attachMcpAfterSkillSelection("andy-loop", currentAttachMcp = false))
         assertTrue(attachMcpAfterSkillSelection("andy-advisor", currentAttachMcp = true))
+        assertTrue(attachMcpAfterSkillSelection("andy-swarm", currentAttachMcp = false))
         assertFalse(attachMcpAfterSkillSelection("babysit", currentAttachMcp = false))
         assertTrue(attachMcpAfterSkillSelection("unrelated", currentAttachMcp = true))
     }

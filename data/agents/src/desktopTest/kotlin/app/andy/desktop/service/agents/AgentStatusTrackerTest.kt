@@ -1791,6 +1791,63 @@ class AgentStatusTrackerTest {
             ),
             "non-agy agents ignore hook status",
         )
+        assertEquals(
+            AgentStatus.Done,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Working,
+                scrapeHint = AgentStatus.Done,
+                scrapeBlocked = false,
+                scrapeWorking = false,
+                scrapeVisibleWorking = false,
+            ),
+            "stale hook Working must yield to idle scrape when no working chrome",
+        )
+        assertEquals(
+            AgentStatus.Working,
+            combineHookAndScrapeStatus(
+                agent = AgentKind.Antigravity,
+                hookStatus = AgentStatus.Working,
+                scrapeHint = AgentStatus.Done,
+                scrapeBlocked = false,
+                scrapeWorking = true,
+                scrapeVisibleWorking = true,
+            ),
+            "background · N task chrome must keep Working despite idle OSC",
+        )
+    }
+
+    @Test
+    fun antigravityIdleOscSettlesDoneDespiteStaleStatusJsonWorking() = runBlocking {
+        // Stop may leave status.json on working (missed fullyIdle Done, or never fired).
+        // andy:idle + prompt with no · N task must still settle the badge to Done.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val artifactDir = File.createTempFile("andy-agy-stale-working", null).also {
+                it.delete()
+                it.mkdirs()
+            }
+            File(artifactDir, "status.json").writeText("""{"status":"working","at":1}""" + "\n")
+            val session = FakeTerminalSession()
+            val tracker = AgentStatusTracker(
+                scope = scope,
+                taskId = "task-agy-stale-working",
+                agent = AgentKind.Antigravity,
+                artifactDir = artifactDir,
+                session = session,
+                onSnapshot = {},
+                initialSnapshot = AgentStatusSnapshot(AgentStatus.Working, confident = true),
+            )
+            tracker.start()
+            tracker.markUserWorking()
+            session.setOsc("agy andy:idle")
+            session.emitBuffer("PR #155 has been merged to main!\n> ")
+            tracker.awaitStatus(AgentStatus.Done)
+            assertTrue(tracker.status.value.confident)
+            tracker.close()
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test

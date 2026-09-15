@@ -209,7 +209,7 @@ fn normalize_skill_name(name: &str) -> String {
 pub fn is_orchestration_skill_name(name: &str) -> bool {
     matches!(
         normalize_skill_name(name).as_str(),
-        "andy-handoff" | "andy-loop" | "andy-advisor" | "andy-committee"
+        "andy-handoff" | "andy-loop" | "andy-advisor" | "andy-committee" | "andy-swarm"
     )
 }
 
@@ -367,6 +367,7 @@ mod tests {
             },
         ];
         assert!(is_orchestration_skill_name("andy-loop"));
+        assert!(is_orchestration_skill_name("andy-swarm"));
         assert!(!is_orchestration_skill_name("gh-ship-pr"));
         let selected = skills_referenced_in_prompt("/andy-loop babysit CI", &skills);
         assert_eq!(selected.len(), 1);

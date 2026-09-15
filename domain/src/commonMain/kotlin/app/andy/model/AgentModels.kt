@@ -639,6 +639,12 @@ data class AgentTask(
     val parentWorktreeTaskId: String? = null,
     /** Chat this side-chat pane was opened from. Independent of worktree parentage. */
     val parentChatTaskId: String? = null,
+    /**
+     * When true, Andy enqueues a follow-up into [parentChatTaskId] when this task
+     * reaches a terminal status (Done/Error). Used by swarm leads so they can stop
+     * between workers instead of polling.
+     */
+    val notifyParentOnCompletion: Boolean = false,
     /** Optional typed project task that launched this raw agent session. */
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
@@ -811,6 +817,11 @@ data class AgentTaskDraft(
     val baseRef: String? = null,
     /** Chat this draft is a side chat of, if launched from a dock Chat pane. */
     val parentChatTaskId: String? = null,
+    /**
+     * When true, Andy notifies [parentChatTaskId] via queued follow-up when this
+     * task reaches Done/Error. See [AgentTask.notifyParentOnCompletion].
+     */
+    val notifyParentOnCompletion: Boolean = false,
     val workflowTaskId: String? = null,
     val workflowStage: ProjectWorkflowStage? = null,
     val workflowAttempt: Int? = null,

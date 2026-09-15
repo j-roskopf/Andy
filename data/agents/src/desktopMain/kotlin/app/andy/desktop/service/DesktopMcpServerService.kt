@@ -88,6 +88,8 @@ class DesktopMcpServerService(
     private var automations: AutomationService? = null
     private var plugins: PluginService? = null
     private var chatAttachments: ChatAttachmentService? = null
+    private var kanban: KanbanService? = null
+    private var chatCompletionNotifier: app.andy.desktop.service.agents.ChatCompletionNotifier? = null
     private val hub = McpHubService()
 
     /**
@@ -103,12 +105,16 @@ class DesktopMcpServerService(
         automations: AutomationService = UnavailableAutomationService,
         plugins: PluginService = UnavailablePluginService,
         chatAttachments: ChatAttachmentService = UnavailableChatAttachmentService,
+        kanban: KanbanService = UnavailableKanbanService,
+        chatCompletionNotifier: app.andy.desktop.service.agents.ChatCompletionNotifier? = null,
     ) {
         agentRuns = agents
         projectWorkflows = projects
         this.automations = automations
         this.plugins = plugins
         this.chatAttachments = chatAttachments
+        this.kanban = kanban
+        this.chatCompletionNotifier = chatCompletionNotifier
         attentionHub.startWatching(agents)
         webPush.startWatching(attentionHub)
     }
@@ -505,6 +511,8 @@ class DesktopMcpServerService(
                 callerTaskId = callerTaskId?.takeIf { it.isNotBlank() },
                 automations = automations ?: UnavailableAutomationService,
                 chatAttachments = chatAttachments ?: UnavailableChatAttachmentService,
+                kanban = kanban ?: UnavailableKanbanService,
+                chatCompletionNotifier = chatCompletionNotifier,
             )
         }
         mcpServer.registerPluginTools(plugins ?: UnavailablePluginService)
