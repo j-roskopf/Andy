@@ -29,21 +29,29 @@ class DesktopKanbanService(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : KanbanService {
     private val saveMutex = Mutex()
-    private val _boards = MutableStateFlow(loadAndBackfill())
-    override val boards: StateFlow<Map<String, KanbanBoard>> = _boards.asStateFlow()
+    /** Serializes the in-memory read-modify-write; background status mirror races UI/MCP edits. */
+    private val mutateLock = Any()
+    private val _boards: MutableStateFlow<Map<String, KanbanBoard>>
+    override val boards: StateFlow<Map<String, KanbanBoard>>
 
-    private fun loadAndBackfill(): Map<String, KanbanBoard> {
+    init {
         val loaded = store.loadAllKanbanBoards()
         val backfilled = loaded.mapValues { (_, board) -> board.withBackfilledLaneRoles() }
-        // Persist one-time role backfill so subsequent loads skip the heuristic.
-        backfilled.forEach { (projectId, board) ->
-            if (loaded[projectId] != board) {
-                scope.launch {
-                    saveMutex.withLock { store.saveKanbanBoard(projectId, board) }
+        _boards = MutableStateFlow(backfilled)
+        boards = _boards.asStateFlow()
+        // Persist one-time role backfill so subsequent loads skip the heuristic. Re-read the
+        // latest board under the save mutex so a concurrent edit is not clobbered by the
+        // stale startup snapshot.
+        val needsBackfillSave = backfilled.filter { (projectId, board) -> loaded[projectId] != board }.keys
+        if (needsBackfillSave.isNotEmpty()) {
+            scope.launch {
+                saveMutex.withLock {
+                    needsBackfillSave.forEach { projectId ->
+                        _boards.value[projectId]?.let { store.saveKanbanBoard(projectId, it) }
+                    }
                 }
             }
         }
-        return backfilled
     }
 
     override fun addLane(projectId: String, name: String): String? {
@@ -97,7 +105,13 @@ class DesktopKanbanService(
         mutate(projectId) { current ->
             current.copy(
                 lanes = current.lanes.map { lane ->
-                    if (lane.id == laneId) lane.copy(role = role) else lane
+                    when {
+                        lane.id == laneId -> lane.copy(role = role)
+                        // Roles are unique: assigning one to a lane clears it from any
+                        // other lane so `laneForRole` cannot shadow the new target.
+                        role != null && lane.role == role -> lane.copy(role = null)
+                        else -> lane
+                    }
                 },
             )
         }
@@ -280,7 +294,9 @@ class DesktopKanbanService(
     }
 
     override fun deleteBoard(projectId: String) {
-        _boards.value = _boards.value - projectId
+        synchronized(mutateLock) {
+            _boards.value = _boards.value - projectId
+        }
         scope.launch {
             saveMutex.withLock {
                 store.deleteKanbanBoard(projectId)
@@ -289,10 +305,12 @@ class DesktopKanbanService(
     }
 
     private fun mutate(projectId: String, transform: (KanbanBoard) -> KanbanBoard) {
-        val current = _boards.value[projectId] ?: KanbanBoard()
-        val updated = transform(current)
-        if (updated == current) return
-        _boards.value = _boards.value + (projectId to updated)
+        synchronized(mutateLock) {
+            val current = _boards.value[projectId] ?: KanbanBoard()
+            val updated = transform(current)
+            if (updated == current) return
+            _boards.value = _boards.value + (projectId to updated)
+        }
         // Persist the latest board under a mutex. Saving the mutate-time snapshot can
         // reorder and let an older write clobber a newer one under test/CI load.
         scope.launch {

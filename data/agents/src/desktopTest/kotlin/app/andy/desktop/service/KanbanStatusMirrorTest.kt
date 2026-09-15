@@ -121,6 +121,55 @@ class KanbanStatusMirrorTest {
     }
 
     @Test
+    fun parentNotDoneWhileAnyChildUnresolved() = withMirror { kanban, mirror, tasks ->
+        val projectId = "p1"
+        val parentId = kanban.addCard(projectId, "todo", "Parent", "", emptyList(), swarmRunId = "s1")!!
+        val childDone = kanban.addCard(
+            projectId, "todo", "A", "", emptyList(), parentCardId = parentId, swarmRunId = "s1",
+        )!!
+        kanban.addCard(projectId, "todo", "B", "", emptyList(), parentCardId = parentId, swarmRunId = "s1")
+        kanban.linkChat(projectId, childDone, "chat-a")
+        tasks.value = listOf(task("chat-a", AgentStatus.Done))
+        mirror.applyMirror(
+            DesktopKanbanStatusMirror.MirrorSnapshot(
+                tasks = tasks.value.associateBy { it.id },
+                boards = kanban.boards.value,
+            ),
+        )
+        val board = kanban.boards.value.getValue(projectId)
+        assertTrue(
+            board.lanes.first { it.id == "todo" }.cards.any { it.id == parentId },
+            "parent must not close while an unspawned child remains",
+        )
+    }
+
+    @Test
+    fun parentDoneWhenAllChildrenResolved() = withMirror { kanban, mirror, tasks ->
+        val projectId = "p1"
+        val parentId = kanban.addCard(projectId, "todo", "Parent", "", emptyList(), swarmRunId = "s1")!!
+        val childA = kanban.addCard(
+            projectId, "todo", "A", "", emptyList(), parentCardId = parentId, swarmRunId = "s1",
+        )!!
+        val childB = kanban.addCard(
+            projectId, "todo", "B", "", emptyList(), parentCardId = parentId, swarmRunId = "s1",
+        )!!
+        kanban.linkChat(projectId, childA, "chat-a")
+        kanban.linkChat(projectId, childB, "chat-b")
+        tasks.value = listOf(
+            task("chat-a", AgentStatus.Done),
+            task("chat-b", AgentStatus.Done),
+        )
+        mirror.applyMirror(
+            DesktopKanbanStatusMirror.MirrorSnapshot(
+                tasks = tasks.value.associateBy { it.id },
+                boards = kanban.boards.value,
+            ),
+        )
+        val board = kanban.boards.value.getValue(projectId)
+        assertTrue(board.lanes.first { it.id == "done" }.cards.any { it.id == parentId })
+    }
+
+    @Test
     fun rollupStatusMapping() {
         assertEquals(AgentStatus.Blocked, rollupStatus(listOf(AgentStatus.Working, AgentStatus.Error)))
         assertEquals(AgentStatus.Working, rollupStatus(listOf(AgentStatus.Working, AgentStatus.Done)))

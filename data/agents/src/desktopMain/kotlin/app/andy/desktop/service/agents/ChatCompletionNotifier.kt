@@ -42,7 +42,9 @@ class ChatCompletionNotifier(
     /** Cap concurrent [awaitAny] waiters so leaked MCP calls cannot starve Andy. */
     private val maxConcurrentAwaits: Int = 32,
 ) {
-    private val lastStatus = ConcurrentHashMap<String, AgentStatus?>()
+    // ConcurrentHashMap rejects null values, and a queued/relaunching task has a null status.
+    // Track only known statuses and drop the entry on null so the next non-null is a fresh edge.
+    private val lastStatus = ConcurrentHashMap<String, AgentStatus>()
     /** Dedupes follow-ups per (taskId, edge-status) so flaps cannot spam the parent. */
     private val notifiedEdges = ConcurrentHashMap.newKeySet<String>()
     private val awaitCount = AtomicInteger(0)
@@ -59,7 +61,7 @@ class ChatCompletionNotifier(
                 if (started) return@withLock false
                 started = true
                 agentRuns.tasks.value.forEach { task ->
-                    lastStatus[task.id] = task.status
+                    task.status?.let { lastStatus[task.id] = it }
                 }
                 true
             }
@@ -80,8 +82,12 @@ class ChatCompletionNotifier(
 
     internal fun processSnapshot(byId: Map<String, AgentTask>) {
         byId.values.forEach { task ->
-            val previous = lastStatus.put(task.id, task.status)
-            val current = task.status ?: return@forEach
+            val current = task.status
+            if (current == null) {
+                lastStatus.remove(task.id)
+                return@forEach
+            }
+            val previous = lastStatus.put(task.id, current)
             // First sight is seed-only. Hydration (and late list merges) must not look like
             // a live Working→Done edge — that re-queues "worker finished" into Done leads.
             if (previous == null || previous == current) return@forEach

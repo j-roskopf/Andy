@@ -203,6 +203,17 @@ class DesktopKanbanServiceTest {
         }
     }
 
+    @Test
+    fun setLaneRoleKeepsRoleUniqueAcrossLanes() = withService { service ->
+        service.addLane(projectId, "Shipped")
+        val shippedId = service.board().lanes.first { it.name == "Shipped" }.id
+        service.setLaneRole(projectId, shippedId, app.andy.model.KanbanLaneRole.Done)
+
+        val board = service.board()
+        assertEquals(shippedId, board.lanes.first { it.role == app.andy.model.KanbanLaneRole.Done }.id)
+        assertEquals(1, board.lanes.count { it.role == app.andy.model.KanbanLaneRole.Done })
+    }
+
     private fun seedBoard(service: DesktopKanbanService) {
         service.addLane(projectId, "Backlog")
         service.addCard(projectId, "todo", "One", "", emptyList())

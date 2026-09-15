@@ -60,7 +60,11 @@ class DesktopKanbanStatusMirror(
                         ?: laneRoleAsStatus(board, child)
                 }
                 if (childStatuses.isEmpty()) return@forEach
-                val rollup = rollupStatus(childStatuses) ?: return@forEach
+                // Unspawned (Todo, no chat) children hold the parent out of Done so a swarm
+                // with more subtasks than its concurrency cap cannot close early.
+                val allChildrenResolved = childStatuses.size == children.size
+                val rollup = rollupStatus(childStatuses, allChildrenResolved = allChildrenResolved)
+                    ?: return@forEach
                 when (kanban) {
                     is DesktopKanbanService -> kanban.mirrorParentRollup(projectId, parent.id, rollup)
                     else -> Unit
@@ -79,11 +83,14 @@ class DesktopKanbanStatusMirror(
     )
 }
 
-internal fun rollupStatus(statuses: List<AgentStatus>): AgentStatus? {
+internal fun rollupStatus(
+    statuses: List<AgentStatus>,
+    allChildrenResolved: Boolean = true,
+): AgentStatus? {
     if (statuses.isEmpty()) return null
     if (statuses.any { it == AgentStatus.Blocked || it == AgentStatus.Error }) return AgentStatus.Blocked
     if (statuses.any { it == AgentStatus.Working }) return AgentStatus.Working
-    if (statuses.all { it == AgentStatus.Done }) return AgentStatus.Done
+    if (allChildrenResolved && statuses.all { it == AgentStatus.Done }) return AgentStatus.Done
     return null
 }
 

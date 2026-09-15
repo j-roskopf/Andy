@@ -149,9 +149,36 @@ class ChatCompletionNotifierTest {
         assertTrue(fake.followUps.isEmpty())
     }
 
+    @Test
+    fun nullStatusDoesNotThrowAndStillNotifiesOnLaterEdge() {
+        val fake = FakeNotifyAgents()
+        val notifier = ChatCompletionNotifier(fake, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        val queued = task("worker", status = null, parent = "lead", notify = true)
+        fake.setTasks(listOf(queued))
+        notifier.processSnapshot(fake.tasks.value.associateBy { it.id })
+
+        val working = queued.copy(status = AgentStatus.Working)
+        fake.setTasks(listOf(working))
+        notifier.processSnapshot(fake.tasks.value.associateBy { it.id })
+
+        fake.setTasks(listOf(working.copy(status = AgentStatus.Done)))
+        notifier.processSnapshot(fake.tasks.value.associateBy { it.id })
+        assertEquals(1, fake.followUps.size)
+    }
+
+    @Test
+    fun startSeedsNullStatusWithoutThrowing() = runBlocking {
+        val fake = FakeNotifyAgents()
+        fake.setTasks(listOf(task("worker", status = null, parent = "lead", notify = true)))
+        val notifier = ChatCompletionNotifier(fake, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined))
+        notifier.start()
+        delay(50)
+        assertTrue(fake.followUps.isEmpty())
+    }
+
     private fun task(
         id: String,
-        status: AgentStatus,
+        status: AgentStatus?,
         parent: String?,
         notify: Boolean,
     ) = AgentTask(
