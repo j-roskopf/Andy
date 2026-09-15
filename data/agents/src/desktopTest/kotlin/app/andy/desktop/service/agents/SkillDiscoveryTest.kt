@@ -91,4 +91,29 @@ class SkillDiscoveryTest {
             home.deleteRecursively()
         }
     }
+
+    @Test
+    fun andySwarmAppearsWhenInstalledIntoProviderRoot() {
+        val home = createTempDirectory("andy-skill-swarm").toFile()
+        val previousHome = System.getProperty("user.home")
+        System.setProperty("user.home", home.absolutePath)
+        try {
+            OrchestrationSkillInstaller.ensureInstalled(home)
+            val discovered = discoverAgentSkills(AgentKind.Codex, directory = null)
+            assertTrue(discovered.any { it.name == "andy-swarm" && it.userInvocable })
+            val orch = discovered.single { it.name == "andy-orchestration" }
+            assertFalse(orch.userInvocable)
+            assertTrue(
+                File(orch.path).readText().contains("chat.await"),
+                "installed andy-orchestration should include chat.await rewrite",
+            )
+        } finally {
+            if (previousHome == null) {
+                System.clearProperty("user.home")
+            } else {
+                System.setProperty("user.home", previousHome)
+            }
+            home.deleteRecursively()
+        }
+    }
 }

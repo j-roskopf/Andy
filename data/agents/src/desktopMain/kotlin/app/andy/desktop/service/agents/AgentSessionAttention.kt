@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.ProjectWorkflowStage
@@ -47,6 +48,43 @@ internal const val QUESTION_PARK_SETTLE_MS = 1_500L
  */
 internal fun shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp: Boolean): Boolean =
     pendingFollowUp
+
+/**
+ * True when an ACP turn looks stuck: still streaming with no stop reason, while the provider's
+ * status hook has already written `done`.
+ *
+ * The ACP lane leaves Working only when `session/prompt` returns a stop reason. If that response
+ * is dropped the chat sits on Working behind a session that still looks live, and nothing recovers
+ * it — so the hook line becomes a second, independent witness that the turn ended. It is a
+ * fallback, not authority: the caller still waits out a grace period first, because on a healthy
+ * turn the hook fires a beat *before* the stop reason arrives.
+ *
+ * @param turnStartedAt start of the in-flight turn, or null when no turn is running.
+ * @param hookAtMillis the hook's own `at` stamp, which is why a stale line can be told apart.
+ */
+internal fun acpTurnLooksHung(
+    task: AgentTask,
+    hookAtMillis: Long,
+    turnStartedAt: Long?,
+    stopRequested: Boolean,
+    hasPendingQuestion: Boolean,
+    hasPendingGrillMeFollowUp: Boolean,
+): Boolean {
+    if (task.lane != AgentLaneKind.Acp) return false
+    if (task.status != AgentStatus.Working || !task.isActive) return false
+    if (stopRequested) return false
+    // No turn in flight, so a `done` left on disk by the last one is just history.
+    if (turnStartedAt == null) return false
+    // Anything the hook wrote before this turn began describes the previous one.
+    if (hookAtMillis < turnStartedAt) return false
+    // Grill-me writes `blocked` then `done` around its question, but the park only happens once
+    // the turn settles — a question still on disk means this turn is ending the normal way.
+    if (hasPendingQuestion) return false
+    // An answer follow-up queues behind the prior turn's prompt mutex, so that turn's `done` can
+    // land after this one is already counted as started.
+    if (hasPendingGrillMeFollowUp) return false
+    return true
+}
 
 /**
  * True when a live-status scrape should not overwrite the task badge.

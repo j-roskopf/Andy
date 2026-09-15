@@ -9,12 +9,15 @@ class OrchestrationPreferencesTest {
     fun roleSettingsRoundTripAndNormalize() {
         val prefs = OrchestrationPreferences.Defaults
             .withModel(OrchestrationProviderRole.Impl, "  gpt-5.6-sol  ")
+            .withReasoningEffort(OrchestrationProviderRole.Impl, AgentReasoningEffort.High)
             .withAutonomy(OrchestrationProviderRole.Impl, AgentAutonomy.Full)
 
         val normalized = prefs.normalized()
         assertEquals("gpt-5.6-sol", normalized.settingsFor(OrchestrationProviderRole.Impl).model)
+        assertEquals(AgentReasoningEffort.High, normalized.reasoningEffortFor(OrchestrationProviderRole.Impl))
         assertEquals(AgentAutonomy.Full, normalized.autonomyFor(OrchestrationProviderRole.Impl))
         assertNull(normalized.autonomyFor(OrchestrationProviderRole.Audit))
+        assertNull(normalized.reasoningEffortFor(OrchestrationProviderRole.Audit))
     }
 
     @Test
@@ -22,14 +25,32 @@ class OrchestrationPreferencesTest {
         val normalized = OrchestrationPreferences(
             providers = mapOf("impl" to "Codex"),
             settings = mapOf(
-                "impl" to OrchestrationRoleSettings(model = " ", autonomy = "not-a-permission"),
+                "impl" to OrchestrationRoleSettings(
+                    model = " ",
+                    reasoningEffort = "not-an-effort",
+                    autonomy = "not-a-permission",
+                ),
                 "unknown" to OrchestrationRoleSettings(model = "ignored", autonomy = "Full"),
             ),
         ).normalized()
 
         assertEquals(emptySet(), normalized.settings.keys - "impl")
         assertEquals(null, normalized.settingsFor(OrchestrationProviderRole.Impl).model)
+        assertNull(normalized.reasoningEffortFor(OrchestrationProviderRole.Impl))
         assertNull(normalized.autonomyFor(OrchestrationProviderRole.Impl))
+    }
+
+    @Test
+    fun reasoningEffortAcceptsCliValueAndClearsEmptySettings() {
+        val withEffort = OrchestrationPreferences(
+            settings = mapOf(
+                "impl" to OrchestrationRoleSettings(reasoningEffort = "xhigh"),
+            ),
+        ).normalized()
+        assertEquals(AgentReasoningEffort.ExtraHigh, withEffort.reasoningEffortFor(OrchestrationProviderRole.Impl))
+
+        val cleared = withEffort.withReasoningEffort(OrchestrationProviderRole.Impl, null)
+        assertEquals(emptyMap(), cleared.settings)
     }
 
     @Test
@@ -53,12 +74,20 @@ class OrchestrationPreferencesTest {
             "planning Codex · research Antigravity · audit Claude Code",
             orchestrationSkillProviderHint("andy-committee", prefs),
         )
+        assertEquals(
+            "lead (this chat) · workers Cursor",
+            orchestrationSkillProviderHint("andy-swarm", prefs),
+        )
         assertNull(orchestrationSkillProviderHint("andy-orchestration", prefs))
         assertNull(orchestrationSkillProviderHint("grill-me", prefs))
         assertEquals("uses Cursor", orchestrationSkillProviderHint("/andy-handoff", prefs))
         assertEquals(
             "worker Cursor · verifier Claude Code",
             orchestrationSkillProviderHint("/andy-loop", prefs),
+        )
+        assertEquals(
+            "lead (this chat) · workers Cursor",
+            orchestrationSkillProviderHint("/andy-swarm", prefs),
         )
     }
 
@@ -72,5 +101,30 @@ class OrchestrationPreferencesTest {
             "worker Codex · verifier Codex",
             orchestrationSkillProviderHint("andy-loop", OrchestrationPreferences()),
         )
+        assertEquals(
+            "lead (this chat) · workers Codex",
+            orchestrationSkillProviderHint("andy-swarm", OrchestrationPreferences()),
+        )
+    }
+
+    @Test
+    fun swarmSettingsNormalizeAndRoundTripThroughWithers() {
+        val prefs = OrchestrationPreferences.Defaults
+            .withSwarmWorkers(99)
+            .withSwarmCleanup(true)
+            .withSwarmSkipApproval(true)
+            .normalized()
+
+        assertEquals(SwarmOrchestrationSettings.MaxWorkers, prefs.swarm.workers)
+        assertEquals(true, prefs.swarm.cleanup)
+        assertEquals(true, prefs.swarm.skipApproval)
+
+        val clampedLow = OrchestrationPreferences(
+            swarm = SwarmOrchestrationSettings(workers = 0, cleanup = true),
+        ).normalized()
+        assertEquals(SwarmOrchestrationSettings.MinWorkers, clampedLow.swarm.workers)
+
+        val defaults = OrchestrationPreferences().normalized()
+        assertEquals(SwarmOrchestrationSettings.Defaults, defaults.swarm)
     }
 }

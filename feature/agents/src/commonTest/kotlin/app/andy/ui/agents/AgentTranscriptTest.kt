@@ -128,10 +128,40 @@ class AgentTranscriptTest {
     }
 
     @Test
-    fun skillOnlyUserMessageDisplaysSkillLinksWithoutDuplicateText() {
+    fun skillOnlyUserMessageDisplaysInlineSkillTokens() {
         val skills = listOf(AgentSkill(name = "gh-ship-pr", description = "", path = "/tmp/gh-ship-pr/SKILL.md"))
         val event = AgentEvent.UserMessage(atMillis = 1, text = "/gh-ship-pr", skills = skills)
-        assertEquals("", userMessageDisplayText(event))
+        assertEquals("/gh-ship-pr", userMessageDisplayText(event))
+    }
+
+    @Test
+    fun userMessageDisplayTextAppendsAttachedSkillsMissingFromProse() {
+        val skills = listOf(
+            AgentSkill(name = "andy-swarm", description = "", path = "/tmp/andy-swarm/SKILL.md"),
+            AgentSkill(name = "compose-expert", description = "", path = "/tmp/compose/SKILL.md"),
+        )
+        val event = AgentEvent.UserMessage(
+            atMillis = 1,
+            text = "fan this out with the compose expert",
+            skills = skills,
+        )
+        assertEquals(
+            "fan this out with the compose expert /andy-swarm /compose-expert",
+            userMessageDisplayText(event),
+        )
+    }
+
+    @Test
+    fun buildUserMessageWithSkillLinksAnnotatesKnownTokens() {
+        val skills = listOf(AgentSkill(name = "compose-expert", description = "", path = "/tmp/c/SKILL.md"))
+        val annotated = buildUserMessageWithSkillLinks(
+            text = "use /compose-expert please",
+            skills = skills,
+            find = null,
+            onSkillClick = {},
+        )
+        assertEquals("use /compose-expert please", annotated.text)
+        assertTrue(annotated.getLinkAnnotations(0, annotated.length).isNotEmpty())
     }
 
     @Test

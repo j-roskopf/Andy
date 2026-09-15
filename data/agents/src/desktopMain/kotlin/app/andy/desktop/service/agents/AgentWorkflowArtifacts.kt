@@ -1,5 +1,6 @@
 package app.andy.desktop.service.agents
 
+import app.andy.model.AgentStatus
 import app.andy.model.AgentUserInputOption
 import app.andy.model.AgentUserInputQuestion
 import app.andy.model.AgentUserInputRequest
@@ -37,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - `review.json` — same schema as the former `<andy_review>` block
  * - `verification.json` — same schema as the former `<andy_verification>` block
  * - `question.json` — blocked automated phase → Andy decision card
+ * - `status.json` — append-only JSONL from the provider status hook
  */
 class AgentWorkflowArtifacts(
     private val scope: CoroutineScope,
@@ -49,6 +51,12 @@ class AgentWorkflowArtifacts(
         data class ReviewReady(val json: String) : Event
         data class VerificationReady(val json: String) : Event
         data class QuestionReady(val request: AgentUserInputRequest) : Event
+
+        /**
+         * Newest `status.json` line. [atMillis] is the hook's own clock, not Andy's — consumers
+         * use it to drop lines left over from an earlier turn of the same session.
+         */
+        data class StatusReady(val status: AgentStatus, val atMillis: Long) : Event
     }
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 16)
@@ -121,6 +129,9 @@ class AgentWorkflowArtifacts(
         maybeEmit("question", questionFile) { text ->
             parseQuestionJson(text)?.let { Event.QuestionReady(it) }
         }
+        maybeEmit("status", statusFile) { text ->
+            parseLatestStatusLine(text)?.let { (status, atMillis) -> Event.StatusReady(status, atMillis) }
+        }
     }
 
     private suspend fun maybeEmit(key: String, file: File, parse: (String) -> Event?) {
@@ -141,6 +152,22 @@ class AgentWorkflowArtifacts(
         }
 
         private val json = Json { ignoreUnknownKeys = true }
+
+        private val statusAtRegex = Regex(""""at"\s*:\s*(\d+)""")
+
+        /**
+         * `status.json` is append-only JSONL (`{"status":"done","at":<epoch seconds>}`) written by
+         * `andy-status-hook.sh`, so only the last parseable line describes the session now.
+         */
+        fun parseLatestStatusLine(raw: String): Pair<AgentStatus, Long>? {
+            val line = raw.lineSequence()
+                .filter { it.isNotBlank() }
+                .lastOrNull { parseStatusJson(it) != null }
+                ?: return null
+            val status = parseStatusJson(line) ?: return null
+            val seconds = statusAtRegex.find(line)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            return status to seconds * 1000L
+        }
 
         fun parseReviewJson(
             raw: String,

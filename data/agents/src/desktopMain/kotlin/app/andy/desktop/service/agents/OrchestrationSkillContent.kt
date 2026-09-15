@@ -4,7 +4,7 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
     """
     ---
     name: andy-orchestration
-    description: Reference for orchestrating other Andy agents via chat.* MCP tools and the andy CLI. Read by andy-handoff, andy-loop, andy-advisor, andy-committee before they do anything.
+    description: Reference for orchestrating other Andy agents via chat.* MCP tools and the andy CLI. Read by andy-handoff, andy-loop, andy-advisor, andy-committee, andy-swarm before they do anything.
     user-invocable: false
     ---
 
@@ -24,7 +24,7 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     MCP: `chat.start` — required `prompt`, `agent` (one of ClaudeCode, Codex, Cursor,
     Antigravity, OpenCode, Pi, Hermes, OpenClaw, Goose, Ollama, LMStudio, OpenRouter). Optional: `title`, `projectId`,
-    `directory`, `model`, `autonomy` (ReadOnly | Standard | Full), `sandboxMode`
+    `directory`, `model`, `reasoningEffort`, `autonomy` (ReadOnly | Standard | Full), `sandboxMode`
     (ReadOnly | WorkspaceWrite | None), `callerTaskId`, `parentChatTaskId`,
     `useWorktree`, `existingWorktreePath`. For Ollama, LM Studio, and OpenRouter, `runtime`
     (OpenCode | Pi | Goose) and `model` are required.
@@ -49,12 +49,24 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     ## Checking status / waiting
 
-    There is no push notification back into your own session when a spawned task
-    finishes — Andy has no async callback into an arbitrary running agent process.
-    Poll instead: `andy chat status <task_id>` (or MCP `chat.status`), on a sleep
-    loop you run yourself (e.g. `while ...; do sleep 15; andy chat status ${'$'}ID; done`
-    from your own shell tool). Don't hammer it — 10-30s between checks is plenty;
-    these runs take minutes.
+    Prefer server-side waiting over a sleep/poll loop:
+
+    1. **`chat.await`** — pass worker task ids; Andy blocks on the tasks StateFlow
+       until one matches `until` (`terminal` | `blocked` | `any`, default `any`),
+       then returns `{taskId, status, timedOut}`. Default timeout 120s (max 300).
+       On `timedOut: true`, re-arm the same call. An already-terminal worker returns
+       immediately (no hang).
+    2. **`notifyParentOnCompletion: true` on `chat.start`** — when a child reaches
+       Done/Error, Andy queues a follow-up into the parent chat
+       ("worker `abc` finished: …"). Queue-while-busy delivery means you can stop
+       between workers; the wake-up arrives when you are idle. Requires a
+       `parentChatTaskId` (auto-defaulted to the caller when omitted).
+
+    **Fallback (older Andy without `chat.await`):** poll `chat.status` /
+    `andy chat status <task_id>` every 15–30s on a sleep loop you run yourself
+    (e.g. `while ...; do sleep 15; andy chat status ${'$'}ID; done`). Don't hammer —
+    these runs take minutes. There is still no push for *arbitrary* processes
+    Andy did not spawn as children with the notify flag.
 
     ## Following up / resuming
 
@@ -98,16 +110,29 @@ internal val ANDY_ORCHESTRATION_SKILL: String =
 
     ```json
     "settings": {
-      "impl": {"model": "gpt-5.6-sol", "autonomy": "Full"},
+      "impl": {"model": "gpt-5.6-sol", "reasoningEffort": "High", "autonomy": "Full"},
       "audit": {"model": "sonnet", "autonomy": "ReadOnly"}
     }
     ```
 
-    Pass a configured `model` to `chat.start`. Pass `autonomy` only when that role
-    has an explicit value; when it is unset, omit it so Andy inherits the parent
-    task's permission dial. Andy also inherits the caller's `projectId` and working
-    directory when those `chat.start` fields are omitted, so child chats stay under
-    the project that launched the orchestration.
+    Pass a configured `model` to `chat.start`. Pass `reasoningEffort` when that role
+    has an explicit value (enum name like `High`, or cli values like `high` /
+    `xhigh`). Pass `autonomy` only when that role has an explicit value; when it is
+    unset, omit it so Andy inherits the parent task's permission dial. Andy also
+    inherits the caller's `projectId` and working directory when those `chat.start`
+    fields are omitted, so child chats stay under the project that launched the
+    orchestration.
+
+    Optional `/andy-swarm` defaults live in the `swarm` object (Settings → Agents →
+    Swarm). CLI flags on `/andy-swarm` override these when present:
+
+    ```json
+    "swarm": {
+      "workers": 4,
+      "cleanup": false,
+      "skipApproval": false
+    }
+    ```
 
     ## No-edits suffix
 
@@ -158,8 +183,8 @@ internal val ANDY_HANDOFF_SKILL: String =
 
     Use the `impl` role's `settings` entry for the worker (or `ui` for a styling-only
     handoff) unless the user explicitly chose another provider. Pass its configured
-    model and autonomy when present; otherwise omit autonomy to inherit the current
-    task's permission dial.
+    model, reasoningEffort, and autonomy when present; otherwise omit autonomy to
+    inherit the current task's permission dial.
 
     ## The handoff prompt
 
@@ -304,8 +329,8 @@ internal val ANDY_LOOP_SKILL: String =
        `autonomy: "ReadOnly"` or `autonomy: "Standard"` for the worker — omit
        `autonomy` so Andy inherits this loop task's dial (Full stays Full), unless the
        `impl` role has an explicit configured autonomy. Pass the configured `impl`
-       model when present. Only override the configured role when the user asked for
-       a different worker.
+       model and reasoningEffort when present. Only override the configured role when
+       the user asked for a different worker.
     2. Wait (poll `chat.status`, see andy-orchestration).
     3. Verify: run the shell check yourself and/or spawn/resume a verifier agent
        with `autonomy: "ReadOnly"` and the no-edits suffix, asking it to cite the
@@ -324,7 +349,7 @@ internal val ANDY_LOOP_SKILL: String =
     **Verifier** — checks facts, doesn't suggest fixes, cites commands/outputs/file
     evidence, specific about what "done" means. Always `autonomy: "ReadOnly"` +
     no-edits suffix, even if the configured audit role uses a different permission.
-    Pass the configured audit model when present.
+    Pass the configured audit model and reasoningEffort when present.
     """.trimIndent() + "\n"
 
 internal val ANDY_ADVISOR_SKILL: String =
@@ -370,10 +395,10 @@ internal val ANDY_ADVISOR_SKILL: String =
        - "Is this even right" → `research`
     3. **Contrast helps.** If your own provider matches what preferences would pick,
        swap to a different family on purpose — fresh perspective is the point.
-    4. Use the selected role's `settings` entry for its configured model. Keep the
-       advisor `autonomy` at `ReadOnly` regardless of that setting. Omit
-       `sandboxMode` so Andy inherits this session's approvals (Full / allow-
-       everything parents keep network access on the advisor).
+    4. Use the selected role's `settings` entry for its configured model and
+       reasoningEffort. Keep the advisor `autonomy` at `ReadOnly` regardless of that
+       setting. Omit `sandboxMode` so Andy inherits this session's approvals (Full /
+       allow-everything parents keep network access on the advisor).
     5. Confirm readiness via `chat.composer_options` before launching.
 
     ## The briefing
@@ -486,8 +511,9 @@ internal val ANDY_COMMITTEE_SKILL: String =
 
     Override only when the user explicitly asks for different members.
 
-    Pass each selected role's configured model from the `settings` map. Committee
-    members remain `autonomy: "ReadOnly"` regardless of configured permissions.
+    Pass each selected role's configured model and reasoningEffort from the
+    `settings` map. Committee members remain `autonomy: "ReadOnly"` regardless of
+    configured permissions.
 
     ## Hard rules
 
@@ -554,4 +580,137 @@ internal val ANDY_COMMITTEE_SKILL: String =
     After ~10 iterations without convergence, start a fresh committee with the full
     history of what was tried — the current committee's context may have drifted
     too far.
+    """.trimIndent() + "\n"
+
+internal val ANDY_SWARM_SKILL: String =
+    """
+    ---
+    name: andy-swarm
+    description: Single lead agent that decomposes a large task into N worktree-isolated workers, tracks them on Andy's kanban board, and incrementally merges results. Use when the user says "swarm", "fan out", "parallelize this", or wants many subagents on one large task.
+    user-invocable: true
+    argument-hint: "[--workers N] [--provider <Kind>] [--yes] [--cleanup] <task>"
+    ---
+
+    # Andy Swarm
+
+    You are the **lead**. You decompose, spawn workers, wait, merge, and report.
+    Workers do not talk to each other. You integrate.
+
+    **User's arguments:** ${'$'}ARGUMENTS
+
+    Cost note: say the effective concurrency once up front (prefs `swarm.workers`
+    or `--workers`, plus this lead) so the user knows the spend.
+
+    ## Prerequisites
+
+    Read the **andy-orchestration** skill first. Before choosing providers or
+    swarm defaults, read `~/.andy/orchestration-preferences.json` unless a CLI
+    flag already pinned that value (`--provider`, `--workers`, `--yes`,
+    `--cleanup`). Confirm readiness via `chat.composer_options`.
+
+    If this task does not already have `attachAndyMcp` on, none of the orchestration
+    or kanban tools below are reachable — say so plainly and stop. Restart as a new
+    task with the andy-orchestration skill's MCP attach requirement in mind.
+
+    ## Parsing arguments
+
+    Resolve each setting as: CLI flag if present → else `swarm` block in
+    preferences → else built-in default.
+
+    - `--workers N` — concurrency cap (prefs `swarm.workers`, else **4**). Lead
+      still decides total subtask count; this only limits how many run at once.
+      Clamp to 1–16 if prefs are out of range.
+    - `--provider <Kind>` — pin every worker to that AgentKind; otherwise route by
+      role (`impl` default; `ui` / `research` when the subtask warrants it).
+    - `--yes` — skip the approval pause after cards are written (prefs
+      `swarm.skipApproval`, else false).
+    - `--cleanup` — after the report, delete worker chats/worktrees you created
+      (prefs `swarm.cleanup`, else false / leave them in place).
+    - Remaining text is the task.
+
+    ## Hard rules
+
+    - **One worktree per worker** (`useWorktree: true`). You merge into a swarm base.
+    - **Record the base SHA** at spawn time. Refuse to merge if the base moved under
+      you unexpectedly (user commits mid-swarm).
+    - **Incremental merge** as each worker finishes. Conflicts bounce back to that
+      worker via `chat.resume` with the conflict text — do not take over their files.
+    - **Build/tests gate merges.** Run the project's build/tests in the worker's
+      worktree before merging. Failure → resume that worker with the output
+      (max **2** retries), then move its card to Blocked and escalate.
+    - **Wait with `chat.await`**, not a sleep/`chat.status` fan-out. Fallback only
+      if `chat.await` is missing (older Andy): use the orchestration skill's
+      15–30s poll loop.
+    - **Blocked workers:** answer plan-covered questions via `chat.respond`.
+      Anything outside the plan → escalate to the user.
+    - Titles: `[Swarm] <short subtask>`.
+
+    ## Phase 1: Decompose
+
+    Read the task. Produce independent subtasks, each as file-set-disjoint as
+    possible. Decide subtask count yourself; concurrency is capped by the
+    resolved workers value (`--workers` / prefs / 4).
+
+    ## Phase 2: Plan to board
+
+    1. Resolve `projectId` (inherit from this chat / `project.list`).
+    2. Adopt a parent card from provenance `kanbanCardId` if present; otherwise
+       `kanban.card_create` a parent on the Todo (or Doing) lane with a shared
+       `swarmRunId` (e.g. `swarm-<timestamp>`).
+    3. Create one child card per subtask with `parentCardId` + the same `swarmRunId`.
+    4. **Stop and wait for go-ahead** unless `--yes` or prefs `swarm.skipApproval`
+       is true. Show the card titles and planned concurrency. Do not spawn until
+       approved.
+
+    ## Phase 3: Spawn
+
+    Up to the resolved workers value concurrent via `chat.start`:
+
+    - `useWorktree: true`
+    - `notifyParentOnCompletion: true`
+    - title `[Swarm] …`
+    - provider from `--provider` or role routing (`impl` / `ui` / `research`)
+    - pass the role's configured `model` and `reasoningEffort` when present
+    - omit `autonomy` so workers inherit this lead's dial (unless a role's
+      preferences set an explicit autonomy)
+
+    After each start, `kanban.card_link_chat` the worker task id to its card.
+
+    Keep a backlog of not-yet-spawned subtasks.
+
+    ## Phase 4: Wait (do not poll)
+
+    ```
+    chat.await(taskIds: <active worker ids>, until: "any", timeoutSeconds: 120)
+    ```
+
+    - Returns when a worker finishes (Done/Error) or blocks.
+    - On `timedOut: true`, re-arm with the same set.
+    - Only call `chat.list` / `chat.status` if a re-arm result looks inconsistent.
+
+    You may also receive a queued follow-up ("worker `…` finished: …") when idle —
+    treat that the same as an await hit for that worker.
+
+    ## Phase 5: Handle the returned worker
+
+    **Blocked** → answer from the plan (`chat.respond`) or escalate (decision 10).
+
+    **Terminal (Done/Error):**
+    1. Run project build/tests in that worker's worktree.
+    2. On failure: `chat.resume` with the output; count toward the 2-retry budget;
+       then card → Blocked lane (`kanban.card_move` or `kanban.lane_set_role` + move)
+       and escalate.
+    3. On pass: merge its branch into the swarm base. On conflict, `chat.resume`
+       that worker with the conflict (do not merge yourself).
+    4. Refill the concurrency slot from the backlog; `chat.await` again on the
+       new active set.
+
+    ## Phase 6: Report
+
+    Summarize merged vs blocked subtasks, worker task ids, worktree paths, and
+    branches. Leave worktrees and chats unless `--cleanup` or prefs
+    `swarm.cleanup` is true.
+
+    If `chat.await` or `kanban.*` tools are missing, say which Andy version feature
+    is required and fall back to the orchestration poll loop / manual board notes.
     """.trimIndent() + "\n"

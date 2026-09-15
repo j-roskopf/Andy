@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class DesktopKanbanServiceTest {
     private val projectId = "project-1"
@@ -54,7 +55,8 @@ class DesktopKanbanServiceTest {
 
     @Test
     fun cardCrud() = withService { service ->
-        service.addCard(projectId, "todo", "First", "Details", listOf("alpha", "beta"))
+        val cardId = service.addCard(projectId, "todo", "First", "Details", listOf("alpha", "beta"))
+        assertEquals(service.board().lanes.first().cards.single().id, cardId)
         val card = service.board().lanes.first().cards.single()
         assertEquals("First", card.title)
         assertEquals(listOf("alpha", "beta"), card.tags)
@@ -66,6 +68,41 @@ class DesktopKanbanServiceTest {
 
         service.deleteCard(projectId, card.id)
         assertTrue(service.board().lanes.first().cards.isEmpty())
+    }
+
+    @Test
+    fun addCardReturnsIdAndSupportsParentLinkage() = withService { service ->
+        val parentId = service.addCard(projectId, "todo", "Parent", "", emptyList(), swarmRunId = "swarm-1")!!
+        val childId = service.addCard(
+            projectId,
+            "todo",
+            "Child",
+            "",
+            emptyList(),
+            parentCardId = parentId,
+            swarmRunId = "swarm-1",
+        )!!
+        val child = service.board().lanes.first().cards.single { it.id == childId }
+        assertEquals(parentId, child.parentCardId)
+        assertEquals("swarm-1", child.swarmRunId)
+    }
+
+    @Test
+    fun moveCardPinsAndMirrorRespectsPin() = withService { service ->
+        val cardId = service.addCard(projectId, "todo", "Pinned", "", emptyList())!!
+        service.moveCard(projectId, cardId, "doing", 0)
+        val moved = service.board().lanes.first { it.id == "doing" }.cards.single { it.id == cardId }
+        assertTrue(moved.lanePinned)
+
+        service.mirrorCardStatus(projectId, cardId, app.andy.model.AgentStatus.Done)
+        assertTrue(
+            service.board().lanes.first { it.id == "doing" }.cards.any { it.id == cardId },
+            "pin must block mirror move to done",
+        )
+
+        service.setCardPinned(projectId, cardId, pinned = false)
+        service.mirrorCardStatus(projectId, cardId, app.andy.model.AgentStatus.Done)
+        assertTrue(service.board().lanes.first { it.id == "done" }.cards.any { it.id == cardId })
     }
 
     @Test

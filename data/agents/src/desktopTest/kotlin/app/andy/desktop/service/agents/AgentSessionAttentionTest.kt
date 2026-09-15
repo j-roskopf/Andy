@@ -1,6 +1,7 @@
 package app.andy.desktop.service.agents
 
 import app.andy.model.AgentKind
+import app.andy.model.AgentLaneKind
 import app.andy.model.AgentStatus
 import app.andy.model.AgentTask
 import app.andy.model.ProjectWorkflowStage
@@ -173,5 +174,125 @@ class AgentSessionAttentionTest {
     fun pendingGrillMeFollowUpSkipsPriorTurnFinish() {
         assertTrue(shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp = true))
         assertFalse(shouldSkipAcpFinishForPendingGrillMeFollowUp(pendingFollowUp = false))
+    }
+
+    /** task-0a981ba136: final plan streamed, hook wrote `done`, no stop reason ever arrived. */
+    @Test
+    fun hookDoneDuringStreamingAcpTurnLooksHung() {
+        assertTrue(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT + 56_000L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = false,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+    }
+
+    @Test
+    fun hookDoneFromAnEarlierTurnIsNotHung() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT - 1L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = false,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+    }
+
+    @Test
+    fun hookDoneWithNoTurnInFlightIsNotHung() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT + 56_000L,
+                turnStartedAt = null,
+                stopRequested = false,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+    }
+
+    /** Grill-me rounds write `blocked` then `done` while the turn is still settling into its park. */
+    @Test
+    fun hookDoneWithQuestionStillOnDiskIsNotHung() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT + 8_000L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = false,
+                hasPendingQuestion = true,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+    }
+
+    @Test
+    fun hookDoneBehindAQueuedAnswerFollowUpIsNotHung() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT + 8_000L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = false,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = true,
+            ),
+        )
+    }
+
+    @Test
+    fun hookDoneIsNotHungOnceStopRequestedOrTurnSettled() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask(),
+                hookAtMillis = TURN_STARTED_AT + 56_000L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = true,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+        for (settled in listOf(AgentStatus.Done, AgentStatus.Blocked, AgentStatus.Error)) {
+            assertFalse(
+                acpTurnLooksHung(
+                    task = acpTask(status = settled),
+                    hookAtMillis = TURN_STARTED_AT + 56_000L,
+                    turnStartedAt = TURN_STARTED_AT,
+                    stopRequested = false,
+                    hasPendingQuestion = false,
+                    hasPendingGrillMeFollowUp = false,
+                ),
+                "$settled is not a turn in flight",
+            )
+        }
+    }
+
+    @Test
+    fun terminalLaneNeverUsesTheHookDoneFallback() {
+        assertFalse(
+            acpTurnLooksHung(
+                task = acpTask().copy(lane = AgentLaneKind.Terminal),
+                hookAtMillis = TURN_STARTED_AT + 56_000L,
+                turnStartedAt = TURN_STARTED_AT,
+                stopRequested = false,
+                hasPendingQuestion = false,
+                hasPendingGrillMeFollowUp = false,
+            ),
+        )
+    }
+
+    private fun acpTask(status: AgentStatus = AgentStatus.Working) =
+        task(status).copy(agent = AgentKind.ClaudeCode, lane = AgentLaneKind.Acp)
+
+    private companion object {
+        const val TURN_STARTED_AT = 1789412458000L
     }
 }

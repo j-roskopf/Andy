@@ -790,6 +790,138 @@ class CursorPlanBackfillTest {
     }
 }
 
+/**
+ * Regression: Stop must win a race against an in-flight send/resume. Previously the first
+ * Stop could finalize the task while launch/resume kept going and revived Working — users
+ * had to mash Stop several times.
+ */
+class AgentStopRaceTest {
+    @Test
+    fun stopImmediatelyAfterStartLeavesTheChatStopped() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-stop-race-start", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(
+                AgentStoreState(
+                    binaryOverrides = harnessBinaryOverrides(),
+                    providerDefaults = harnessTerminalProviderDefaults(),
+                ),
+            )
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "stop race start",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            // Do not wait for Working — Stop must beat the still-spawning launch.
+            service.stop(task.id)
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    if (current.stoppedByUser && !current.isActive) break
+                    delay(25)
+                }
+            }
+            // Give a late relaunch a chance to appear if the race bug regresses.
+            delay(750)
+            val current = service.tasks.value.first { it.id == task.id }
+            assertEquals(AgentStatus.Done, current.status)
+            assertTrue(current.stoppedByUser)
+            assertFalse(current.isActive)
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun stopImmediatelyAfterResumeLeavesTheChatStopped() = runBlocking {
+        val shell = File("/bin/sh")
+        if (!shell.canExecute()) return@runBlocking
+        val dir = File.createTempFile("andy-agent-stop-race-resume", null).also {
+            it.delete()
+            it.mkdirs()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        var service: DesktopAgentRunService? = null
+        try {
+            val store = DesktopAgentTaskStore(File(dir, "agents.db"))
+            store.save(
+                AgentStoreState(
+                    binaryOverrides = harnessBinaryOverrides(),
+                    providerDefaults = harnessTerminalProviderDefaults(),
+                ),
+            )
+            service = DesktopAgentRunService(
+                scope = scope,
+                store = store,
+                locator = AgentCliLocator(),
+                adapters = mapOf(AgentKind.Codex to QueueTestAdapter()),
+                worktrees = WorktreeManager(File(dir, "worktrees")),
+                mcp = FakeMcp(),
+                workspaceStore = FakeWorkspaceStore(),
+                actionConfig = FakeActionConfig(),
+                enableProbes = false,
+                terminalMode = AgentTerminalMode.DirectPty,
+            )
+            val task = service.createAndStart(
+                AgentTaskDraft(
+                    title = "stop race resume",
+                    prompt = "first message",
+                    agent = AgentKind.Codex,
+                    projectId = null,
+                    directory = dir.absolutePath,
+                ),
+            )
+            withTimeout(harnessTimeoutMillis(60_000, 180_000)) {
+                while (service.tasks.value.first { it.id == task.id }.status != AgentStatus.Working) delay(25)
+            }
+
+            service.resume(task.id, "follow-up that must not keep running")
+            service.stop(task.id)
+            withTimeout(harnessTimeoutMillis(30_000, 120_000)) {
+                while (true) {
+                    val current = service.tasks.value.first { it.id == task.id }
+                    if (current.stoppedByUser && !current.isActive) break
+                    delay(25)
+                }
+            }
+            delay(750)
+            val current = service.tasks.value.first { it.id == task.id }
+            assertEquals(AgentStatus.Done, current.status)
+            assertTrue(current.stoppedByUser)
+            assertFalse(current.isActive)
+        } finally {
+            runCatching { service?.close() }
+            scope.cancel()
+            dir.deleteRecursively()
+        }
+    }
+}
+
 private class UserInputTestAdapter : AgentCliAdapter {
     override val kind = AgentKind.Codex
 

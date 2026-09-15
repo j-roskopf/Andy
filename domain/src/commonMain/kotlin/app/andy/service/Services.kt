@@ -958,17 +958,40 @@ enum class KanbanLaneDirection { Left, Right }
 interface KanbanService {
     val boards: StateFlow<Map<String, KanbanBoard>>
 
-    fun addLane(projectId: String, name: String)
+    /** Creates a lane and returns its id, or null if [name] is blank. */
+    fun addLane(projectId: String, name: String): String?
     fun renameLane(projectId: String, laneId: String, name: String)
     /** Deletes the lane and all its cards. Caller (UI) must confirm first. No-ops if this is the last lane. */
     fun deleteLane(projectId: String, laneId: String)
     fun moveLane(projectId: String, laneId: String, direction: KanbanLaneDirection)
+    fun setLaneRole(projectId: String, laneId: String, role: KanbanLaneRole?)
 
-    fun addCard(projectId: String, laneId: String, title: String, description: String, tags: List<String>)
+    /**
+     * Creates a card and returns its id, or null if [title] is blank / [laneId] missing.
+     * [parentCardId] / [swarmRunId] support swarm hierarchies (decisions 1, 14).
+     */
+    fun addCard(
+        projectId: String,
+        laneId: String,
+        title: String,
+        description: String,
+        tags: List<String>,
+        parentCardId: String? = null,
+        swarmRunId: String? = null,
+    ): String?
     fun updateCard(projectId: String, cardId: String, title: String, description: String, tags: List<String>)
     fun deleteCard(projectId: String, cardId: String)
-    /** Moves [cardId] to [toLaneId] at position [toIndex] (0-based, post-removal index in the target lane). */
+    /**
+     * Moves [cardId] to [toLaneId] at position [toIndex] (0-based, post-removal index in the target lane).
+     * Sets [KanbanCard.lanePinned] so status mirroring suspends until unpin (decision 15).
+     */
     fun moveCard(projectId: String, cardId: String, toLaneId: String, toIndex: Int)
+    fun setCardPinned(projectId: String, cardId: String, pinned: Boolean)
+    /**
+     * Moves a card to the lane holding [status]'s role without pinning.
+     * No-ops when the card is pinned or has children.
+     */
+    fun mirrorCardStatus(projectId: String, cardId: String, status: AgentStatus)
     fun linkChat(projectId: String, cardId: String, chatTaskId: String)
     fun deleteBoard(projectId: String)
 }

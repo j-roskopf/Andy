@@ -11,6 +11,7 @@ import app.andy.desktop.service.remote.SwappableLocalServerService
 import app.andy.desktop.service.agents.AgentCliLocator
 import app.andy.desktop.service.agents.AgentTerminalMode
 import app.andy.desktop.service.agents.AntigravityAdapter
+import app.andy.desktop.service.agents.ChatCompletionNotifier
 import app.andy.desktop.service.agents.ClaudeCodeAdapter
 import app.andy.desktop.service.agents.CodexAdapter
 import app.andy.desktop.service.agents.CursorAdapter
@@ -252,7 +253,19 @@ fun createDaemonRuntime(
         actionRuns = actionRuns,
         andyVersion = { AndyBuildInfo.versionName },
     ).also { it.attachAgentEvents(agentRuns) }
-    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins, chatAttachmentService)
+    val kanban = DesktopKanbanService(agentTaskStore)
+    val swarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val chatCompletionNotifier = ChatCompletionNotifier(agentRuns, swarmScope).also { it.start() }
+    DesktopKanbanStatusMirror(agentRuns, kanban, swarmScope).also { it.start() }
+    mcp.bindAgentServices(
+        agentRuns,
+        agentRuns,
+        automations,
+        plugins,
+        chatAttachmentService,
+        kanban = kanban,
+        chatCompletionNotifier = chatCompletionNotifier,
+    )
     val agentRetention = DesktopAgentRetentionService(
         runService = agentRuns,
         store = agentTaskStore,
@@ -260,7 +273,6 @@ fun createDaemonRuntime(
         workspace = store.state,
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     ).also { it.start() }
-    val kanban = DesktopKanbanService(agentTaskStore)
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
     val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 
@@ -829,7 +841,19 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         actionRuns = actionRuns,
         andyVersion = { AndyBuildInfo.versionName },
     ).also { it.attachAgentEvents(agentRuns) }
-    mcp.bindAgentServices(agentRuns, agentRuns, automations, plugins, chatAttachmentService)
+    val kanban = DesktopKanbanService(agentTaskStore)
+    val swarmScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val chatCompletionNotifier = ChatCompletionNotifier(agentRuns, swarmScope).also { it.start() }
+    DesktopKanbanStatusMirror(agentRuns, kanban, swarmScope).also { it.start() }
+    mcp.bindAgentServices(
+        agentRuns,
+        agentRuns,
+        automations,
+        plugins,
+        chatAttachmentService,
+        kanban = kanban,
+        chatCompletionNotifier = chatCompletionNotifier,
+    )
     plugins.runStartupHooks()
     val attachStoreDir = File(System.getProperty("java.io.tmpdir"), "andy-gui-attach").also { it.mkdirs() }
     val localAttach = DesktopAgentRunService(
@@ -914,7 +938,6 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         workspace = store.state,
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     ).also { it.start() }
-    val kanban = DesktopKanbanService(agentTaskStore)
     val (voiceSetup, voiceDictation) = createDesktopVoicePair()
     val orchestrationPreferences = DesktopOrchestrationPreferencesService()
 

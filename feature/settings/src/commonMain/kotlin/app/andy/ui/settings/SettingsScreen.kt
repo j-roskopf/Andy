@@ -99,6 +99,7 @@ import app.andy.model.McpHubAuthKind
 import app.andy.model.McpHubServerConnectionState
 import app.andy.model.OrchestrationPreferences
 import app.andy.model.OrchestrationProviderRole
+import app.andy.model.SwarmOrchestrationSettings
 import app.andy.model.ProxyStartOptions
 import app.andy.model.TerminalFontFamily
 import app.andy.model.TerminalThemePreset
@@ -1013,6 +1014,7 @@ private fun OrchestrationPreferencesPanel(
     // Keep notes draft independent of normalized prefs so trailing newlines/spaces aren't wiped mid-edit.
     var notesText by remember { mutableStateOf(prefs.preferences.joinToString("\n")) }
     var expandedMenu by remember { mutableStateOf<Pair<OrchestrationProviderRole, OrchestrationMenu>?>(null) }
+    var workersText by remember(prefs.swarm.workers) { mutableStateOf(prefs.swarm.workers.toString()) }
 
     fun persist(next: OrchestrationPreferences) {
         val normalized = next.normalized()
@@ -1022,23 +1024,37 @@ private fun OrchestrationPreferencesPanel(
 
     SettingsGroup(
         title = "Orchestration",
-        description = "Default providers for /andy-loop, handoff, advisor, and committee. " +
-                "Choose a model and permission dial for each role; unset values inherit the provider " +
-                "default or the parent task. Loop uses Implementation as the worker and Audit as the verifier. " +
-                "Saved to ~/.andy/orchestration-preferences.json.",
+        description = "Default providers for /andy-loop, handoff, advisor, committee, and swarm. " +
+                "Choose a model, reasoning level (when the model supports it), and permission dial for each role; " +
+                "unset values inherit the provider default or the parent task. Loop uses Implementation as the " +
+                "worker and Audit as the verifier. Swarm keeps this chat as lead and defaults workers to " +
+                "Implementation (UI/research by role). Saved to ~/.andy/orchestration-preferences.json.",
         ) {
         OrchestrationProviderRole.entries.forEach { role ->
             val roleSettings = prefs.settingsFor(role)
             val agent = prefs.agentFor(role)
             val modelOptions = AgentModelCatalog.options(agent, providerModels)
-            val modelLabel = roleSettings.model?.let { model ->
-                AgentModelCatalog.option(agent, model, providerModels)?.label ?: model
-            } ?: if (agent.isModelBackend) "choose a model" else "provider default"
+            val selectedModel = roleSettings.model?.let { model ->
+                AgentModelCatalog.option(agent, model, providerModels)
+            }
+            val modelLabel = selectedModel?.label
+                ?: roleSettings.model
+                ?: if (agent.isModelBackend) "choose a model" else "provider default"
+            val effortOptions = selectedModel?.efforts.orEmpty()
             val runtime = prefs.runtimeFor(role)
             val pickerLabel = if (agent.isModelBackend) {
                 "${agent.label} · ${(runtime ?: app.andy.model.LocalAgentRuntime.OpenCode).label}"
             } else {
                 agent.label
+            }
+            fun persistModel(modelId: String?) {
+                val nextModel = modelId?.let { AgentModelCatalog.option(agent, it, providerModels) }
+                val currentEffort = prefs.reasoningEffortFor(role)
+                var next = prefs.withModel(role, modelId)
+                if (currentEffort != null && (nextModel == null || currentEffort !in nextModel.efforts)) {
+                    next = next.withReasoningEffort(role, null)
+                }
+                persist(next)
             }
             Row(
                 Modifier.fillMaxWidth(),
@@ -1051,7 +1067,7 @@ private fun OrchestrationPreferencesPanel(
                     fontSize = 13.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(172.dp),
+                    modifier = Modifier.width(148.dp),
                 )
                 Box(Modifier.weight(1f)) {
                     ChoicePill(
@@ -1072,18 +1088,26 @@ private fun OrchestrationPreferencesPanel(
                                 text = { Text(option.label, color = TextPrimary) },
                                 onClick = {
                                     val next = prefs.withAgent(role, option.agent).withRuntime(role, option.localRuntime)
-                                    val selectedModel = next.settingsFor(role).model
-                                    persist(
-                                        if (option.agent.isModelBackend) {
-                                            if (selectedModel != null && AgentModelCatalog.option(option.agent, selectedModel, providerModels) != null) {
-                                                next
-                                            } else {
-                                                next.withModel(role, null)
-                                            }
-                                        } else if (selectedModel == null || AgentModelCatalog.option(option.agent, selectedModel, providerModels) != null) {
-                                            next
-                                        } else {
+                                    val selectedModelId = next.settingsFor(role).model
+                                    val modelStillValid = selectedModelId != null &&
+                                        AgentModelCatalog.option(option.agent, selectedModelId, providerModels) != null
+                                    val withModel = when {
+                                        option.agent.isModelBackend && !modelStillValid -> next.withModel(role, null)
+                                        !option.agent.isModelBackend && selectedModelId != null && !modelStillValid ->
                                             next.withModel(role, null)
+                                        else -> next
+                                    }
+                                    val keptModel = withModel.settingsFor(role).model?.let { id ->
+                                        AgentModelCatalog.option(option.agent, id, providerModels)
+                                    }
+                                    val currentEffort = withModel.reasoningEffortFor(role)
+                                    persist(
+                                        if (currentEffort != null &&
+                                            (keptModel == null || currentEffort !in keptModel.efforts)
+                                        ) {
+                                            withModel.withReasoningEffort(role, null)
+                                        } else {
+                                            withModel
                                         },
                                     )
                                     expandedMenu = null
@@ -1109,7 +1133,7 @@ private fun OrchestrationPreferencesPanel(
                         DropdownMenuItem(
                             text = { Text(if (agent.isModelBackend) "choose a model" else "provider default", color = TextPrimary) },
                             onClick = {
-                                persist(prefs.withModel(role, null))
+                                persistModel(null)
                                 expandedMenu = null
                             },
                             enabled = !agent.isModelBackend,
@@ -1118,11 +1142,56 @@ private fun OrchestrationPreferencesPanel(
                             DropdownMenuItem(
                                 text = { Text(option.label, color = TextPrimary) },
                                 onClick = {
-                                    persist(prefs.withModel(role, option.id))
+                                    persistModel(option.id)
                                     expandedMenu = null
                                 },
                             )
                         }
+                    }
+                }
+                Box(Modifier.weight(1f)) {
+                    if (effortOptions.isNotEmpty()) {
+                        ChoicePill(
+                            label = prefs.reasoningEffortFor(role)?.label ?: "provider default",
+                            selected = true,
+                            contentDescription = "${role.label} reasoning",
+                            onClick = { expandedMenu = role to OrchestrationMenu.Reasoning },
+                            menu = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        DropdownMenu(
+                            expanded = expandedMenu == (role to OrchestrationMenu.Reasoning),
+                            onDismissRequest = { expandedMenu = null },
+                            containerColor = AndyColors.Neutral750,
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("provider default", color = TextPrimary) },
+                                onClick = {
+                                    persist(prefs.withReasoningEffort(role, null))
+                                    expandedMenu = null
+                                },
+                            )
+                            effortOptions.forEach { effort ->
+                                DropdownMenuItem(
+                                    text = { Text(effort.label, color = TextPrimary) },
+                                    onClick = {
+                                        persist(prefs.withReasoningEffort(role, effort))
+                                        expandedMenu = null
+                                    },
+                                )
+                            }
+                        }
+                    } else {
+                        // Keep the column so provider / model / reasoning / permissions stay aligned
+                        // when this model (or provider default) has no effort dial.
+                        ChoicePill(
+                            label = "—",
+                            selected = true,
+                            contentDescription = "${role.label} reasoning unavailable",
+                            onClick = {},
+                            menu = false,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
                 Box(Modifier.weight(1f)) {
@@ -1178,11 +1247,61 @@ private fun OrchestrationPreferencesPanel(
             colors = fieldColors(),
         )
     }
+
+    val swarm = prefs.swarm
+    SettingsGroup(
+        title = "Swarm",
+        description = "Defaults for /andy-swarm. Per-invocation flags (--workers, --yes, --cleanup) " +
+            "override these. Workers still use one git worktree each; that is not configurable.",
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Concurrent workers", color = TextSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            TextField(
+                value = workersText,
+                onValueChange = { value ->
+                    val filtered = value.filter(Char::isDigit).take(2)
+                    workersText = filtered
+                    filtered.toIntOrNull()
+                        ?.takeIf { it in SwarmOrchestrationSettings.MinWorkers..SwarmOrchestrationSettings.MaxWorkers }
+                        ?.let { persist(prefs.withSwarmWorkers(it)) }
+                },
+                modifier = Modifier.width(64.dp).defaultMinSize(minHeight = AndyLayout.FieldHeight),
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(
+                    color = TextPrimary,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                ),
+                colors = fieldColors(),
+            )
+            Text(
+                "(${SwarmOrchestrationSettings.MinWorkers}–${SwarmOrchestrationSettings.MaxWorkers})",
+                color = AndyColors.TextTertiary,
+                fontSize = 12.sp,
+            )
+        }
+        SettingsToggleRow(
+            label = "Skip plan approval",
+            checked = swarm.skipApproval,
+            onCheckedChange = { value -> persist(prefs.withSwarmSkipApproval(value)) },
+            description = "Spawn workers as soon as kanban cards are written (same as --yes).",
+        )
+        SettingsToggleRow(
+            label = "Clean up worker chats & worktrees",
+            checked = swarm.cleanup,
+            onCheckedChange = { value -> persist(prefs.withSwarmCleanup(value)) },
+            description = "After the final report, delete chats and worktrees this swarm created (same as --cleanup).",
+        )
+    }
 }
 
 private enum class OrchestrationMenu {
     Provider,
     Model,
+    Reasoning,
     Autonomy,
 }
 

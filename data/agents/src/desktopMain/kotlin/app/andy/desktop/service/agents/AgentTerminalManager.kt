@@ -1027,6 +1027,13 @@ class AgentTerminalManager(
     fun liveSessionStatus(taskId: String): AgentStatus? =
         handles[taskId]?.statusTracker?.status?.value?.status
 
+    /** Re-run hook + scrape publish for an attached session; returns the latest snapshot. */
+    fun refreshStatus(taskId: String): AgentStatusSnapshot? {
+        val tracker = handles[taskId]?.statusTracker ?: return null
+        tracker.refresh()
+        return tracker.status.value
+    }
+
     /**
      * Blocks until the agent turn is finished. For tmux-backed sessions the pane may
      * keep a shell alive after the CLI exits, so completion is inferred from scrape

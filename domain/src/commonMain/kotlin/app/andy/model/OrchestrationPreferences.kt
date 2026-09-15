@@ -2,7 +2,7 @@ package app.andy.model
 
 import kotlinx.serialization.Serializable
 
-/** Role keys in `~/.andy/orchestration-preferences.json` used by andy-loop / handoff / committee. */
+/** Role keys in `~/.andy/orchestration-preferences.json` used by andy-loop / handoff / swarm / committee. */
 enum class OrchestrationProviderRole(
     val key: String,
     val label: String,
@@ -22,6 +22,8 @@ enum class OrchestrationProviderRole(
 data class OrchestrationRoleSettings(
     /** Null keeps the selected provider's default model. */
     val model: String? = null,
+    /** Null keeps the provider's default reasoning level. */
+    val reasoningEffort: String? = null,
     /** Null keeps the parent task's permission dial (or Standard for a root task). */
     val autonomy: String? = null,
     /** OpenCode / Pi / Goose when the role provider is Ollama or LM Studio. */
@@ -29,11 +31,48 @@ data class OrchestrationRoleSettings(
 ) {
     fun normalized(): OrchestrationRoleSettings = copy(
         model = model?.trim()?.takeIf { it.isNotEmpty() },
+        reasoningEffort = reasoningEffort
+            ?.trim()
+            ?.let { value ->
+                AgentReasoningEffort.entries.firstOrNull {
+                    it.name.equals(value, ignoreCase = true) ||
+                        it.cliValue.equals(value, ignoreCase = true)
+                }?.name
+            },
         autonomy = autonomy
             ?.trim()
             ?.let { value -> AgentAutonomy.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }?.name },
         runtime = parseLocalAgentRuntime(runtime)?.name,
     )
+
+    fun isEmpty(): Boolean =
+        model == null && reasoningEffort == null && autonomy == null && runtime == null
+}
+
+/**
+ * Defaults for `/andy-swarm`. CLI flags (`--workers`, `--yes`, `--cleanup`) override
+ * these when present; otherwise the skill reads this block from
+ * `~/.andy/orchestration-preferences.json`.
+ */
+@Serializable
+data class SwarmOrchestrationSettings(
+    /** Concurrent worker cap (not total subtask count). */
+    val workers: Int = DefaultWorkers,
+    /** After the final report, delete worker chats/worktrees the lead created. */
+    val cleanup: Boolean = false,
+    /** Skip the plan-approval pause after kanban cards are written (`--yes`). */
+    val skipApproval: Boolean = false,
+) {
+    fun normalized(): SwarmOrchestrationSettings = copy(
+        workers = workers.coerceIn(MinWorkers, MaxWorkers),
+    )
+
+    companion object {
+        const val DefaultWorkers = 4
+        const val MinWorkers = 1
+        const val MaxWorkers = 16
+        val Defaults = SwarmOrchestrationSettings()
+    }
 }
 
 @Serializable
@@ -41,6 +80,8 @@ data class OrchestrationPreferences(
     val providers: Map<String, String> = emptyMap(),
     /** Optional model/permission overrides keyed by role, e.g. `impl` or `audit`. */
     val settings: Map<String, OrchestrationRoleSettings> = emptyMap(),
+    /** Swarm concurrency / cleanup defaults for `/andy-swarm`. */
+    val swarm: SwarmOrchestrationSettings = SwarmOrchestrationSettings.Defaults,
     val preferences: List<String> = emptyList(),
 ) {
     fun agentFor(role: OrchestrationProviderRole): AgentKind {
@@ -71,7 +112,7 @@ data class OrchestrationPreferences(
     ): OrchestrationPreferences {
         val normalized = roleSettings.normalized()
         val next = settings.toMutableMap()
-        if (normalized.model == null && normalized.autonomy == null && normalized.runtime == null) {
+        if (normalized.isEmpty()) {
             next.remove(role.key)
         } else {
             next[role.key] = normalized
@@ -81,6 +122,17 @@ data class OrchestrationPreferences(
 
     fun withModel(role: OrchestrationProviderRole, model: String?): OrchestrationPreferences =
         withSettings(role, settingsFor(role).copy(model = model))
+
+    fun reasoningEffortFor(role: OrchestrationProviderRole): AgentReasoningEffort? =
+        settingsFor(role).reasoningEffort?.let { value ->
+            AgentReasoningEffort.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
+        }
+
+    fun withReasoningEffort(
+        role: OrchestrationProviderRole,
+        effort: AgentReasoningEffort?,
+    ): OrchestrationPreferences =
+        withSettings(role, settingsFor(role).copy(reasoningEffort = effort?.name))
 
     fun withAutonomy(role: OrchestrationProviderRole, autonomy: AgentAutonomy?): OrchestrationPreferences =
         withSettings(role, settingsFor(role).copy(autonomy = autonomy?.name))
@@ -94,6 +146,18 @@ data class OrchestrationPreferences(
     fun withPreferenceNotes(notes: List<String>): OrchestrationPreferences =
         copy(preferences = notes.map { it.trim() }.filter { it.isNotEmpty() })
 
+    fun withSwarm(swarm: SwarmOrchestrationSettings): OrchestrationPreferences =
+        copy(swarm = swarm.normalized())
+
+    fun withSwarmWorkers(workers: Int): OrchestrationPreferences =
+        withSwarm(swarm.copy(workers = workers))
+
+    fun withSwarmCleanup(cleanup: Boolean): OrchestrationPreferences =
+        withSwarm(swarm.copy(cleanup = cleanup))
+
+    fun withSwarmSkipApproval(skipApproval: Boolean): OrchestrationPreferences =
+        withSwarm(swarm.copy(skipApproval = skipApproval))
+
     fun normalized(): OrchestrationPreferences {
         val providers = OrchestrationProviderRole.entries.associate { role ->
             val raw = this.providers[role.key] ?: Defaults.providers.getValue(role.key)
@@ -104,6 +168,7 @@ data class OrchestrationPreferences(
             settings = settings
                 .filterKeys { key -> OrchestrationProviderRole.entries.any { it.key == key } }
                 .mapValues { (_, value) -> value.normalized() },
+            swarm = swarm.normalized(),
             preferences = preferences.map { it.trim() }.filter { it.isNotEmpty() },
         )
     }
@@ -148,6 +213,8 @@ fun orchestrationSkillProviderHint(
             "planning ${label(OrchestrationProviderRole.Planning)} · " +
                 "research ${label(OrchestrationProviderRole.Research)} · " +
                 "audit ${label(OrchestrationProviderRole.Audit)}"
+        "andy-swarm" ->
+            "lead (this chat) · workers ${label(OrchestrationProviderRole.Impl)}"
         else -> null
     }
 }

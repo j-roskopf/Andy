@@ -58,6 +58,8 @@ import app.andy.ui.components.ChatMessageMetadata
 import app.andy.ui.components.LocalChatFindHighlight
 import app.andy.ui.components.PlatformLazyListScrollbar
 import app.andy.ui.components.TextButton
+import app.andy.ui.components.activeRangeInLeaf
+import app.andy.ui.components.appendFindHighlighted
 import app.andy.ui.components.highlightFindMatches
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -91,11 +93,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -757,29 +762,24 @@ fun AgentTranscript(
                                     },
                                 ) {
                                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        originalPrompt?.takeIf { it.isNotBlank() }?.let { prompt ->
-                                            if (!isSkillOnlyMessage(prompt, originalSkills)) {
-                                                ChatUserText(boundedUserMessagePreview(prompt))
-                                            }
+                                        val displayPrompt = when {
+                                            !originalPrompt.isNullOrBlank() -> appendMissingSkillTokens(
+                                                originalPrompt.trim(),
+                                                originalSkills,
+                                            ).let(::boundedUserMessagePreview)
+                                            originalSkills.isNotEmpty() ->
+                                                originalSkills.joinToString(" ") { "/${it.name}" }
+                                            else -> ""
+                                        }
+                                        if (displayPrompt.isNotBlank()) {
+                                            ChatUserText(
+                                                text = displayPrompt,
+                                                skills = originalSkills,
+                                                onSkillOpen = onSkillOpen,
+                                            )
                                         }
                                         ChatAttachedTextAttachments(originalAttachments)
                                         ChatAttachedImages(originalImagePaths)
-                                        if (originalSkills.isNotEmpty()) {
-                                            DisableSelection {
-                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                    originalSkills.forEach { skill ->
-                                                        Text(
-                                                            "/${skill.name}",
-                                                            color = Cyan,
-                                                            fontFamily = MonoFont,
-                                                            fontSize = 11.sp,
-                                                            textDecoration = TextDecoration.Underline,
-                                                            modifier = Modifier.clickable { onSkillOpen(skill) },
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             }
@@ -1087,11 +1087,111 @@ internal fun userMessageMatchesOriginalPrompt(
     }
 }
 
-/** User-facing transcript text; strips CLI-only skill hints and redundant slash-only prose. */
+/**
+ * User-facing transcript text; strips CLI-only skill hints.
+ * Skill slash tokens stay in the body so [ChatUserText] can render them as inline links
+ * (instead of a separate footer row).
+ */
 internal fun userMessageDisplayText(event: AgentEvent.UserMessage): String {
     val stripped = stripCliSkillHints(event.text).trim()
-    val prose = if (isSkillOnlyMessage(stripped, event.skills)) "" else stripped
-    return if (prose.isBlank()) prose else boundedUserMessagePreview(prose)
+    if (stripped.isBlank()) {
+        return event.skills.takeIf { it.isNotEmpty() }
+            ?.joinToString(" ") { "/${it.name}" }
+            .orEmpty()
+    }
+    val withMissingSkills = appendMissingSkillTokens(stripped, event.skills)
+    return boundedUserMessagePreview(withMissingSkills)
+}
+
+/** Appends `/skill` tokens for attached skills that are not already present in [text]. */
+internal fun appendMissingSkillTokens(text: String, skills: List<AgentSkill>): String {
+    if (skills.isEmpty()) return text
+    val missing = skills.filterNot { text.referencesSkillToken(it.name) }
+    if (missing.isEmpty()) return text
+    val suffix = missing.joinToString(" ") { "/${it.name}" }
+    return if (text.isBlank()) suffix else "${text.trimEnd()} $suffix"
+}
+
+private fun String.referencesSkillToken(skillName: String): Boolean =
+    Regex("(?:^|\\s)/${Regex.escape(skillName)}(?=\\s|$)").containsMatchIn(this)
+
+private val USER_MESSAGE_SKILL_TOKEN = Regex("""(?:^|\s)(/([A-Za-z0-9:_-]+))(?=\s|$)""")
+
+/**
+ * Styles `/skill` tokens in user transcript text as clickable cyan links that open the skill.
+ */
+internal fun buildUserMessageWithSkillLinks(
+    text: String,
+    skills: List<AgentSkill>,
+    find: ChatFindHighlight?,
+    onSkillClick: (AgentSkill) -> Unit,
+): AnnotatedString {
+    if (text.isEmpty()) return AnnotatedString("")
+    val byName = skills.associateBy { it.name }
+    if (byName.isEmpty()) {
+        return if (find?.isActive == true) {
+            highlightFindMatches(text, find.query, find.activeRange)
+        } else {
+            AnnotatedString(text)
+        }
+    }
+    data class SkillSpan(val start: Int, val end: Int, val skill: AgentSkill)
+    val spans = ArrayList<SkillSpan>()
+    USER_MESSAGE_SKILL_TOKEN.findAll(text).forEach { match ->
+        val skill = byName[match.groupValues[2]] ?: return@forEach
+        val end = match.range.last + 1
+        val tokenLen = match.groupValues[1].length
+        spans += SkillSpan(start = end - tokenLen, end = end, skill = skill)
+    }
+    if (spans.isEmpty()) {
+        return if (find?.isActive == true) {
+            highlightFindMatches(text, find.query, find.activeRange)
+        } else {
+            AnnotatedString(text)
+        }
+    }
+    val linkStyles = TextLinkStyles(
+        style = SpanStyle(
+            color = Cyan,
+            fontFamily = MonoFont,
+            textDecoration = TextDecoration.Underline,
+        ),
+    )
+    val findQuery = find?.trimmedQuery.orEmpty()
+    val withLinks = buildAnnotatedString {
+        var cursor = 0
+        for (span in spans) {
+            if (span.start > cursor) {
+                appendFindHighlighted(
+                    text.substring(cursor, span.start),
+                    findQuery,
+                    activeRangeInLeaf(cursor, span.start, find?.activeRange),
+                )
+            }
+            withLink(
+                LinkAnnotation.Clickable(
+                    tag = span.skill.name,
+                    styles = linkStyles,
+                    linkInteractionListener = { onSkillClick(span.skill) },
+                ),
+            ) {
+                appendFindHighlighted(
+                    text.substring(span.start, span.end),
+                    findQuery,
+                    activeRangeInLeaf(span.start, span.end, find?.activeRange),
+                )
+            }
+            cursor = span.end
+        }
+        if (cursor < text.length) {
+            appendFindHighlighted(
+                text.substring(cursor),
+                findQuery,
+                activeRangeInLeaf(cursor, text.length, find?.activeRange),
+            )
+        }
+    }
+    return withLinks
 }
 
 /** Full user prose for copy actions — never bounded for display layout. */
@@ -1337,26 +1437,14 @@ private fun TranscriptEvent(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (displayText.isNotBlank()) {
-                        ChatUserText(displayText)
+                        ChatUserText(
+                            text = displayText,
+                            skills = event.skills,
+                            onSkillOpen = onSkillOpen,
+                        )
                     }
                     ChatAttachedTextAttachments(event.attachments)
                     ChatAttachedImages(event.imagePaths)
-                    if (event.skills.isNotEmpty()) {
-                        DisableSelection {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                event.skills.forEach { skill ->
-                                    Text(
-                                        "/${skill.name}",
-                                        color = Cyan,
-                                        fontFamily = MonoFont,
-                                        fontSize = 11.sp,
-                                        textDecoration = TextDecoration.Underline,
-                                        modifier = Modifier.clickable { onSkillOpen(skill) },
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1643,14 +1731,23 @@ private fun ThinkingStep(
 }
 
 @Composable
-private fun ChatUserText(text: String) {
+private fun ChatUserText(
+    text: String,
+    skills: List<AgentSkill> = emptyList(),
+    onSkillOpen: (AgentSkill) -> Unit = {},
+) {
     val find = LocalChatFindHighlight.current
+    val openSkill by rememberUpdatedState(onSkillOpen)
+    val annotated = remember(text, skills, find?.trimmedQuery, find?.activeRange) {
+        buildUserMessageWithSkillLinks(
+            text = text,
+            skills = skills,
+            find = find,
+            onSkillClick = { skill -> openSkill(skill) },
+        )
+    }
     Text(
-        text = if (find?.isActive == true) {
-            highlightFindMatches(text, find.query, find.activeRange)
-        } else {
-            AnnotatedString(text)
-        },
+        text = annotated,
         color = TextPrimary,
         fontFamily = DisplayFont,
         fontSize = 14.sp,
