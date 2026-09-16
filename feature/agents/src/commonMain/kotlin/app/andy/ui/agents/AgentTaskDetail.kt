@@ -86,6 +86,7 @@ import app.andy.rememberCopyText
 import app.andy.currentTimeMillis
 import app.andy.domain.ToolCallFileContent
 import app.andy.domain.diffFromToolCallFileContent
+import app.andy.domain.resolveWorktreeEnvironment
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
@@ -223,6 +224,19 @@ fun AgentTaskDetail(
     var skillMenuDismissed by remember(task.id) { mutableStateOf(false) }
     var autocompleteHighlight by remember(task.id) { mutableIntStateOf(0) }
     var diffSummary by remember(task.id) { mutableStateOf<String?>(null) }
+    val knownAgentTasks by services.agentRuns.tasks.collectAsState()
+    // A handoff/side chat inherits the parent's worktree path as its cwd without owning it;
+    // resolve that shared worktree so its Environment panel matches the parent's.
+    val worktreeEnvironment = remember(
+        task.id,
+        task.worktreePath,
+        task.cwd,
+        task.branchName,
+        task.originDir,
+        task.parentWorktreeTaskId,
+        task.projectId,
+        knownAgentTasks,
+    ) { resolveWorktreeEnvironment(task, knownAgentTasks) }
     var diffViewMode by remember(task.id) { mutableStateOf(DiffViewMode.Unified) }
     var toolSidePane by remember(task.id) { mutableStateOf<AgentToolSidePaneState?>(null) }
     var filePreviewPane by remember(task.id) { mutableStateOf<FileLinkPreviewState?>(null) }
@@ -309,9 +323,10 @@ fun AgentTaskDetail(
         if (hasStagedImages || hasStagedAttachments) scrollToLatestRequest++
     }
     val transcriptEvents by services.agentRuns.events(task.id).collectAsState()
-    LaunchedEffect(task.id, task.status) {
-        if (task.worktreePath != null && !task.isActive) {
-            diffSummary = services.agentRuns.worktreeDiffSummary(task.id)
+    LaunchedEffect(task.id, task.status, worktreeEnvironment?.ownerTaskId) {
+        val ownerTaskId = worktreeEnvironment?.ownerTaskId
+        if (ownerTaskId != null && !task.isActive) {
+            diffSummary = services.agentRuns.worktreeDiffSummary(ownerTaskId)
         }
     }
 
@@ -320,7 +335,6 @@ fun AgentTaskDetail(
     val contextStatus = remember(task.id, transcriptEvents, task.contextTokens, task.inputTokens, task.contextWindowTokens) {
         agentContextWindowStatus(task, transcriptEvents)
     }
-    val knownAgentTasks by services.agentRuns.tasks.collectAsState()
     val acpSessionLive = services.agentRuns.isLaneLive(task.id)
     val acpTask = task.lane == AgentLaneKind.Acp
     val sessionsRevision by services.agentRuns.terminalSessionsRevision.collectAsState()
@@ -981,7 +995,8 @@ fun AgentTaskDetail(
             }
             // Floating chips: top-right over the chat/terminal pane (Computer Use + Environment).
             val computerUseHud by services.computerUse.hud.collectAsState()
-            if (computerUseHud != null || (task.worktreePath != null && !terminalSessionActive)) {
+            val environmentWorktree = worktreeEnvironment?.takeIf { !terminalSessionActive }
+            if (computerUseHud != null || environmentWorktree != null) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -999,10 +1014,11 @@ fun AgentTaskDetail(
                             onStop = { services.computerUse.panic("hud stop") },
                         )
                     }
-                    if (task.worktreePath != null && !terminalSessionActive) {
+                    if (environmentWorktree != null) {
                         WorktreeEnvironmentPanel(
                             services = services,
                             task = task,
+                            worktree = environmentWorktree,
                             diffSummary = diffSummary,
                             onDiffSummaryChange = { diffSummary = it },
                             onCopyText = copyText,

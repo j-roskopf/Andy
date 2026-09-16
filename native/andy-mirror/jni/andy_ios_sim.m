@@ -123,9 +123,15 @@ static NSString *developer_dir(void) {
     return [NSString stringWithUTF8String:path];
 }
 
-static void *dlopen_first_path(NSArray<NSString *> *paths, char *diagnostic, size_t diagnostic_size, const char *label) {
+static void *dlopen_first_path(
+    NSArray<NSString *> *paths,
+    int mode,
+    char *diagnostic,
+    size_t diagnostic_size,
+    const char *label
+) {
     for (NSString *path in paths) {
-        void *handle = dlopen([path fileSystemRepresentation], RTLD_LAZY);
+        void *handle = dlopen([path fileSystemRepresentation], mode);
         if (handle) return handle;
     }
     if (diagnostic && diagnostic_size && label) {
@@ -146,20 +152,29 @@ static bool probe_ios_sim_runtime(void) {
         @"/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
         legacy_core_path,
     ];
-    NSString *kit_path = [dev_dir stringByAppendingPathComponent:@"/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    // Xcode 27+ ships SimulatorKit under Contents/SharedFrameworks; earlier
+    // releases keep it under Contents/Developer/Library/PrivateFrameworks.
+    NSString *shared_kit_path = [[dev_dir stringByAppendingPathComponent:
+        @"/../SharedFrameworks/SimulatorKit.framework/SimulatorKit"] stringByStandardizingPath];
+    NSString *legacy_kit_path = [dev_dir stringByAppendingPathComponent:
+        @"/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit"];
+    NSArray<NSString *> *kit_paths = @[shared_kit_path, legacy_kit_path];
     sim_runtime.core_simulator = dlopen_first_path(
         core_paths,
+        RTLD_LAZY,
         sim_runtime.diagnostic,
         sizeof(sim_runtime.diagnostic),
         "CoreSimulator dlopen failed: ");
-    sim_runtime.simulator_kit = dlopen([kit_path fileSystemRepresentation], RTLD_NOW | RTLD_GLOBAL);
+    sim_runtime.simulator_kit = dlopen_first_path(
+        kit_paths,
+        RTLD_NOW | RTLD_GLOBAL,
+        sim_runtime.diagnostic,
+        sizeof(sim_runtime.diagnostic),
+        "SimulatorKit dlopen failed: ");
     if (!sim_runtime.core_simulator) {
         return false;
     }
     if (!sim_runtime.simulator_kit) {
-        append_diagnostic(sim_runtime.diagnostic, sizeof(sim_runtime.diagnostic), "SimulatorKit dlopen failed: ");
-        const char *error = dlerror();
-        if (error) append_diagnostic(sim_runtime.diagnostic, sizeof(sim_runtime.diagnostic), error);
         return false;
     }
     sim_runtime.sim_service_context_class = NSClassFromString(@"SimServiceContext");

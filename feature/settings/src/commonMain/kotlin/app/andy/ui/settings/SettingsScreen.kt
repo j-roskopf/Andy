@@ -110,6 +110,10 @@ import app.andy.model.hasVendorCli
 import app.andy.model.hooksSupported
 import app.andy.model.isModelBackend
 import app.andy.rememberCopyText
+import app.andy.service.AndroidCliService
+import app.andy.service.AndroidCliSnapshot
+import app.andy.service.AndroidCliState
+import app.andy.service.AndroidSkillCatalogEntry
 import app.andy.service.AndyServices
 import app.andy.service.AppUpdateService
 import app.andy.service.AppUpdateState
@@ -125,6 +129,7 @@ import app.andy.service.RetentionSweepResult
 import app.andy.service.RuntimeBundleService
 import app.andy.service.RuntimeBundleSnapshot
 import app.andy.service.RuntimeBundleState
+import app.andy.service.UnavailableAndroidCliService
 import app.andy.service.UnavailableAgentRetentionService
 import app.andy.service.UnavailableOrchestrationPreferencesService
 import app.andy.service.UnavailableRemoteSessionService
@@ -256,6 +261,9 @@ fun SettingsScreen(
                 }
                 AgentExecutionPreferencesPanel(services)
                 LocalModelsPanel(workspaceState, onUpdateWorkspace, services)
+                if (services.androidCli !is UnavailableAndroidCliService) {
+                    AndroidCliPanel(services.androidCli)
+                }
                 AgentSessionsPanel(workspaceState, onUpdateWorkspace)
                 AgentChatMessagingPanel(workspaceState, onUpdateWorkspace)
                 AgentChatListPanel(workspaceState, onUpdateWorkspace)
@@ -2400,6 +2408,283 @@ private fun RuntimeBundlePanel(
             }
         }
     }
+}
+
+@Composable
+private fun AndroidCliPanel(service: AndroidCliService) {
+    val scope = rememberCoroutineScope()
+    val state by service.state.collectAsState()
+    LaunchedEffect(service) { service.refresh() }
+
+    val snapshot = state.snapshotOrNull()
+    val busy = state is AndroidCliState.Busy
+
+    SettingsGroup(
+        title = "Android CLI",
+        description = "Google's official command line for Android development. Installing it lets " +
+            "your agents scaffold projects, manage the SDK and devices, and pull in Android skills.",
+    ) {
+        AndroidCliStatus(state)
+        snapshot?.let { snap ->
+            if (!snap.platformSupported) {
+                Text(
+                    "Android CLI doesn't ship a binary for this platform.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+            } else {
+                val line = buildString {
+                    append(if (snap.cliInstalled) "Installed" else "Not installed")
+                    snap.cliPath?.let { append(" · $it") }
+                }
+                Text(
+                    line,
+                    color = if (snap.cliInstalled) Green else TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = MonoFont,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                snap.pathHint?.let { hint ->
+                    Text(hint, color = Rust, fontSize = 11.sp)
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { scope.launch { service.refresh() } },
+                enabled = !busy,
+            ) {
+                Text(if (state is AndroidCliState.Checking) "Checking…" else "Check")
+            }
+            Button(
+                onClick = { scope.launch { service.installCli() } },
+                enabled = !busy && snapshot?.platformSupported == true,
+                colors = primaryButtonColors(),
+            ) {
+                Text(
+                    when {
+                        busy -> "Installing…"
+                        snapshot?.cliInstalled == true -> "Reinstall / update CLI"
+                        else -> "Install Android CLI"
+                    },
+                )
+            }
+        }
+    }
+
+    if (snapshot?.platformSupported == true) {
+        AndroidSkillsGroup(state = state, snapshot = snapshot, service = service)
+    }
+}
+
+@Composable
+private fun AndroidCliStatus(state: AndroidCliState) {
+    when (state) {
+        AndroidCliState.Idle, AndroidCliState.Checking -> Text(
+            if (state is AndroidCliState.Checking) "Checking installs…" else "Loading…",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontFamily = MonoFont,
+        )
+        is AndroidCliState.Failed -> Text(
+            state.message,
+            color = Rust,
+            fontSize = 12.sp,
+            fontFamily = MonoFont,
+        )
+        is AndroidCliState.Busy -> {
+            Text(state.message, color = TextSecondary, fontSize = 12.sp, fontFamily = MonoFont)
+            state.progress?.let { progress ->
+                ProgressBar(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = progress.coerceIn(0f, 1f) * 100f,
+                )
+            }
+        }
+        is AndroidCliState.Ready -> Unit
+    }
+}
+
+@Composable
+private fun AndroidSkillsGroup(
+    state: AndroidCliState,
+    snapshot: AndroidCliSnapshot,
+    service: AndroidCliService,
+) {
+    val scope = rememberCoroutineScope()
+    val busy = state is AndroidCliState.Busy
+    val catalog = snapshot.availableSkills
+    val installed = snapshot.installedSkills
+    val console = state.consoleState()
+
+    SettingsGroup(
+        title = "Android skills",
+        description = "Official agent skills from android/skills. Each one grounds your agents in a " +
+            "current Android workflow (Navigation 3, edge-to-edge, R8 analysis, and more).",
+    ) {
+        Text(
+            "${installed.size} of ${catalog.size} installed",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            fontFamily = MonoFont,
+        )
+        snapshot.catalogError?.let { message ->
+            Text(message, color = Rust, fontSize = 11.sp)
+        }
+        if (!snapshot.cliInstalled) {
+            Text(
+                "Install the Android CLI first — skills are added through `android skills add`.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { scope.launch { service.installAllSkills() } },
+                enabled = !busy && snapshot.cliInstalled,
+                colors = primaryButtonColors(),
+            ) {
+                Text("Install all skills")
+            }
+        }
+        if (console != null && console.activeSkill == null) {
+            AndroidCliConsole(console)
+        }
+        if (catalog.isEmpty()) {
+            Text(
+                if (snapshot.catalogError == null) "Loading available skills…" else "Skill catalog unavailable.",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        } else {
+            catalog
+                .groupBy { it.category ?: "other" }
+                .entries
+                .sortedBy { it.key }
+                .forEach { (category, skills) ->
+                    Text(
+                        category.replace('-', ' ').replaceFirstChar { it.uppercase() },
+                        color = AndyColors.TextTertiary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    skills.sortedBy { it.name }.forEach { skill ->
+                        AndroidSkillRow(
+                            skill = skill,
+                            installed = skill.name in installed,
+                            enabled = !busy && snapshot.cliInstalled,
+                            active = console?.activeSkill == skill.name,
+                            console = console?.takeIf { it.activeSkill == skill.name },
+                            onInstall = { scope.launch { service.installSkill(skill.name) } },
+                        )
+                    }
+                }
+        }
+    }
+}
+
+@Composable
+private fun AndroidSkillRow(
+    skill: AndroidSkillCatalogEntry,
+    installed: Boolean,
+    enabled: Boolean,
+    active: Boolean,
+    console: AndroidCliConsoleState?,
+    onInstall: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(AndySpace.Space2)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(AndySpace.Space3),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(skill.name, color = TextPrimary, fontSize = 13.sp, fontFamily = MonoFont)
+                skill.description?.let { description ->
+                    Text(
+                        description,
+                        color = TextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            when {
+                active -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Spinner(spinnerSize = SpinnerSize.Sm)
+                    Text("Installing…", color = TextSecondary, fontSize = 11.sp)
+                }
+                installed -> Text("Installed", color = Green, fontSize = 11.sp)
+                else -> OutlinedButton(onClick = onInstall, enabled = enabled) {
+                    Text("Install", fontSize = 12.sp)
+                }
+            }
+        }
+        if (active) {
+            AndroidCliConsole(console)
+        }
+    }
+}
+
+private data class AndroidCliConsoleState(
+    val command: String?,
+    val log: List<String>,
+    val activeSkill: String?,
+)
+
+private fun AndroidCliState.consoleState(): AndroidCliConsoleState? {
+    val console = when (this) {
+        is AndroidCliState.Busy -> AndroidCliConsoleState(command, log, activeSkill)
+        is AndroidCliState.Failed -> AndroidCliConsoleState(command, log, null)
+        else -> null
+    } ?: return null
+    return console.takeIf { it.command != null || it.log.isNotEmpty() }
+}
+
+@Composable
+private fun AndroidCliConsole(console: AndroidCliConsoleState?) {
+    if (console == null) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(AndyRadius.Row))
+            .background(AndyColors.Neutral850)
+            .border(1.dp, PaneDividerTint, RoundedCornerShape(AndyRadius.Row))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        console.command?.let { command ->
+            Text(
+                "$ $command",
+                color = TextSecondary,
+                fontFamily = MonoFont,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
+        }
+        val lines = console.log.takeLast(MaxConsoleLines)
+        lines.forEach { line ->
+            Text(line, color = TextPrimary, fontFamily = MonoFont, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        if (lines.isEmpty()) {
+            Text("Running…", color = AndyColors.TextTertiary, fontFamily = MonoFont, fontSize = 11.sp)
+        }
+    }
+}
+
+private const val MaxConsoleLines = 12
+
+private fun AndroidCliState.snapshotOrNull(): AndroidCliSnapshot? = when (this) {
+    is AndroidCliState.Ready -> snapshot
+    is AndroidCliState.Busy -> snapshot
+    is AndroidCliState.Failed -> snapshot
+    else -> null
 }
 
 @Composable
