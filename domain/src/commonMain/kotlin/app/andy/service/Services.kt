@@ -1408,6 +1408,7 @@ data class AndyServices(
     val workspaceStore: WorkspaceStore,
     val updates: AppUpdateService,
     val runtimeBundle: RuntimeBundleService = UnavailableRuntimeBundleService,
+    val androidCli: AndroidCliService = UnavailableAndroidCliService,
     val cliUpdates: CliUpdateCheckService = UnavailableCliUpdateCheckService,
     val mcp: McpServerService,
     val computerUse: ComputerUseService = UnavailableComputerUseService,

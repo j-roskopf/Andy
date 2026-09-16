@@ -15,6 +15,7 @@ import app.andy.desktop.service.agents.ChatCompletionNotifier
 import app.andy.desktop.service.agents.ClaudeCodeAdapter
 import app.andy.desktop.service.agents.CodexAdapter
 import app.andy.desktop.service.agents.CursorAdapter
+import app.andy.desktop.service.agents.DesktopAndroidCliService
 import app.andy.desktop.service.agents.DesktopAgentRunService
 import app.andy.desktop.service.agents.DesktopAgentRetentionService
 import app.andy.desktop.service.agents.DesktopAgentTaskStore
@@ -317,6 +318,7 @@ fun createDaemonRuntime(
         workspaceStore = store,
         updates = DesktopAppUpdateService(CoroutineScope(SupervisorJob() + Dispatchers.Default)),
         runtimeBundle = DesktopRuntimeBundleService(),
+        androidCli = DesktopAndroidCliService(),
         cliUpdates = DesktopCliUpdateCheckService(
             agentRuns = agentRuns,
             actionRuns = actionRuns,
@@ -443,6 +445,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
+    val androidCli = DesktopAndroidCliService()
     val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
         val ws = store.state.value
         (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
@@ -675,6 +678,7 @@ private fun createDesktopClientRuntime(): DesktopRuntime {
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,
+        androidCli = androidCli,
         cliUpdates = DesktopCliUpdateCheckService(
             agentRuns = swappableAgents,
             actionRuns = actionRuns,
@@ -727,6 +731,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
     val updatesScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val updates = DesktopAppUpdateService(updatesScope)
     val runtimeBundle = DesktopRuntimeBundleService()
+    val androidCli = DesktopAndroidCliService()
     val actionConfig = DesktopActionConfigStore(discoveryRootsProvider = {
         val ws = store.state.value
         (listOf(System.getProperty("user.dir")) + ws.hostFileRoots +
@@ -1003,6 +1008,7 @@ private fun createEmbeddedDesktopRuntime(): DesktopRuntime {
         workspaceStore = store,
         updates = updates,
         runtimeBundle = runtimeBundle,
+        androidCli = androidCli,
         cliUpdates = DesktopCliUpdateCheckService(
             agentRuns = swappableAgents,
             actionRuns = actionRuns,

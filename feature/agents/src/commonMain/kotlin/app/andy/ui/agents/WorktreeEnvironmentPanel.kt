@@ -16,6 +16,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andy.domain.ResolvedWorktree
 import app.andy.model.AgentTask
 import app.andy.model.ProjectAction
 import app.andy.model.WorkingTreeStatus
@@ -105,6 +107,35 @@ private object EnvironmentSelectedActionMemory {
 private val EnvironmentCardWidth = 248.dp
 
 /**
+ * Menus anchored to the environment card are capped to its inner width. The card is pinned to the
+ * right edge of the chat pane, so an unbounded menu would grow right and cover the neighboring
+ * pane (device mirror, diff review, etc.).
+ */
+private val EnvironmentMenuMaxWidth = EnvironmentCardWidth - AndySpace.Space2 * 2
+
+/**
+ * Dropdown anchored to the full width of its parent row rather than to a small trailing trigger.
+ *
+ * Material3 [DropdownMenu] aligns the menu's start to the anchor's start; anchoring to a 12-28dp
+ * trigger near the card's right edge makes the menu open rightward, past the chat pane. Parented to
+ * the full-width row it opens left-aligned under the card and the width cap keeps it inside the
+ * pane.
+ */
+@Composable
+private fun EnvironmentMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = Modifier.widthIn(min = 200.dp, max = EnvironmentMenuMaxWidth),
+        content = content,
+    )
+}
+
+/**
  * True when the floating Environment card would cover chat/terminal text.
  *
  * Centered transcript content ([AndyLayout.ChatContentMaxWidth]) leaves side gutters only when
@@ -133,11 +164,15 @@ internal fun environmentCardWouldEclipseContent(
 /**
  * Floating Environment chip for worktree chats — top-right over the transcript/terminal pane.
  * Tucks into an edge tag whenever the expanded card would cover chat text.
+ *
+ * [worktree] is resolved by the caller so a handoff/side chat sharing its parent's worktree path
+ * still surfaces the environment even though it owns no worktree of its own.
  */
 @Composable
 internal fun WorktreeEnvironmentPanel(
     services: AndyServices,
     task: AgentTask,
+    worktree: ResolvedWorktree,
     diffSummary: String?,
     onDiffSummaryChange: (String?) -> Unit,
     onCopyText: (String) -> Unit,
@@ -146,7 +181,7 @@ internal fun WorktreeEnvironmentPanel(
     contentFullBleed: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val worktreePath = task.worktreePath ?: return
+    val worktreePath = worktree.path
     val scope = rememberCoroutineScope()
     val launcher = LocalProjectDirLauncher.current
     // Read reactively (not remember-cached) so runbook edits, disk refresh, or a remote-host
@@ -184,7 +219,7 @@ internal fun WorktreeEnvironmentPanel(
 
     suspend fun refreshStatusAndDiff() {
         treeStatus = services.agentRuns.workingTreeStatus(worktreePath)
-        onDiffSummaryChange(services.agentRuns.worktreeDiffSummary(task.id))
+        onDiffSummaryChange(services.agentRuns.worktreeDiffSummary(worktree.ownerTaskId))
     }
 
     LaunchedEffect(task.id, worktreePath) {
@@ -204,11 +239,8 @@ internal fun WorktreeEnvironmentPanel(
     }
 
     fun copyMergeCommand() {
-        val branch = task.branchName ?: return
-        val parentPath = task.parentWorktreeTaskId?.let { parentId ->
-            services.agentRuns.tasks.value.firstOrNull { it.id == parentId }?.worktreePath
-        }
-        val targetDir = parentPath ?: task.originDir ?: return
+        val branch = worktree.branchName ?: return
+        val targetDir = worktree.mergeTargetDir ?: return
         onCopyText(services.agentRuns.mergeCommand(targetDir, branch))
     }
 
@@ -244,7 +276,7 @@ internal fun WorktreeEnvironmentPanel(
                 onRefreshDiff = { scope.launch { refreshStatusAndDiff() } },
                 diffSummary = diffSummary,
                 worktreePath = worktreePath,
-                branchName = task.branchName,
+                branchName = worktree.branchName,
                 worktreeActions = worktreeActions,
                 overflowOpen = overflowOpen,
                 onOverflowOpenChange = { overflowOpen = it },
@@ -398,91 +430,12 @@ private fun EnvironmentExpandedCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 96.dp),
             )
-            Box(contentAlignment = Alignment.Center) {
-                EnvironmentIconButton(
-                    path = Lucide.Ellipsis,
-                    contentDescription = "Worktree actions",
-                    onClick = { onOverflowOpenChange(true) },
-                    modifier = Modifier.testTag("chat-worktree-overflow"),
-                )
-                DropdownMenu(
-                    expanded = overflowOpen,
-                    onDismissRequest = { onOverflowOpenChange(false) },
-                    modifier = Modifier.widthIn(min = 200.dp),
-                ) {
-                    AndyDropdownMenuItem(
-                        label = "Terminal",
-                        onClick = {
-                            onSelectAction(SelectedEnvironmentAction.Terminal)
-                            onOverflowOpenChange(false)
-                        },
-                        leading = {
-                            LucideIcon(Lucide.SquareTerminal, TextSecondary, Modifier.size(14.dp))
-                        },
-                        trailing = {
-                            if (selectedAction is SelectedEnvironmentAction.Terminal) {
-                                LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
-                            }
-                        },
-                        modifier = Modifier.testTag("chat-worktree-terminal"),
-                    )
-                    worktreeActions.forEachIndexed { index, action ->
-                        AndyDropdownMenuItem(
-                            label = action.name,
-                            onClick = {
-                                onSelectAction(SelectedEnvironmentAction.Run(action))
-                                onOverflowOpenChange(false)
-                            },
-                            leading = {
-                                LucideIcon(Lucide.Play, TextSecondary, Modifier.size(14.dp))
-                            },
-                            trailing = {
-                                val selected = (selectedAction as? SelectedEnvironmentAction.Run)
-                                    ?.action?.id == action.id
-                                if (selected) {
-                                    LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
-                                }
-                            },
-                            modifier = if (index == 0) {
-                                Modifier.testTag("chat-worktree-run")
-                            } else {
-                                Modifier
-                            },
-                        )
-                    }
-                    AndyDropdownMenuItem(
-                        label = "Copy path",
-                        onClick = {
-                            onOverflowOpenChange(false)
-                            onCopyText(worktreePath)
-                        },
-                        leading = {
-                            LucideIcon(Lucide.Copy, TextSecondary, Modifier.size(14.dp))
-                        },
-                    )
-                    AndyDropdownMenuItem(
-                        label = "Copy merge cmd",
-                        onClick = {
-                            onOverflowOpenChange(false)
-                            onCopyMergeCommand()
-                        },
-                        leading = {
-                            LucideIcon(Lucide.GitBranch, TextSecondary, Modifier.size(14.dp))
-                        },
-                    )
-                    AndyDropdownMenuItem(
-                        label = "Refresh diff",
-                        onClick = {
-                            onOverflowOpenChange(false)
-                            onRefreshDiff()
-                            onChangesExpandedChange(true)
-                        },
-                        leading = {
-                            LucideIcon(Lucide.RefreshCw, TextSecondary, Modifier.size(14.dp))
-                        },
-                    )
-                }
-            }
+            EnvironmentIconButton(
+                path = Lucide.Ellipsis,
+                contentDescription = "Worktree actions",
+                onClick = { onOverflowOpenChange(true) },
+                modifier = Modifier.testTag("chat-worktree-overflow"),
+            )
             EnvironmentIconButton(
                 path = Lucide.Play,
                 contentDescription = "Run $selectedLabel",
@@ -495,6 +448,84 @@ private fun EnvironmentExpandedCard(
                     contentDescription = "Hide Environment",
                     onClick = onTuck,
                     modifier = Modifier.testTag("chat-worktree-tuck"),
+                )
+            }
+            // Anchored to the full-width row (not the ellipsis button) so it opens left-aligned
+            // under the card and cannot extend into the neighboring pane.
+            EnvironmentMenu(
+                expanded = overflowOpen,
+                onDismissRequest = { onOverflowOpenChange(false) },
+            ) {
+                AndyDropdownMenuItem(
+                    label = "Terminal",
+                    onClick = {
+                        onSelectAction(SelectedEnvironmentAction.Terminal)
+                        onOverflowOpenChange(false)
+                    },
+                    leading = {
+                        LucideIcon(Lucide.SquareTerminal, TextSecondary, Modifier.size(14.dp))
+                    },
+                    trailing = {
+                        if (selectedAction is SelectedEnvironmentAction.Terminal) {
+                            LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
+                        }
+                    },
+                    modifier = Modifier.testTag("chat-worktree-terminal"),
+                )
+                worktreeActions.forEachIndexed { index, action ->
+                    AndyDropdownMenuItem(
+                        label = action.name,
+                        onClick = {
+                            onSelectAction(SelectedEnvironmentAction.Run(action))
+                            onOverflowOpenChange(false)
+                        },
+                        leading = {
+                            LucideIcon(Lucide.Play, TextSecondary, Modifier.size(14.dp))
+                        },
+                        trailing = {
+                            val selected = (selectedAction as? SelectedEnvironmentAction.Run)
+                                ?.action?.id == action.id
+                            if (selected) {
+                                LucideIcon(Lucide.Check, TextSecondary, Modifier.size(12.dp))
+                            }
+                        },
+                        modifier = if (index == 0) {
+                            Modifier.testTag("chat-worktree-run")
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+                AndyDropdownMenuItem(
+                    label = "Copy path",
+                    onClick = {
+                        onOverflowOpenChange(false)
+                        onCopyText(worktreePath)
+                    },
+                    leading = {
+                        LucideIcon(Lucide.Copy, TextSecondary, Modifier.size(14.dp))
+                    },
+                )
+                AndyDropdownMenuItem(
+                    label = "Copy merge cmd",
+                    onClick = {
+                        onOverflowOpenChange(false)
+                        onCopyMergeCommand()
+                    },
+                    leading = {
+                        LucideIcon(Lucide.GitBranch, TextSecondary, Modifier.size(14.dp))
+                    },
+                )
+                AndyDropdownMenuItem(
+                    label = "Refresh diff",
+                    onClick = {
+                        onOverflowOpenChange(false)
+                        onRefreshDiff()
+                        onChangesExpandedChange(true)
+                    },
+                    leading = {
+                        LucideIcon(Lucide.RefreshCw, TextSecondary, Modifier.size(14.dp))
+                    },
                 )
             }
         }
@@ -534,42 +565,41 @@ private fun EnvironmentExpandedCard(
             description = shortPath,
             tooltip = worktreePath,
             trailing = {
-                Box {
-                    LucideIcon(Lucide.ChevronDown, TextSecondary.copy(alpha = 0.55f), Modifier.size(12.dp))
-                    DropdownMenu(
-                        expanded = worktreeMenuOpen,
-                        onDismissRequest = { onWorktreeMenuOpenChange(false) },
-                        modifier = Modifier.widthIn(min = 220.dp, max = 360.dp),
-                    ) {
-                        Text(
-                            worktreePath,
-                            color = TextSecondary,
-                            fontFamily = MonoFont,
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(
-                                horizontal = AndySpace.Space2,
-                                vertical = AndySpace.Space1,
-                            ),
-                        )
-                        AndyDropdownMenuItem(
-                            label = "Copy path",
-                            onClick = {
-                                onWorktreeMenuOpenChange(false)
-                                onCopyText(worktreePath)
-                            },
-                            leading = { LucideIcon(Lucide.Copy, TextSecondary, Modifier.size(14.dp)) },
-                        )
-                        AndyDropdownMenuItem(
-                            label = "Open terminal",
-                            onClick = {
-                                onWorktreeMenuOpenChange(false)
-                                onOpenTerminal()
-                            },
-                            leading = {
-                                LucideIcon(Lucide.SquareTerminal, TextSecondary, Modifier.size(14.dp))
-                            },
-                        )
-                    }
+                LucideIcon(Lucide.ChevronDown, TextSecondary.copy(alpha = 0.55f), Modifier.size(12.dp))
+            },
+            menu = {
+                EnvironmentMenu(
+                    expanded = worktreeMenuOpen,
+                    onDismissRequest = { onWorktreeMenuOpenChange(false) },
+                ) {
+                    Text(
+                        worktreePath,
+                        color = TextSecondary,
+                        fontFamily = MonoFont,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(
+                            horizontal = AndySpace.Space2,
+                            vertical = AndySpace.Space1,
+                        ),
+                    )
+                    AndyDropdownMenuItem(
+                        label = "Copy path",
+                        onClick = {
+                            onWorktreeMenuOpenChange(false)
+                            onCopyText(worktreePath)
+                        },
+                        leading = { LucideIcon(Lucide.Copy, TextSecondary, Modifier.size(14.dp)) },
+                    )
+                    AndyDropdownMenuItem(
+                        label = "Open terminal",
+                        onClick = {
+                            onWorktreeMenuOpenChange(false)
+                            onOpenTerminal()
+                        },
+                        leading = {
+                            LucideIcon(Lucide.SquareTerminal, TextSecondary, Modifier.size(14.dp))
+                        },
+                    )
                 }
             },
         )
@@ -637,6 +667,7 @@ private fun EnvironmentRow(
     tooltip: String? = description,
     marqueeLabel: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
+    menu: @Composable (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -702,10 +733,23 @@ private fun EnvironmentRow(
         }
     }
 
+    @Composable
+    fun RowWithMenu() {
+        if (menu == null) {
+            RowBody()
+            return
+        }
+        // Full-width Box so the menu anchors to the row, not to a trailing trigger.
+        Box(Modifier.fillMaxWidth()) {
+            RowBody()
+            menu()
+        }
+    }
+
     if (tooltip != null) {
-        HoverTooltip(text = tooltip, modifier = Modifier.fillMaxWidth()) { RowBody() }
+        HoverTooltip(text = tooltip, modifier = Modifier.fillMaxWidth()) { RowWithMenu() }
     } else {
-        RowBody()
+        RowWithMenu()
     }
 }
 
