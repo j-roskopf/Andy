@@ -314,6 +314,7 @@ object AgentModelCatalog {
             AgentModelOption("claude-opus-4-8", "Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
             AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
+            AgentModelOption("cursor-grok-4.7", "Grok 4.7", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
             AgentModelOption("cursor-grok-4.6", "Grok 4.6", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
             AgentModelOption("cursor-grok-4.5", "Grok 4.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
         )
@@ -443,6 +444,7 @@ internal fun cursorModelBaseId(selected: String): String = when (selected) {
     "Opus 4.8", "claude-opus-4-8" -> "claude-opus-4-8"
     "GPT-5.6 Sol", "gpt-5.6-sol" -> "gpt-5.6-sol"
     "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
+    "Grok 4.7", "cursor-grok-4.7" -> "cursor-grok-4.7"
     "Grok 4.6", "cursor-grok-4.6" -> "cursor-grok-4.6"
     "Grok 4.5", "cursor-grok-4.5" -> "cursor-grok-4.5"
     else -> stripProviderModelVariant(selected).baseId
