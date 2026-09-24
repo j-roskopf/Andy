@@ -250,8 +250,28 @@ private val ClaudeCodeHaikuEfforts = listOf(
     AgentReasoningEffort.High,
 )
 
+/** Pi's `openai-codex` models expose the full thinking dial. */
+private val PiCodexEfforts = listOf(
+    AgentReasoningEffort.None,
+    AgentReasoningEffort.Minimal,
+    AgentReasoningEffort.Low,
+    AgentReasoningEffort.Medium,
+    AgentReasoningEffort.High,
+    AgentReasoningEffort.ExtraHigh,
+    AgentReasoningEffort.Max,
+)
+
+/** Cursor's Claude models accept low→max plus the fast tier. */
+private val CursorClaudeEfforts = listOf(
+    AgentReasoningEffort.Low,
+    AgentReasoningEffort.Medium,
+    AgentReasoningEffort.High,
+    AgentReasoningEffort.ExtraHigh,
+    AgentReasoningEffort.Max,
+)
+
 /** Primary Claude Code models shown before the "More models" submenu in Claude Code itself. */
-const val ClaudeCodePrimaryModelCount = 4
+const val ClaudeCodePrimaryModelCount = 5
 
 data class AgentModelOption(
     /** Model identifier passed to the provider CLI, before any provider-specific variant syntax. */
@@ -295,9 +315,11 @@ object AgentModelCatalog {
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh, AgentReasoningEffort.Max)),
             AgentModelOption("gpt-5.6-terra", "GPT-5.6 Terra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gpt-5.6-luna", "GPT-5.6 Luna", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh)),
             AgentModelOption("gpt-5.2-codex", "GPT-5.2-Codex", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh)),
         )
         AgentKind.ClaudeCode -> listOf(
+            AgentModelOption("claude-opus-5-5", "Opus 5.5", ClaudeCodeEfforts),
             AgentModelOption("claude-fable-5-1", "Fable 5.1", ClaudeCodeEfforts),
             AgentModelOption("claude-opus-5", "Opus 5", ClaudeCodeEfforts),
             AgentModelOption("claude-sonnet-5", "Sonnet 5", ClaudeCodeEfforts),
@@ -311,8 +333,17 @@ object AgentModelCatalog {
         AgentKind.Cursor -> listOf(
             AgentModelOption("auto", "Auto", emptyList()),
             AgentModelOption("composer-2.5", "Composer 2.5", emptyList(), supportsFastMode = true),
+            AgentModelOption("claude-opus-5-5", "Opus 5.5", CursorClaudeEfforts, supportsFastMode = true),
+            AgentModelOption("claude-opus-5", "Opus 5", CursorClaudeEfforts, supportsFastMode = true),
+            AgentModelOption("claude-fable-5-1", "Fable 5.1", CursorClaudeEfforts, supportsFastMode = true),
+            AgentModelOption("claude-fable-5", "Fable 5", CursorClaudeEfforts, supportsFastMode = true),
+            AgentModelOption("claude-sonnet-5", "Sonnet 5", CursorClaudeEfforts, supportsFastMode = true),
             AgentModelOption("claude-opus-4-8", "Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
             AgentModelOption("gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
+            AgentModelOption("gpt-5.6-terra", "GPT-5.6 Terra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
+            AgentModelOption("gpt-5.6-luna", "GPT-5.6 Luna", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High, AgentReasoningEffort.ExtraHigh), supportsFastMode = true),
+            AgentModelOption("gemini-3.8-flash", "Gemini 3.8 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("gemini-3.7-flash", "Gemini 3.7 Flash", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
             AgentModelOption("cursor-grok-4.7", "Grok 4.7", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
             AgentModelOption("cursor-grok-4.6", "Grok 4.6", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High), supportsFastMode = true),
@@ -330,55 +361,40 @@ object AgentModelCatalog {
         )
         AgentKind.OpenCode -> listOf(
             AgentModelOption("opencode/gpt-5.4-mini", "GPT-5.4 Mini (Zen)", emptyList()),
+            AgentModelOption("anthropic/claude-opus-5-5", "Claude Opus 5.5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("anthropic/claude-fable-5-1", "Claude Fable 5.1", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("anthropic/claude-sonnet-5", "Claude Sonnet 5", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("anthropic/claude-opus-4-8", "Claude Opus 4.8", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-6-astra", "GPT-6 Astra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.6-terra", "GPT-5.6 Terra", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.6-luna", "GPT-5.6 Luna", listOf(AgentReasoningEffort.Low, AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("openai/gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("google/gemini-3.1-pro", "Gemini 3.1 Pro", emptyList()),
         )
         AgentKind.Pi -> listOf(
-            AgentModelOption(
-                "openai-codex/gpt-5.5",
-                "GPT-5.5 (openai-codex)",
-                listOf(
-                    AgentReasoningEffort.None,
-                    AgentReasoningEffort.Minimal,
-                    AgentReasoningEffort.Low,
-                    AgentReasoningEffort.Medium,
-                    AgentReasoningEffort.High,
-                    AgentReasoningEffort.ExtraHigh,
-                    AgentReasoningEffort.Max,
-                ),
-            ),
-            AgentModelOption(
-                "openai-codex/gpt-5.6-sol",
-                "GPT-5.6 Sol (openai-codex)",
-                listOf(
-                    AgentReasoningEffort.None,
-                    AgentReasoningEffort.Minimal,
-                    AgentReasoningEffort.Low,
-                    AgentReasoningEffort.Medium,
-                    AgentReasoningEffort.High,
-                    AgentReasoningEffort.ExtraHigh,
-                    AgentReasoningEffort.Max,
-                ),
-            ),
+            AgentModelOption("openai-codex/gpt-6-astra", "GPT-6 Astra (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-6-sol", "GPT-6 Sol (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-6-luna", "GPT-6 Luna (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.6-sol", "GPT-5.6 Sol (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.6-terra", "GPT-5.6 Terra (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.6-luna", "GPT-5.6 Luna (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.5", "GPT-5.5 (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.4", "GPT-5.4 (openai-codex)", PiCodexEfforts),
+            AgentModelOption("openai-codex/gpt-5.4-mini", "GPT-5.4 Mini (openai-codex)", PiCodexEfforts),
             AgentModelOption(
                 "anthropic/claude-sonnet-4-5",
                 "Claude Sonnet 4.5",
-                listOf(
-                    AgentReasoningEffort.None,
-                    AgentReasoningEffort.Minimal,
-                    AgentReasoningEffort.Low,
-                    AgentReasoningEffort.Medium,
-                    AgentReasoningEffort.High,
-                    AgentReasoningEffort.ExtraHigh,
-                    AgentReasoningEffort.Max,
-                ),
+                PiCodexEfforts,
             ),
             AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
         )
         AgentKind.Hermes -> listOf(
+            AgentModelOption("anthropic/claude-opus-5-5", "Claude Opus 5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("anthropic/claude-sonnet-5", "Claude Sonnet 5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("anthropic/claude-sonnet-4", "Claude Sonnet 4", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-6-astra", "GPT-6 Astra", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
+            AgentModelOption("openai/gpt-5.6-sol", "GPT-5.6 Sol", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
             AgentModelOption("openai/gpt-5.5", "GPT-5.5", listOf(AgentReasoningEffort.Medium, AgentReasoningEffort.High)),
         )
         AgentKind.OpenClaw -> listOf(
@@ -386,8 +402,10 @@ object AgentModelCatalog {
             AgentModelOption("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6", emptyList()),
         )
         AgentKind.Goose -> listOf(
+            AgentModelOption("anthropic/claude-opus-5-5", "Claude Opus 5.5", emptyList()),
             AgentModelOption("anthropic/claude-sonnet-4-5", "Claude Sonnet 4.5", emptyList()),
             AgentModelOption("anthropic/claude-opus-4-6", "Claude Opus 4.6", emptyList()),
+            AgentModelOption("openai/gpt-6-astra", "GPT-6 Astra", emptyList()),
             AgentModelOption("openai/gpt-5.4", "GPT-5.4", emptyList()),
             AgentModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro", emptyList()),
         )
@@ -418,10 +436,11 @@ internal fun normalizeModelId(agent: AgentKind, selected: String): String = when
  * Aliases still work when passed directly to the CLI; normalization keeps catalog lookups stable.
  */
 internal fun claudeModelBaseId(selected: String): String = when (selected) {
-    "Opus", "opus" -> "claude-opus-5"
+    "Opus", "opus" -> "claude-opus-5-5"
     "Sonnet", "sonnet" -> "claude-sonnet-5"
     "Haiku", "haiku" -> "claude-haiku-4-5"
     "Fable", "fable" -> "claude-fable-5-1"
+    "Opus 5.5", "claude-opus-5-5" -> "claude-opus-5-5"
     "Fable 5.1", "claude-fable-5-1" -> "claude-fable-5-1"
     "Opus 5", "claude-opus-5" -> "claude-opus-5"
     "Sonnet 5", "claude-sonnet-5" -> "claude-sonnet-5"
@@ -441,8 +460,17 @@ internal fun claudeModelBaseId(selected: String): String = when (selected) {
 internal fun cursorModelBaseId(selected: String): String = when (selected) {
     "Auto", "auto" -> "auto"
     "Composer 2.5", "composer-2.5" -> "composer-2.5"
+    "Opus 5.5", "claude-opus-5-5" -> "claude-opus-5-5"
+    "Opus 5", "claude-opus-5" -> "claude-opus-5"
+    "Fable 5.1", "claude-fable-5-1" -> "claude-fable-5-1"
+    "Fable 5", "claude-fable-5" -> "claude-fable-5"
+    "Sonnet 5", "claude-sonnet-5" -> "claude-sonnet-5"
     "Opus 4.8", "claude-opus-4-8" -> "claude-opus-4-8"
     "GPT-5.6 Sol", "gpt-5.6-sol" -> "gpt-5.6-sol"
+    "GPT-5.6 Terra", "gpt-5.6-terra" -> "gpt-5.6-terra"
+    "GPT-5.6 Luna", "gpt-5.6-luna" -> "gpt-5.6-luna"
+    "Gemini 3.8 Flash", "gemini-3.8-flash" -> "gemini-3.8-flash"
+    "Gemini 3.7 Flash", "gemini-3.7-flash" -> "gemini-3.7-flash"
     "Gemini 3.1 Pro", "gemini-3.1-pro" -> "gemini-3.1-pro"
     "Grok 4.7", "cursor-grok-4.7" -> "cursor-grok-4.7"
     "Grok 4.6", "cursor-grok-4.6" -> "cursor-grok-4.6"

@@ -563,6 +563,8 @@ fun main() {
                     contentTopPadding = if (isMacOs()) 28.dp else 18.dp,
                 )
             }
+            // Last child: Tahoe native edge hit targets miss inside the frame; this overlays them.
+            MacWindowEdgeResizer(windowState)
         }
         popOutWindows.values.forEach { popOut ->
             key(popOut.targetId) {
@@ -575,9 +577,10 @@ fun main() {
                 val gpuPresentation = GpuMirrorJni.isAvailable() ||
                     IosTargetRegistry.isIosTarget(popOut.targetId) ||
                     mirrorEngine === services.mirror
+                val popOutState = rememberWindowState(width = 520.dp, height = 900.dp)
                 Window(
                     onCloseRequest = { closePopOutWindow(popOut.targetId, mirrorEngine) },
-                    state = rememberWindowState(width = 520.dp, height = 900.dp),
+                    state = popOutState,
                     title = "Andy mirror - ${popOut.displayName}",
                     icon = appIcon,
                 ) {
@@ -621,6 +624,7 @@ fun main() {
                         surfaceModeId = workspaceState.surfaceModeId,
                     )
                     }
+                    MacWindowEdgeResizer(popOutState)
                 }
             }
         }

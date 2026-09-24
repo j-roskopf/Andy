@@ -401,6 +401,7 @@ class ProviderModelParsingTest {
             options.first().efforts,
         )
         assertEquals("gpt-6-astra", AgentModelCatalog.option(AgentKind.Codex, "gpt-6-astra")?.id)
+        assertEquals("GPT-5.5", AgentModelCatalog.option(AgentKind.Codex, "gpt-5.5")?.label)
     }
 
     @Test
@@ -408,6 +409,7 @@ class ProviderModelParsingTest {
         val options = AgentModelCatalog.options(AgentKind.ClaudeCode)
         assertEquals(
             listOf(
+                "Opus 5.5",
                 "Fable 5.1",
                 "Opus 5",
                 "Sonnet 5",
@@ -429,8 +431,8 @@ class ProviderModelParsingTest {
 
     @Test
     fun legacyClaudeAliasesResolveInCatalog() {
-        assertEquals("claude-opus-5", claudeModelBaseId("opus"))
+        assertEquals("claude-opus-5-5", claudeModelBaseId("opus"))
         assertEquals("claude-sonnet-5", claudeModelBaseId("sonnet"))
-        assertEquals("claude-opus-5", AgentModelCatalog.option(AgentKind.ClaudeCode, "opus")?.id)
+        assertEquals("claude-opus-5-5", AgentModelCatalog.option(AgentKind.ClaudeCode, "opus")?.id)
     }
 }
