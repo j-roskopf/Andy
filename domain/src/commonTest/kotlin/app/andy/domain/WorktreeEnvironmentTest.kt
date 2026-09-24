@@ -135,4 +135,58 @@ class WorktreeEnvironmentTest {
         val child = task(id = "child", projectId = "proj", cwd = "/wt/one")
         assertNull(resolveWorktreeEnvironment(child, listOf(parent, child)))
     }
+
+    @Test
+    fun mainCheckoutStampedAsWorktreeDoesNotResolve() {
+        val stamped = task(
+            id = "stamped",
+            cwd = "/repo",
+            originDir = "/repo",
+            worktreePath = "/repo",
+        )
+        assertNull(resolveWorktreeEnvironment(stamped, listOf(stamped)))
+    }
+
+    @Test
+    fun plainChatDoesNotInheritMainCheckoutSiblingWorktreeLabel() {
+        val stamped = task(
+            id = "stamped",
+            cwd = "/repo",
+            originDir = "/repo",
+            worktreePath = "/repo",
+            createdAtMillis = 1,
+        )
+        val plain = task(id = "plain", cwd = "/repo", originDir = "/repo", createdAtMillis = 2)
+        assertNull(resolveWorktreeEnvironment(plain, listOf(stamped, plain)))
+    }
+
+    @Test
+    fun handoffWithOriginEqualToAndyWorktreeStillResolves() {
+        val path = "/home/me/.andy/worktrees/repo-abc123"
+        val handoff = task(
+            id = "handoff",
+            cwd = path,
+            originDir = path,
+            worktreePath = path,
+        )
+        val resolved = resolveWorktreeEnvironment(handoff, listOf(handoff))!!
+        assertEquals(path, resolved.path)
+        assertEquals("handoff", resolved.ownerTaskId)
+    }
+
+    @Test
+    fun sideChatStillInheritsRealSiblingWorktree() {
+        val owner = task(
+            id = "owner",
+            cwd = "/wt/one",
+            originDir = "/repo",
+            worktreePath = "/wt/one",
+            branchName = "andy/one",
+            ownsWorktree = true,
+        )
+        val side = task(id = "side", cwd = "/wt/one", originDir = "/repo")
+        val resolved = resolveWorktreeEnvironment(side, listOf(owner, side))!!
+        assertEquals("/wt/one", resolved.path)
+        assertEquals("owner", resolved.ownerTaskId)
+    }
 }
