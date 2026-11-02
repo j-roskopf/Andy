@@ -785,21 +785,21 @@ jobs:
           name: Andy ${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: |
-            release-artifacts/**/*.deb
-            release-artifacts/**/*.flatpak
-            release-artifacts/**/*.msi
-            release-artifacts/**/*.dmg
-            release-artifacts/**/*.apk
-            release-artifacts/**/andy-*-linux-x86_64
-            release-artifacts/**/andy-*-macos-arm64
-            release-artifacts/**/andyd-*-linux-x86_64.jar
-            release-artifacts/**/andyd-*-macos-arm64.jar
-            release-artifacts/**/tmux-*-linux-x86_64
-            release-artifacts/**/tmux-*-macos-arm64
-            release-artifacts/**/andy-tracebox
-            release-artifacts/**/andy-tracebox-bin-*
-            release-artifacts/**/andy-tracebox-SHA256SUMS
-            release-artifacts/**/andy-tracebox-LICENSE.txt
+            release-artifacts/*.deb
+            release-artifacts/*.flatpak
+            release-artifacts/*.msi
+            release-artifacts/*.dmg
+            release-artifacts/*.apk
+            release-artifacts/andy-*-linux-x86_64
+            release-artifacts/andy-*-macos-arm64
+            release-artifacts/andyd-*-linux-x86_64.jar
+            release-artifacts/andyd-*-macos-arm64.jar
+            release-artifacts/tmux-*-linux-x86_64
+            release-artifacts/tmux-*-macos-arm64
+            release-artifacts/andy-tracebox
+            release-artifacts/andy-tracebox-bin-*
+            release-artifacts/andy-tracebox-SHA256SUMS
+            release-artifacts/andy-tracebox-LICENSE.txt
             release-artifacts/install-andy.sh
             release-artifacts/andy-status-hook.sh
 
