@@ -20,4 +20,18 @@ class GroupChatsByProjectTest {
         assertEquals("Alpha", groups[0].projectName)
         assertEquals("No project", groups[2].projectName)
     }
+
+    @Test
+    fun keepsArchivedChatsAndTheirProject() {
+        val projects = listOf(
+            ProjectDto("a", "Alpha"),
+            ProjectDto("b", "Beta"),
+        )
+        val chats = listOf(
+            ChatDto(id = "1", title = "one", projectId = "a", archived = true),
+        )
+        val groups = groupChatsByProject(projects, chats)
+        assertEquals(listOf("a"), groups.map { it.projectId })
+        assertEquals(listOf("1"), groups.single().chats.map { it.id })
+    }
 }

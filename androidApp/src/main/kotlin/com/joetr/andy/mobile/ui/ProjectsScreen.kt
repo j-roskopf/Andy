@@ -467,12 +467,33 @@ fun ProjectsScreen(
                                 )
                             }
                             if (isExpanded) {
+                                val activeChats = group.chats.filterNot { it.archived }
+                                val archivedChats = group.chats.filter { it.archived }
                                 items(
-                                    items = group.chats,
+                                    items = activeChats,
                                     key = { chat -> "chat-${group.projectId}-${chat.id}" },
                                     contentType = { "chat" },
                                 ) { chat ->
                                     ChatRow(chat = chat, onClick = { onOpenChat(chat.id) })
+                                }
+                                if (archivedChats.isNotEmpty()) {
+                                    item(
+                                        key = "archived-${group.projectId}",
+                                        contentType = "archived-header",
+                                    ) {
+                                        ArchivedSectionHeader(count = archivedChats.size)
+                                    }
+                                    items(
+                                        items = archivedChats,
+                                        key = { chat -> "archived-chat-${group.projectId}-${chat.id}" },
+                                        contentType = { "chat" },
+                                    ) { chat ->
+                                        ChatRow(
+                                            chat = chat,
+                                            archived = true,
+                                            onClick = { onOpenChat(chat.id) },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -578,9 +599,39 @@ private fun ProjectHeader(
 }
 
 @Composable
-private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
+private fun ArchivedSectionHeader(count: Int) {
+    val tokens = andyTokens()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = AndySpace.Space5,
+                end = AndySpace.Space4,
+                top = AndySpace.Space3,
+                bottom = AndySpace.Space1,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AndySpace.Space2),
+    ) {
+        LucideIcon(
+            Lucide.Clock,
+            contentDescription = null,
+            tint = tokens.palette.textTertiary,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            "Archived ($count)",
+            style = MaterialTheme.typography.labelMedium,
+            color = tokens.palette.textTertiary,
+        )
+    }
+}
+
+@Composable
+private fun ChatRow(chat: ChatDto, onClick: () -> Unit, archived: Boolean = false) {
     val tokens = andyTokens()
     val attentionVariant = when {
+        archived -> null
         chat.userInputRequest != null ||
             chat.status.equals("Blocked", ignoreCase = true) -> StatusDotVariant.Warning
         chat.status.equals("Error", ignoreCase = true) -> StatusDotVariant.Error
@@ -609,7 +660,7 @@ private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
             Text(
                 chat.title.ifBlank { chat.prompt.take(48).ifBlank { chat.id } },
                 style = MaterialTheme.typography.bodyLarge,
-                color = tokens.palette.textPrimary,
+                color = if (archived) tokens.palette.textSecondary else tokens.palette.textPrimary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -618,6 +669,7 @@ private fun ChatRow(chat: ChatDto, onClick: () -> Unit) {
                 listOfNotNull(
                     chat.agent.takeIf { it.isNotBlank() },
                     chat.displayStatusLabel().takeIf { it.isNotBlank() },
+                    "Archived".takeIf { archived },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = tokens.palette.textTertiary,

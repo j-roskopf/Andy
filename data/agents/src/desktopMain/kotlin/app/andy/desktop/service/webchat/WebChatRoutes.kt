@@ -305,8 +305,10 @@ internal fun Application.installWebChatRoutes(
                 // Temporary chats never leave this desktop session — see excludingTemporary.
                 // ACP chats are fully interactive; Terminal chats appear only while they need
                 // a decision (grill-me / question.json) so mobile+web can answer them.
+                val includeArchived = call.request.queryParameters["includeArchived"]
+                    ?.toBooleanStrictOrNull() == true
                 val chats = agents.tasks.value.excludingTemporary()
-                    .filter { !it.archived && it.isNetworkAccessVisible() }
+                    .filter { (includeArchived || !it.archived) && it.isNetworkAccessVisible() }
                     .sortedByDescending { it.createdAtMillis }
                 call.respondText(buildJsonArray { chats.forEach { add(it.toChatJson()) } }.toString(), ContentType.Application.Json)
             }
