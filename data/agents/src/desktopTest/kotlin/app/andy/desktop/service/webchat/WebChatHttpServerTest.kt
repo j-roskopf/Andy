@@ -252,6 +252,24 @@ class WebChatHttpServerTest {
     }
 
     @Test
+    fun archivedChatsAreHiddenByDefaultAndIncludedOnRequest() = runBlocking {
+        agents.setArchived("acp-1", true)
+        val client = HttpClient(CIO)
+        try {
+            val hidden = client.get("http://127.0.0.1:$port/api/chats")
+            assertEquals(HttpStatusCode.OK, hidden.status)
+            assertTrue(!hidden.bodyAsText().contains("acp-1"), "archived chats must be hidden by default")
+
+            val included = client.get("http://127.0.0.1:$port/api/chats?includeArchived=true")
+            assertEquals(HttpStatusCode.OK, included.status)
+            assertTrue(included.bodyAsText().contains("acp-1"), "includeArchived must surface archived chats")
+        } finally {
+            agents.setArchived("acp-1", false)
+            client.close()
+        }
+    }
+
+    @Test
     fun terminalChatWithPendingDecisionIsVisibleAndRespondable() = runBlocking {
         agents.setUserInput(
             "term-1",
@@ -958,6 +976,12 @@ class WebChatHttpServerTest {
         fun setStatus(taskId: String, status: AgentStatus) {
             _tasks.value = _tasks.value.map { task ->
                 if (task.id == taskId) task.copy(status = status) else task
+            }
+        }
+
+        fun setArchived(taskId: String, archived: Boolean) {
+            _tasks.value = _tasks.value.map { task ->
+                if (task.id == taskId) task.copy(archived = archived) else task
             }
         }
 

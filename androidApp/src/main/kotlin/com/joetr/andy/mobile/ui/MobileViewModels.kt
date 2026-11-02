@@ -95,7 +95,7 @@ class ProjectsViewModel(
         try {
             _groups.value = loadProjectGroupsConcurrently(
                 loadProjects = client::listProjects,
-                loadChats = client::listChats,
+                loadChats = { client.listChats(includeArchived = true) },
             )
             _signedIn.value = true
             _loadedHostId.value = hostId

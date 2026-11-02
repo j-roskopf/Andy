@@ -134,8 +134,8 @@ class NetworkAccessClient(
             json.decodeFromJsonElement(ProjectDto.serializer(), it)
         }
 
-    suspend fun listChats(): List<ChatDto> =
-        getJson("/api/chats").jsonArray.map {
+    suspend fun listChats(includeArchived: Boolean = false): List<ChatDto> =
+        getJson(if (includeArchived) "/api/chats?includeArchived=true" else "/api/chats").jsonArray.map {
             json.decodeFromJsonElement(ChatDto.serializer(), it)
         }
 
