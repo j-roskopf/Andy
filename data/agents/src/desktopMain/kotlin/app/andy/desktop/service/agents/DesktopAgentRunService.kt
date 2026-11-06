@@ -157,6 +157,13 @@ private const val DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS = 3 * 60 * 1000L
  * before concluding it was dropped and finalizing the turn itself.
  */
 private const val DEFAULT_ACP_HOOK_DONE_GRACE_MS = 20_000L
+/**
+ * Hard ceiling on how long the hook-done fallback will keep deferring to fresh transcript
+ * activity (e.g. a background Task-tool subagent) before finalizing regardless. Without this,
+ * a session that never goes quiet for a full grace window — a legitimately very long background
+ * task, or a runaway tool-call loop — would defer forever.
+ */
+private const val DEFAULT_ACP_HOOK_DONE_MAX_DEFER_MS = 10 * 60 * 1000L
 /** Distinguishes a hook-recovered turn from a real provider stop reason in the stored task. */
 internal const val ACP_HOOK_DONE_STOP_REASON = "andy_hook_done"
 private val VERIFICATION_BLOCK = Regex("""<andy_verification>([\s\S]*?)</andy_verification>""")
@@ -180,6 +187,8 @@ class DesktopAgentRunService(
     private val artifactWaitMs: Long = DEFAULT_WORKFLOW_ARTIFACT_WAIT_MS,
     /** Tests inject a short value so the ACP hook-done fallback is observable in-test. */
     private val acpHookDoneGraceMs: Long = DEFAULT_ACP_HOOK_DONE_GRACE_MS,
+    /** Tests inject a short value so the hook-done fallback's defer ceiling is observable in-test. */
+    private val acpHookDoneMaxDeferMs: Long = DEFAULT_ACP_HOOK_DONE_MAX_DEFER_MS,
     /**
      * False for the GUI attach bridge in daemon-client mode — that process must not
      * kill `tmux -L andy` sessions owned by a running `andyd`.
@@ -326,6 +335,12 @@ class DesktopAgentRunService(
 
     private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
+    /**
+     * Newest accepted ACP event timestamp, per task. The display transcript coalesces stream
+     * deltas in place and deliberately keeps the first chunk's `atMillis`, so its max timestamp
+     * stalls while text keeps streaming. The hook-done watchdog needs the real arrival time.
+     */
+    private val acpTranscriptActivityAt = ConcurrentHashMap<String, Long>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
     private val acpTranscriptStore = AcpTranscriptStore(::resolvedTranscriptFile)
     private val transcriptSearch by lazy {
@@ -2419,6 +2434,7 @@ class DesktopAgentRunService(
         runCatching { transcriptSearch.removeTask(taskId) }
         connectionRecoveryJobs.remove(taskId)?.cancel()
         eventFlows[taskId]?.value = emptyList()
+        acpTranscriptActivityAt.remove(taskId)
         upsertTask(retried)
         persist()
         launchRunAwaitingTerminal(
@@ -3905,6 +3921,7 @@ class DesktopAgentRunService(
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
+        acpTranscriptActivityAt.remove(taskId)
         connectionRecoveryJobs.remove(taskId)?.cancel()
         scheduledConnectionRecoveryResumes.remove(taskId)
         _tasks.update { list ->
@@ -6443,6 +6460,9 @@ class DesktopAgentRunService(
             previousProviderTitle = event.title.trim()
         }
         if (isAcp) {
+            accepted.maxOfOrNull { it.atMillis }?.let { atMillis ->
+                acpTranscriptActivityAt.merge(taskId, atMillis) { old, new -> maxOf(old, new) }
+            }
             var shouldReindex = false
             accepted.forEach { event ->
                 if (event is AgentEvent.ToolCall) {
@@ -6574,6 +6594,17 @@ class DesktopAgentRunService(
      * witness that the turn ended, so treat it as a fallback rather than authority: arm a grace
      * timer, and finalize here only if the real stop reason still has not landed.
      *
+     * `Stop` also fires when a foreground turn legitimately ends while Claude Code keeps a
+     * background Task-tool subagent running in the same session (e.g. "I'll report back once it
+     * finishes") — that subagent keeps appending transcript events long after the hook's `done`.
+     * Treating that as a dropped stop reason and killing the session (see [finalizeHungAcpTurn])
+     * would cut the subagent off mid-work. So each time the grace period elapses, check for
+     * transcript activity since the last check: if something landed, the session is still
+     * productive — push the deadline out and wait again rather than finalizing. That deferral is
+     * capped at [acpHookDoneMaxDeferMs] total so a session that never goes quiet (an unusually
+     * long background task, or a runaway tool-call loop) cannot defer this watchdog forever —
+     * once the ceiling is hit it finalizes on the next tick regardless of fresh activity.
+     *
      * See [acpTurnLooksHung] for what separates a dropped stop reason from a turn ending normally.
      */
     private fun onAcpHookStatus(taskId: String, event: AgentWorkflowArtifacts.Event.StatusReady) {
@@ -6583,13 +6614,30 @@ class DesktopAgentRunService(
         // Lazy so the completion handler cannot un-register the job before it is registered —
         // this map gates re-arming, and a stale entry would disable the fallback for good.
         val job = scope.launch(start = CoroutineStart.LAZY) {
-            delay(acpHookDoneGraceMs)
-            if (acpTurnLooksHung(taskId, event.atMillis)) finalizeHungAcpTurn(taskId)
+            var quietSinceMillis = lastAcpTranscriptActivityMillis(taskId) ?: event.atMillis
+            val deferDeadlineMillis = event.atMillis + acpHookDoneMaxDeferMs
+            while (true) {
+                delay(acpHookDoneGraceMs)
+                val latestActivityMillis = lastAcpTranscriptActivityMillis(taskId)
+                val withinDeferCeiling = System.currentTimeMillis() < deferDeadlineMillis
+                if (withinDeferCeiling && latestActivityMillis != null && latestActivityMillis > quietSinceMillis) {
+                    quietSinceMillis = latestActivityMillis
+                    continue
+                }
+                if (acpTurnLooksHung(taskId, event.atMillis)) finalizeHungAcpTurn(taskId)
+                break
+            }
         }
         acpHookDoneJobs[taskId] = job
         job.invokeOnCompletion { acpHookDoneJobs.remove(taskId, job) }
         job.start()
     }
+
+    private fun lastAcpTranscriptActivityMillis(taskId: String): Long? =
+        listOfNotNull(
+            eventFlows[taskId]?.value?.maxOfOrNull { it.atMillis },
+            acpTranscriptActivityAt[taskId],
+        ).maxOrNull()
 
     /**
      * Second-aligned because the status hook stamps `at` in whole epoch seconds — an unaligned
