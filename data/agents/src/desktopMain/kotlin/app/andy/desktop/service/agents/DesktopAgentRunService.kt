@@ -335,6 +335,12 @@ class DesktopAgentRunService(
 
     private val previousTaskStatuses = ConcurrentHashMap<String, AgentStatus?>()
     private val eventFlows = ConcurrentHashMap<String, MutableStateFlow<List<AgentEvent>>>()
+    /**
+     * Newest accepted ACP event timestamp, per task. The display transcript coalesces stream
+     * deltas in place and deliberately keeps the first chunk's `atMillis`, so its max timestamp
+     * stalls while text keeps streaming. The hook-done watchdog needs the real arrival time.
+     */
+    private val acpTranscriptActivityAt = ConcurrentHashMap<String, Long>()
     private val emptyEvents = MutableStateFlow<List<AgentEvent>>(emptyList())
     private val acpTranscriptStore = AcpTranscriptStore(::resolvedTranscriptFile)
     private val transcriptSearch by lazy {
@@ -2428,6 +2434,7 @@ class DesktopAgentRunService(
         runCatching { transcriptSearch.removeTask(taskId) }
         connectionRecoveryJobs.remove(taskId)?.cancel()
         eventFlows[taskId]?.value = emptyList()
+        acpTranscriptActivityAt.remove(taskId)
         upsertTask(retried)
         persist()
         launchRunAwaitingTerminal(
@@ -3914,6 +3921,7 @@ class DesktopAgentRunService(
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
         eventFlows.remove(taskId)
+        acpTranscriptActivityAt.remove(taskId)
         connectionRecoveryJobs.remove(taskId)?.cancel()
         scheduledConnectionRecoveryResumes.remove(taskId)
         _tasks.update { list ->
@@ -6452,6 +6460,9 @@ class DesktopAgentRunService(
             previousProviderTitle = event.title.trim()
         }
         if (isAcp) {
+            accepted.maxOfOrNull { it.atMillis }?.let { atMillis ->
+                acpTranscriptActivityAt.merge(taskId, atMillis) { old, new -> maxOf(old, new) }
+            }
             var shouldReindex = false
             accepted.forEach { event ->
                 if (event is AgentEvent.ToolCall) {
@@ -6623,7 +6634,10 @@ class DesktopAgentRunService(
     }
 
     private fun lastAcpTranscriptActivityMillis(taskId: String): Long? =
-        eventFlows[taskId]?.value?.maxOfOrNull { it.atMillis }
+        listOfNotNull(
+            eventFlows[taskId]?.value?.maxOfOrNull { it.atMillis },
+            acpTranscriptActivityAt[taskId],
+        ).maxOrNull()
 
     /**
      * Second-aligned because the status hook stamps `at` in whole epoch seconds — an unaligned
