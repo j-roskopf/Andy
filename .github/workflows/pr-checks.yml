@@ -267,8 +267,23 @@ jobs:
 
       - name: Build and test Andy Rust CLI
         run: |
-          rustup show || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source "$HOME/.cargo/env" 2>/dev/null || true
+          # macos-latest intermittently resolves `cargo` to Homebrew's `rustup-init`
+          # shim (which rejects subcommands like `test`), so install/probe via the
+          # official rustup and put the real toolchain bin dir first on PATH.
+          ensure_real_rust() {
+            export PATH="$HOME/.cargo/bin:$PATH"
+            if ! cargo --version >/dev/null 2>&1; then
+              rm -rf "$HOME/.cargo/bin"
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --no-modify-path
+              export PATH="$HOME/.cargo/bin:$PATH"
+            fi
+            [ -n "${GITHUB_PATH:-}" ] && echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            cargo --version
+            rustc --version
+          }
+          rustup show >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+          ensure_real_rust
           cargo test --manifest-path cli/andy/Cargo.toml
           cargo build --manifest-path cli/andy/Cargo.toml
 

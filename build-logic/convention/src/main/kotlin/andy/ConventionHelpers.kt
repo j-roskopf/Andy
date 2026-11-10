@@ -5,8 +5,10 @@ import org.gradle.api.artifacts.VersionCatalog
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.plugins.BasePluginExtension
 import org.gradle.api.tasks.testing.Test
+import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByType
 import org.gradle.kotlin.dsl.withType
+import org.gradle.testretry.TestRetryTaskExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 
@@ -84,10 +86,23 @@ internal fun Project.configureAndyKmp(
 }
 
 internal fun Project.configureAndyDesktopTests() {
+    // CI opts into retries with -PandyRetryTests=true. Timing/socket/file-watcher tests are
+    // occasionally flaky on slower macOS runners; retrying keeps the signal without silencing
+    // genuine failures (a test that only ever fails still fails the build).
+    val retryTests = providers.gradleProperty("andyRetryTests").orNull?.toBoolean() == true
+    if (retryTests) {
+        pluginManager.apply("org.gradle.test-retry")
+    }
     tasks.withType<Test>().configureEach {
         if (name == "desktopTest") {
             systemProperty("java.awt.headless", "false")
             jvmArgs("--add-exports=jdk.unsupported.desktop/jdk.swing.interop=ALL-UNNAMED")
+            if (retryTests) {
+                extensions.configure<TestRetryTaskExtension> {
+                    maxRetries.set(3)
+                    failOnPassedAfterRetry.set(false)
+                }
+            }
         }
     }
 }

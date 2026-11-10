@@ -17,4 +17,6 @@ dependencies {
     implementation(libs.kotlin.serialization.gradlePlugin)
     implementation(libs.metro.gradlePlugin)
     implementation(libs.sqldelight.gradlePlugin)
+    val testRetryPlugin = libs.plugins.testRetry.get()
+    implementation("${testRetryPlugin.pluginId}:${testRetryPlugin.pluginId}.gradle.plugin:${testRetryPlugin.version}")
 }
