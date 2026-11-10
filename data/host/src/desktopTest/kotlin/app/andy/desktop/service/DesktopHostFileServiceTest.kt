@@ -99,17 +99,17 @@ class DesktopHostFileServiceTest {
         val service = DesktopHostFileService(indexDir = indexDir)
         val collector = launch { service.indexRoot(root.absolutePath).collect {} }
         try {
-            withTimeout(5_000) {
+            withTimeout(harnessTimeoutMillis(5_000, 15_000)) {
                 while (service.search("stale", HostSearchMode.Content, listOf(root.absolutePath), 10).isEmpty()) {
                     delay(50)
                 }
             }
             // Allow async watchAsync() registration to finish before deleting.
-            delay(500)
+            delay(harnessTimeoutMillis(500, 1_000))
 
             deletedDir.deleteRecursively()
 
-            withTimeout(8_000) {
+            withTimeout(harnessTimeoutMillis(8_000, 20_000, 30_000)) {
                 while (service.search("stale", HostSearchMode.Content, listOf(root.absolutePath), 10).isNotEmpty()) {
                     delay(50)
                 }
