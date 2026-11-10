@@ -1037,6 +1037,8 @@ data class MirrorVideoConfig(
     val maxFps: Int = 60,
     val codec: String = "h264",
     val rendererMode: MirrorRendererMode = MirrorRendererMode.Auto,
+    /** Logical Android display to capture. 0 is the default display; dual-screen devices add more. */
+    val displayId: Int = 0,
 )
 
 /** One Annex-B H.264 access unit from the device stream, for bug capture remux. */

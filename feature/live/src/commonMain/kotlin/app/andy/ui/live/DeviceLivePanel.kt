@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.andy.model.AndroidDevice
+import app.andy.model.MirrorTarget
 import app.andy.service.AndyServices
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorSession
@@ -25,6 +26,8 @@ fun DeviceLivePanel(
     serial: String?,
     device: AndroidDevice?,
     displayName: String? = device?.displayName,
+    /** Serial plus secondary display id; distinct mirrors of the same device must not share state. */
+    targetId: String? = serial,
     modifier: Modifier = Modifier,
     mirror: MirrorEngine = services.mirror,
     showChromeControls: Boolean = true,
@@ -35,6 +38,8 @@ fun DeviceLivePanel(
     deviceCornerRadius: Dp = 10.dp,
 ) {
     val scope = rememberCoroutineScope()
+    val displayId = targetId?.let(MirrorTarget::displayId) ?: 0
+    fun mirrorConfig() = LiveMirrorSettings.config.value.copy(displayId = displayId)
     var mirrorStatus by remember { mutableStateOf("Disconnected") }
     var mirrorSession by remember { mutableStateOf<MirrorSession?>(null) }
     var connectResult by remember { mutableStateOf("") }
@@ -50,7 +55,7 @@ fun DeviceLivePanel(
     fun connect() {
         if (serial != null) {
             scope.launch {
-                val result = mirror.connect(serial, LiveMirrorSettings.config.value)
+                val result = mirror.connect(serial, mirrorConfig())
                 connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
             }
         }
@@ -62,7 +67,7 @@ fun DeviceLivePanel(
     LaunchedEffect(mirror, serial) {
         connectResult = ""
         if (serial != null) {
-            val result = mirror.connect(serial, LiveMirrorSettings.config.value)
+            val result = mirror.connect(serial, mirrorConfig())
             connectResult = if (result.isSuccess) result.stdout.ifBlank { "Connected" } else result.stderr
         } else if (mirror === services.mirror) {
             withContext(NonCancellable) {
@@ -70,10 +75,11 @@ fun DeviceLivePanel(
             }
         }
     }
-    MirrorFrameContent(mirror, serial) { frameFlow, frame ->
+    MirrorFrameContent(mirror, targetId ?: serial) { frameFlow, frame ->
         LiveDevicePane(
             serial = serial,
             device = device,
+            mirrorStreamKey = targetId ?: serial,
             displayName = displayName,
             frame = frame,
             frameFlow = frameFlow,

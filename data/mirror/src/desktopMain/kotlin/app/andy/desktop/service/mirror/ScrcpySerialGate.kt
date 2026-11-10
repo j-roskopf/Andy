@@ -15,20 +15,38 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object ScrcpySerialGate {
     private val mutexes = ConcurrentHashMap<String, Mutex>()
+    private val deviceMutexes = ConcurrentHashMap<String, Mutex>()
+    private val capturingStreams = ConcurrentHashMap.newKeySet<String>()
 
-    private fun mutexFor(serial: String): Mutex =
-        mutexes.getOrPut(serial) { Mutex() }
+    private fun mutexFor(streamKey: String): Mutex =
+        mutexes.getOrPut(streamKey) { Mutex() }
+
+    private fun deviceMutexFor(serial: String): Mutex =
+        deviceMutexes.getOrPut(serial) { Mutex() }
 
     /**
-     * Runs [block] while holding the serial. If another session owns it, invokes [onWaiting] once
-     * then suspends until that session unlocks (dock ↔ main Live handoff).
+     * Runs [block] while holding [serial]'s default display. Kept for callers that mirror display 0.
      */
     suspend fun <T> withExclusive(
         serial: String,
         onWaiting: (() -> Unit)? = null,
         block: suspend () -> T,
+    ): T = withExclusive(serial, serial, onWaiting, block)
+
+    /**
+     * Runs [block] while holding one display stream ([streamKey] = serial + display id). If another
+     * session owns the same stream, invokes [onWaiting] once then suspends until it unlocks.
+     *
+     * Different displays of the same device use different keys, so a dual-screen device can run
+     * one scrcpy server per panel.
+     */
+    suspend fun <T> withExclusive(
+        streamKey: String,
+        serial: String,
+        onWaiting: (() -> Unit)? = null,
+        block: suspend () -> T,
     ): T {
-        val mutex = mutexFor(serial)
+        val mutex = mutexFor(streamKey)
         if (!mutex.tryLock()) {
             onWaiting?.invoke()
             mutex.lock()
@@ -36,11 +54,33 @@ object ScrcpySerialGate {
         try {
             return block()
         } finally {
+            capturingStreams -= streamKey
             mutex.unlock()
         }
     }
 
-    /** Test helper: true when no coroutine currently holds [serial]. */
+    /**
+     * Serializes first-time device setup per serial and records that [streamKey] is capturing.
+     *
+     * [cleanup] (orphan-server pkill) runs only when no other display of the same device is
+     * already capturing. The check-and-mark is guarded by a per-device lock, so two displays that
+     * start at the same time clean up exactly once instead of both skipping or both killing the
+     * other's server. Per-display capture exclusivity still comes from [withExclusive].
+     */
+    suspend fun withDeviceStartup(streamKey: String, serial: String, cleanup: suspend () -> Unit) {
+        deviceMutexFor(serial).lock()
+        try {
+            val otherCapturing = capturingStreams.any {
+                it != streamKey && app.andy.model.MirrorTarget.serial(it) == serial
+            }
+            if (!otherCapturing) cleanup()
+            capturingStreams += streamKey
+        } finally {
+            deviceMutexFor(serial).unlock()
+        }
+    }
+
+    /** Test helper: true when no coroutine currently holds [serial]'s default display. */
     fun isAvailable(serial: String): Boolean = !mutexFor(serial).isLocked
 }
 

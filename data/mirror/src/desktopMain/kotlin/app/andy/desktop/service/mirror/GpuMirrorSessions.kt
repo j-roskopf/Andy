@@ -1,7 +1,8 @@
 package app.andy.desktop.service.mirror
 
 /**
- * Binds one [GpuMirrorPipeline] per device serial (or other stable stream key).
+ * Binds one [GpuMirrorPipeline] per stream key: a device serial, or serial plus secondary
+ * display id so a dual-screen device decodes each panel on its own pipeline.
  *
  * Pipelines are **reference counted**: Live and a same-device pop-out both hold the same decode
  * session (fan-out), so the pipeline must survive until the *last* holder releases it. A single

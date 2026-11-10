@@ -1,16 +1,20 @@
 package app.andy.desktop.service.mirror
 
+import app.andy.model.MirrorTarget
 import app.andy.service.CommandResult
 import app.andy.service.MirrorEngine
 import app.andy.service.MirrorFrame
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorSession
 import app.andy.service.MirrorVideoConfig
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -72,6 +76,60 @@ class ScrcpySerialGateTest {
             order,
         )
         assertTrue(ScrcpySerialGate.isAvailable(serial))
+    }
+
+    @Test
+    fun differentDisplaysOfOneSerialCaptureConcurrently() = runBlocking {
+        val serial = "gate-dual-${System.nanoTime()}"
+        val primaryKey = MirrorTarget.id(serial, 0)
+        val secondaryKey = MirrorTarget.id(serial, 2)
+        val primaryEntered = CompletableDeferred<Unit>()
+        val secondaryEntered = CompletableDeferred<Unit>()
+        val first = async {
+            ScrcpySerialGate.withExclusive(primaryKey, serial) {
+                primaryEntered.complete(Unit)
+                secondaryEntered.await()
+            }
+        }
+        val second = async {
+            ScrcpySerialGate.withExclusive(secondaryKey, serial) {
+                secondaryEntered.complete(Unit)
+                primaryEntered.await()
+            }
+        }
+        withTimeout(2_000) {
+            first.await()
+            second.await()
+        }
+        assertTrue(ScrcpySerialGate.isAvailable(primaryKey))
+        assertTrue(ScrcpySerialGate.isAvailable(secondaryKey))
+    }
+
+    @Test
+    fun concurrentDisplayStartupsCleanUpOrphansExactlyOnce() = runBlocking {
+        val serial = "gate-cleanup-${System.nanoTime()}"
+        val primaryKey = MirrorTarget.id(serial, 0)
+        val secondaryKey = MirrorTarget.id(serial, 2)
+        val cleanups = AtomicInteger(0)
+        val first = async {
+            ScrcpySerialGate.withExclusive(primaryKey, serial) {
+                ScrcpySerialGate.withDeviceStartup(primaryKey, serial) { cleanups.incrementAndGet() }
+                delay(20)
+            }
+        }
+        val second = async {
+            ScrcpySerialGate.withExclusive(secondaryKey, serial) {
+                ScrcpySerialGate.withDeviceStartup(secondaryKey, serial) { cleanups.incrementAndGet() }
+            }
+        }
+        first.await()
+        second.await()
+        assertEquals(1, cleanups.get())
+        // Once both streams end, the next startup must clean up again.
+        ScrcpySerialGate.withExclusive(primaryKey, serial) {
+            ScrcpySerialGate.withDeviceStartup(primaryKey, serial) { cleanups.incrementAndGet() }
+        }
+        assertEquals(2, cleanups.get())
     }
 
     @Test

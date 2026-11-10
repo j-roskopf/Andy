@@ -2,13 +2,17 @@ package app.andy.ui.shell
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.andy.model.AndroidDevice
+import app.andy.model.AndroidDisplay
 import app.andy.model.DeviceConnectionState
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
+import app.andy.model.MirrorTarget
 
 /**
  * Device list for a Live dock tab / leaf, rendered inside [ChromeFlyout] so the menu lives in
@@ -19,6 +23,7 @@ internal fun LiveDevicePickerPanel(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    deviceDisplays: Map<String, List<AndroidDisplay>> = emptyMap(),
     takenIosKinds: Set<IosTargetKind> = emptySet(),
     onSelectTarget: (String) -> Unit,
 ) {
@@ -43,6 +48,22 @@ internal fun LiveDevicePickerPanel(
                             ?: device.serial.takeIf { it != title },
                         onClick = { onSelectTarget(device.serial) },
                     )
+                    // Dual-screen devices expose extra logical displays. Listing them here is the
+                    // only way back to a secondary pane after closing it: the dock split creates
+                    // the pane, but the picker must still be able to rebind it.
+                    deviceDisplays[device.serial]
+                        ?.filter { it.id != 0 && it.isEnabled }
+                        ?.forEach { display ->
+                            ChromeFlyoutRow(
+                                label = "$title · Display ${display.id}",
+                                supporting = display.name?.takeIf { it.isNotBlank() }
+                                    ?: "Secondary screen",
+                                modifier = Modifier.padding(start = 16.dp),
+                                onClick = {
+                                    onSelectTarget(MirrorTarget.id(device.serial, display.id))
+                                },
+                            )
+                        }
                 }
             }
             if (activeIosTargets.isNotEmpty()) {

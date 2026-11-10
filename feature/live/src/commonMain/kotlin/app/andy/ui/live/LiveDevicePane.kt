@@ -255,6 +255,13 @@ internal fun foldableStreamMatchesPosture(
 }
 
 /** Minimum pane width to show the side toolbar plus a height-fitted mirror. */
+/**
+ * Left-side toolbar allowance inside [LiveDevicePane]. The mirror is centered in the space to the
+ * right of this toolbar, so callers that center a mirror against a sibling pane must balance it.
+ */
+internal fun liveDevicePaneToolbarAllowance(showSideToolbar: Boolean): Dp =
+    if (showSideToolbar) 78.dp else 0.dp
+
 internal fun liveDevicePaneFittedWidth(
     maxPaneHeight: Dp,
     device: AndroidDevice?,
@@ -280,13 +287,12 @@ internal fun liveDevicePaneFittedWidth(
     val aspect = source.width.toFloat() / source.height.toFloat()
     val horizontalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
     val verticalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
-    val toolbarWidth = if (showSideToolbar) 68.dp else 0.dp
-    val toolbarGap = if (showSideToolbar) 10.dp else 0.dp
+    val toolbarAllowance = liveDevicePaneToolbarAllowance(showSideToolbar)
     val headerBlock = if (showDeviceHeader) 42.dp else 0.dp
     val navHeight = if (showChromeControls) 60.dp else 0.dp
     val mirrorViewportHeight = (maxPaneHeight - verticalChrome - headerBlock - navHeight).coerceAtLeast(1.dp)
     val mirrorWidth = mirrorViewportHeight * aspect
-    val fittedToMirror = toolbarWidth + toolbarGap + horizontalChrome + mirrorWidth
+    val fittedToMirror = toolbarAllowance + horizontalChrome + mirrorWidth
     // Tall phones fit the mirror into a narrow column; keep enough room for stream
     // chips + Pop out so the header does not feel crushed on first load.
     val headerFloor = if (showDeviceHeader) 560.dp else 0.dp
@@ -303,9 +309,7 @@ internal fun liveDevicePaneMinWidth(
     minMirrorWidth: Dp = 200.dp,
 ): Dp {
     val horizontalChrome = if (showContainerChrome) AndySpace.Space5 * 2 else 0.dp
-    val toolbarWidth = if (showSideToolbar) 68.dp else 0.dp
-    val toolbarGap = if (showSideToolbar) 10.dp else 0.dp
-    return toolbarWidth + toolbarGap + horizontalChrome + minMirrorWidth
+    return liveDevicePaneToolbarAllowance(showSideToolbar) + horizontalChrome + minMirrorWidth
 }
 
 @Composable
@@ -634,7 +638,7 @@ fun LiveDevicePane(
                                         deferNativePresentation = deferNative,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
-                                        gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
+                                        gpuMirrorStreamKey = (mirrorStreamKey ?: serial).takeIf { registerNativeHost },
                                     )
                                 } else {
                                     MirrorVideoSurface(
@@ -652,7 +656,7 @@ fun LiveDevicePane(
                                         deferNativePresentation = deferNative,
                                         nativePresentation = registerNativeHost,
                                         nativePresentationFillHost = registerNativeHostFill,
-                                        gpuMirrorStreamKey = serial.takeIf { registerNativeHost },
+                                        gpuMirrorStreamKey = (mirrorStreamKey ?: serial).takeIf { registerNativeHost },
                                     )
                                 }
                                 if (showRuler) {

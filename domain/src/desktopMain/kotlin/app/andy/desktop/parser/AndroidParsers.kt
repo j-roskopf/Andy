@@ -123,6 +123,13 @@ object AndroidParsers {
         return "${width}x${height}"
     }
 
+    /** All logical displays that can be mirrored (dual-screen handhelds expose more than display 0). */
+    fun parseDisplays(output: String): List<AndroidDisplay> = parseAndroidDisplays(output)
+
+    /** Rotation-aware current size for one logical display. */
+    fun parseDisplayCurrentSize(output: String, displayId: Int): String? =
+        parseAndroidDisplaySize(output, displayId)?.let { (width, height) -> "${width}x$height" }
+
     fun parseStorage(output: String): String? {
         val line = output.lineSequence().firstOrNull { it.contains("/data") || it.contains("/sdcard") }
             ?: output.lineSequence().drop(1).firstOrNull()

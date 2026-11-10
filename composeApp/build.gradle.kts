@@ -875,7 +875,10 @@ val resignMacDistributable by tasks.registering {
                 .start()
             val out = proc.inputStream.bufferedReader().readText()
             proc.waitFor()
-            val match = Regex("\"(Developer ID Application: [^\"]+)\"").find(out)
+            // Return the SHA-1 hash rather than the common name: multiple certs can share the
+            // same "Developer ID Application: ..." CN, which makes `codesign --sign <name>`
+            // fail with "ambiguous" and exit 1. The hash is always unambiguous.
+            val match = Regex("""\b([0-9A-F]{40})\s+"Developer ID Application: [^"]+"""").find(out)
             return match?.groupValues?.get(1)
         }
 

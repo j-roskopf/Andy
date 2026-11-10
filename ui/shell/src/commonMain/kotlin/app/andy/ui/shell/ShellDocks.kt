@@ -773,6 +773,7 @@ internal fun ShellDockDrawer(
     devices: List<AndroidDevice> = emptyList(),
     iosTargets: List<IosTarget> = emptyList(),
     deviceLabels: Map<String, String> = emptyMap(),
+    deviceDisplays: Map<String, List<app.andy.model.AndroidDisplay>> = emptyMap(),
     liveMirrorFor: (targetId: String) -> MirrorEngine? = { null },
     liveTabPaused: (targetId: String?) -> Boolean = { false },
     liveTabPauseMessage: (targetId: String?) -> String = { "Live view pauses while another tab is open" },
@@ -1067,6 +1068,7 @@ internal fun ShellDockDrawer(
                 devices = devices,
                 iosTargets = iosTargets,
                 deviceLabels = deviceLabels,
+                deviceDisplays = deviceDisplays,
                 onSelectTarget = { targetId ->
                     val tab = livePickerTab ?: return@LiveDevicePickerPanel
                     val leafId = tab.focusedLiveLeafId
@@ -1147,6 +1149,7 @@ internal fun ShellDockDrawer(
                             devices = devices,
                             iosTargets = iosTargets,
                             deviceLabels = deviceLabels,
+                            deviceDisplays = deviceDisplays,
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,

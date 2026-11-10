@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AndroidDevice
+import app.andy.model.AndroidDisplay
 import app.andy.model.BugCaptureDraft
 import app.andy.model.BugReport
 import app.andy.model.DeviceConnectionState
@@ -44,12 +47,14 @@ import app.andy.model.IosDeveloperModeStatus
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
+import app.andy.model.MirrorTarget
 import app.andy.currentTimeMillis
 import app.andy.onExternalFileDrop
 import app.andy.service.AndyPlatform
 import app.andy.service.AndyServices
 import app.andy.service.CommandResult
 import app.andy.service.DhuSessionPhase
+import app.andy.service.MirrorEngine
 import app.andy.service.MirrorInput
 import app.andy.service.MirrorRendererMode
 import app.andy.service.MirrorSession
@@ -205,6 +210,11 @@ fun LiveScreen(
     iosTarget: IosTarget? = null,
     /** True when this device is currently shown in a pop-out window and should not mirror here. */
     mirroredElsewhere: Boolean = false,
+    /** Logical displays exposed by [serial]; extras beyond display 0 are stacked below the primary. */
+    displays: List<AndroidDisplay> = emptyList(),
+    secondaryMirrorFor: (targetId: String) -> MirrorEngine? = { null },
+    onSecondaryMirrorHold: (targetId: String) -> Unit = {},
+    onSecondaryMirrorRelease: (targetId: String) -> Unit = {},
     devicePaneWidth: Float,
     onStopEmulator: (AndroidDevice) -> Unit,
     stoppingEmulatorSerial: String?,
@@ -582,6 +592,22 @@ fun LiveScreen(
             foldableCaptureHint = null
         }
     }
+    val secondaryDisplays = if (isIosTarget) emptyList() else displays.filter { it.id != 0 && it.isEnabled }
+    val primaryPaneWeight = displays.firstOrNull { it.id == 0 }?.height?.toFloat()?.takeIf { it > 1f } ?: 1f
+    val secondaryTargets = serial?.let { realSerial ->
+        secondaryDisplays.map { MirrorTarget.id(realSerial, it.id) }
+    }.orEmpty()
+    // Hold refcounted engines for the mirrored secondary panels; released when the Live
+    // destination leaves composition so the pool does not keep them alive forever.
+    val secondaryEngines = remember(serial, secondaryTargets) {
+        secondaryTargets.associateWith { targetId ->
+            onSecondaryMirrorHold(targetId)
+            secondaryMirrorFor(targetId)
+        }
+    }
+    DisposableEffect(secondaryEngines) {
+        onDispose { secondaryEngines.keys.forEach(onSecondaryMirrorRelease) }
+    }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     if (iosTarget?.kind == IosTargetKind.Physical) {
         PhysicalIosDeveloperModeBanner(developerModeStatus)
@@ -638,7 +664,7 @@ fun LiveScreen(
                         )
                         .fillMaxHeight(),
                 ) {
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                    Box(Modifier.weight(primaryPaneWeight).fillMaxWidth()) {
                         LiveDevicePane(
                             serial = serial,
                             device = device,
@@ -736,6 +762,63 @@ fun LiveScreen(
                                 reconnectMirror(mirrorConfig())
                             },
                         )
+                    }
+                    secondaryDisplays.forEach { display ->
+                        val targetId = serial?.let { MirrorTarget.id(it, display.id) } ?: return@forEach
+                        val engine = secondaryEngines[targetId]
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier
+                                .weight(display.height.toFloat().coerceAtLeast(1f))
+                                .fillMaxWidth(),
+                        ) {
+                            if (engine == null) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        "Connecting display ${display.id}…",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                    )
+                                }
+                            } else {
+                                // The stack shares one column width, but a portrait secondary panel
+                                // must not be letterboxed inside a landscape-width pane. Match the
+                                // preview area to the display aspect and center it in the column.
+                                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    val displayAspect =
+                                        display.width.toFloat() / display.height.toFloat().coerceAtLeast(1f)
+                                    val paneWidth = (maxHeight * displayAspect).coerceAtMost(maxWidth)
+                                    // The primary pane's mirror is pushed right by its side toolbar.
+                                    // Offset this pane by the same allowance so both screen centers
+                                    // line up instead of starting at the same left edge.
+                                    val alignToPrimaryToolbar =
+                                        liveDevicePaneToolbarAllowance(caps.hardwareButtons || isIosTarget)
+                                    Box(
+                                        Modifier
+                                            .padding(start = alignToPrimaryToolbar)
+                                            .width(paneWidth)
+                                            .fillMaxHeight(),
+                                    ) {
+                                        DeviceLivePanel(
+                                            services = services,
+                                            serial = serial,
+                                            device = device,
+                                            displayName = "${device?.displayName ?: serial} · Display ${display.id}",
+                                            targetId = targetId,
+                                            mirror = engine,
+                                            modifier = Modifier.fillMaxSize(),
+                                            showChromeControls = false,
+                                            showDeviceHeader = false,
+                                            showPopOut = false,
+                                            showContainerChrome = false,
+                                            deviceBorderWidth = 0.dp,
+                                            deviceCornerRadius = 0.dp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                     if (dhuActive) {
                         Spacer(Modifier.height(8.dp))

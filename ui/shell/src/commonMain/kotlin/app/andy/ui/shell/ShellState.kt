@@ -15,12 +15,14 @@ import app.andy.model.ActionProject
 import app.andy.model.ActionsConfig
 import app.andy.model.SavedDockLayout
 import app.andy.model.AndroidDevice
+import app.andy.model.AndroidDisplay
 import app.andy.model.DeviceConnectionState
 import app.andy.model.DeviceKind
 import app.andy.model.IosTarget
 import app.andy.model.IosTargetKind
 import app.andy.model.IosTargetState
 import app.andy.model.PairedWifiDevice
+import app.andy.model.MirrorTarget
 import app.andy.service.IosTargetRegistry
 import app.andy.model.ProjectAction
 import app.andy.model.RunningAction
@@ -34,6 +36,7 @@ import app.andy.service.OpenInvestigationRequest
 import app.andy.service.TargetCapabilities
 import app.andy.transfer.DeviceTransferCoordinator
 import app.andy.ui.controls.ensureEmulatorOrientation
+import app.andy.ui.controls.readAndroidDisplays
 import app.andy.ui.inspector.InspectorState
 import app.andy.ui.devices.reconnectPairedWifiDevice
 import app.andy.ui.live.LiveMirrorSettings
@@ -44,6 +47,8 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
+private const val DISPLAY_PROBE_MIN_INTERVAL_MILLIS = 10_000L
+
 internal class ShellState(
     private val services: AndyServices,
     private val scope: CoroutineScope,
@@ -51,6 +56,9 @@ internal class ShellState(
     var destination by mutableStateOf(AndyDestination.Devices)
         private set
     var devices by mutableStateOf<List<AndroidDevice>>(emptyList())
+        private set
+    /** Mirrorable logical displays per Android serial, used by the Live picker and auto-split. */
+    var deviceDisplays by mutableStateOf<Map<String, List<AndroidDisplay>>>(emptyMap())
         private set
     var iosTargets by mutableStateOf<List<IosTarget>>(emptyList())
         private set
@@ -288,7 +296,8 @@ internal class ShellState(
 
     private fun isTargetAvailable(targetId: String): Boolean {
         if (iosTargets.any { it.udid == targetId && it.isLiveReady }) return true
-        return devices.any { it.serial == targetId && it.state == DeviceConnectionState.Online }
+        val serial = MirrorTarget.serial(targetId)
+        return devices.any { it.serial == serial && it.state == DeviceConnectionState.Online }
     }
 
     private fun applyTarget(targetId: String) {
@@ -427,14 +436,17 @@ internal class ShellState(
     ) {
         val targetId = activeTargetId.takeIf { seedWithActiveTarget }
         val title = targetId?.let { liveTabTitle(it) }
+        val tabId = nextPaneId("live")
+        val leafId = nextPaneId("live-leaf")
         val tab = DockTab.live(
-            id = nextPaneId("live"),
-            leafId = nextPaneId("live-leaf"),
+            id = tabId,
+            leafId = leafId,
             targetId = targetId,
             title = title,
         )
         docks = docks.update(placement) { it.withTab(tab) }
         reconcileLiveMirrorHolds()
+        autoSplitSecondaryDisplays(tabId, leafId, targetId)
     }
 
     /** Bind [targetId] to a Live leaf without changing the global device selection. */
@@ -447,7 +459,12 @@ internal class ShellState(
             ?: tab.focusedLiveLeafId?.takeIf { tree.findLeaf(it) != null }
             ?: tree.firstLeafId()
         val leaf = tree.findLeaf(resolvedLeafId) ?: return
-        if (leaf.targetId == targetId) return
+        if (leaf.targetId == targetId) {
+            // Re-selecting the same device is the natural way back to its extra displays after
+            // the secondary pane was closed.
+            autoSplitSecondaryDisplays(tabId, resolvedLeafId, targetId)
+            return
+        }
         // The native iOS hub owns a single decoder slot per kind (sim / physical). Two same-kind
         // iOS sources cannot run concurrently, so refuse to bind one if another dock live leaf
         // already holds that kind (re-binding this leaf's own target is already guarded above).
@@ -460,6 +477,92 @@ internal class ShellState(
         updateLiveTree(placement, tabId) { nextTree }
         focusLiveLeaf(placement, tabId, resolvedLeafId)
         reconcileLiveMirrorHolds()
+        autoSplitSecondaryDisplays(tabId, resolvedLeafId, targetId)
+    }
+
+    private val displayProbeAtMillis = mutableMapOf<String, Long>()
+
+    /**
+     * Populate the display cache, and drop serials that disappeared. Probes at most every
+     * [DISPLAY_PROBE_MIN_INTERVAL_MILLIS] per device so a panel powered on later is discovered
+     * without hammering adb on every device refresh.
+     */
+    private fun probeDisplaysForNewDevices(devices: List<AndroidDevice>) {
+        val online = devices
+            .filter { it.state == DeviceConnectionState.Online }
+            .mapTo(mutableSetOf()) { it.serial }
+        displayProbeAtMillis.keys.retainAll(online)
+        if (deviceDisplays.keys.any { it !in online }) {
+            deviceDisplays = deviceDisplays.filterKeys { it in online }
+        }
+        val now = currentTimeMillis()
+        for (serial in online) {
+            if (now - (displayProbeAtMillis[serial] ?: 0L) < DISPLAY_PROBE_MIN_INTERVAL_MILLIS) continue
+            displayProbeAtMillis[serial] = now
+            scope.launch {
+                val displays = runCatching { services.devices.readAndroidDisplays(serial) }.getOrNull()
+                if (displays == null) {
+                    displayProbeAtMillis.remove(serial)
+                    return@launch
+                }
+                deviceDisplays = deviceDisplays + (serial to displays)
+            }
+        }
+    }
+
+    /**
+     * Dual-screen handhelds (AYN Thor and similar) expose a second logical display. When a Live
+     * leaf binds such a device, add one sibling pane per extra display so both panels stream at
+     * once instead of silently mirroring only display 0.
+     */
+    private fun autoSplitSecondaryDisplays(tabId: String, leafId: String, targetId: String?) {
+        if (targetId == null) return
+        if (MirrorTarget.isSecondaryDisplay(targetId)) return
+        if (iosTargets.any { it.udid == targetId }) return
+        val key = "$tabId|$targetId"
+        if (!autoDisplaySplitKeys.add(key)) return
+        scope.launch {
+            val displays = deviceDisplays[targetId]?.takeIf { it.isNotEmpty() } ?: runCatching {
+                services.devices.readAndroidDisplays(targetId)
+            }.getOrNull()?.also { probed ->
+                deviceDisplays = deviceDisplays + (targetId to probed)
+            }
+            if (displays == null) {
+                autoDisplaySplitKeys.remove(key)
+                return@launch
+            }
+            val extraDisplays = displays.filter { it.id != 0 && it.isEnabled }
+            if (extraDisplays.isEmpty()) return@launch
+            val placement = liveTabPlacement(tabId) ?: return@launch
+            val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return@launch
+            var tree = tab.liveTree ?: return@launch
+            // The probe suspended above, so the leaf may have been rebound to another device in
+            // the meantime; never graft this device's secondary panes onto a stale binding.
+            if (tree.findLeaf(leafId)?.targetId != targetId) return@launch
+            val boundDisplayIds = tree.targetIds()
+                .filter { MirrorTarget.serial(it) == targetId }
+                .map { MirrorTarget.displayId(it) }
+                .toSet()
+            var anchor = tree.findLeaf(leafId) ?: return@launch
+            var changed = false
+            for (display in extraDisplays) {
+                if (display.id in boundDisplayIds) continue
+                val newLeafId = nextPaneId("live-leaf")
+                val displayTarget = MirrorTarget.id(targetId, display.id)
+                val newLeaf = LivePaneNode.Leaf(
+                    id = newLeafId,
+                    targetId = displayTarget,
+                    title = liveTabTitle(displayTarget),
+                )
+                tree = tree.split(anchor.id, nextPaneId("live-split"), SplitAxis.Column, newLeaf)
+                anchor = tree.findLeaf(newLeafId) ?: anchor
+                changed = true
+            }
+            if (changed) {
+                updateLiveTree(placement, tabId) { tree }
+                reconcileLiveMirrorHolds()
+            }
+        }
     }
 
     fun focusLiveLeaf(placement: DockPlacement, tabId: String, leafId: String) {
@@ -500,6 +603,11 @@ internal class ShellState(
     fun closeLiveLeaf(placement: DockPlacement, tabId: String, leafId: String) {
         val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return
         val tree = tab.liveTree ?: return
+        val closedTarget = tree.findLeaf(leafId)?.targetId
+        if (closedTarget != null && MirrorTarget.isSecondaryDisplay(closedTarget)) {
+            // Allow re-selecting the device to bring the closed secondary pane back.
+            autoDisplaySplitKeys.remove("$tabId|${MirrorTarget.serial(closedTarget)}")
+        }
         val nextTree = tree.closeLeaf(leafId)
         if (nextTree == null) {
             docks = docks.update(placement) { it.closeTab(tabId) }
@@ -558,6 +666,8 @@ internal class ShellState(
 
     /** Pooled engine holds, one per bound Live leaf, tracked here to reconcile pause state. */
     private val liveHoldCounts = mutableMapOf<String, Int>()
+    /** One auto multi-display split attempt per Live tab + device. */
+    private val autoDisplaySplitKeys = mutableSetOf<String>()
 
     /**
      * Targets currently mirrored by the main Live destination or a pop-out. A dock Live leaf whose
@@ -662,11 +772,16 @@ internal class ShellState(
         if (changed) reconcileLiveMirrorHolds()
     }
 
-    private fun liveTabTitle(targetId: String): String =
-        workspaceState.deviceLabels[targetId]
-            ?: devices.firstOrNull { it.serial == targetId }?.displayName
+    private fun liveTabTitle(targetId: String): String {
+        val displayId = MirrorTarget.displayId(targetId)
+        val serial = MirrorTarget.serial(targetId)
+        val base = workspaceState.deviceLabels[targetId]
+            ?: workspaceState.deviceLabels[serial]
+            ?: devices.firstOrNull { it.serial == serial }?.displayName
             ?: iosTargets.firstOrNull { it.udid == targetId }?.displayName
             ?: "Live"
+        return if (displayId > 0) "$base · Display $displayId" else base
+    }
 
     fun noteViewedAgentTaskId(taskId: String?) {
         viewedAgentTaskId = taskId
@@ -1106,6 +1221,7 @@ internal class ShellState(
         devices = services.devices.listDevices()
         iosTargets = services.iosDevices.listTargets()
         IosTargetRegistry.update(iosTargets)
+        probeDisplaysForNewDevices(devices)
         if (!startupSelectionResolved) {
             startupSelectionResolved = true
             val saved = startupTargetId
