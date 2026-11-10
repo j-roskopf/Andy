@@ -536,7 +536,9 @@ internal class ShellState(
             val placement = liveTabPlacement(tabId) ?: return@launch
             val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return@launch
             var tree = tab.liveTree ?: return@launch
-            if (tree.findLeaf(leafId) == null) return@launch
+            // The probe suspended above, so the leaf may have been rebound to another device in
+            // the meantime; never graft this device's secondary panes onto a stale binding.
+            if (tree.findLeaf(leafId)?.targetId != targetId) return@launch
             val boundDisplayIds = tree.targetIds()
                 .filter { MirrorTarget.serial(it) == targetId }
                 .map { MirrorTarget.displayId(it) }

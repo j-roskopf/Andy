@@ -1147,8 +1147,9 @@ class DesktopMirrorEngine(
     ) = withContext(Dispatchers.IO) {
         // cleanup=false leaves on-device servers after a hard kill; drop orphans before a new
         // MediaCodec capture so Samsung / Qualcomm devices do not encode two streams at once.
-        // A second display session on the same device must not pkill the live display's server.
-        if (!ScrcpySerialGate.hasOtherActiveStream(serial, streamKey)) {
+        // A second display session on the same device must not pkill the live display's server,
+        // and simultaneous display startups must still clean up exactly once.
+        ScrcpySerialGate.withDeviceStartup(streamKey, serial) {
             runner.run(killOrphanedScrcpyServerCommand(adb, serial), 5)
         }
         val captureSize = captureSize(adb, serial, config.maxSize, config.displayId)
