@@ -59,6 +59,7 @@ internal fun LivePaneTreeView(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    deviceDisplays: Map<String, List<app.andy.model.AndroidDisplay>>,
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
@@ -75,6 +76,7 @@ internal fun LivePaneTreeView(
         devices = devices,
         iosTargets = iosTargets,
         deviceLabels = deviceLabels,
+        deviceDisplays = deviceDisplays,
         liveMirrorFor = liveMirrorFor,
         liveTabPaused = liveTabPaused,
         liveTabPauseMessage = liveTabPauseMessage,
@@ -94,6 +96,7 @@ private fun LivePaneNodeView(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    deviceDisplays: Map<String, List<app.andy.model.AndroidDisplay>>,
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
@@ -111,6 +114,7 @@ private fun LivePaneNodeView(
             devices = devices,
             iosTargets = iosTargets,
             deviceLabels = deviceLabels,
+            deviceDisplays = deviceDisplays,
             liveMirrorFor = liveMirrorFor,
             liveTabPaused = liveTabPaused,
             liveTabPauseMessage = liveTabPauseMessage,
@@ -127,6 +131,7 @@ private fun LivePaneNodeView(
             devices = devices,
             iosTargets = iosTargets,
             deviceLabels = deviceLabels,
+            deviceDisplays = deviceDisplays,
             liveMirrorFor = liveMirrorFor,
             liveTabPaused = liveTabPaused,
             liveTabPauseMessage = liveTabPauseMessage,
@@ -146,6 +151,7 @@ private fun LiveSplitView(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    deviceDisplays: Map<String, List<app.andy.model.AndroidDisplay>>,
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
@@ -182,6 +188,7 @@ private fun LiveSplitView(
                             devices = devices,
                             iosTargets = iosTargets,
                             deviceLabels = deviceLabels,
+                            deviceDisplays = deviceDisplays,
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,
@@ -210,6 +217,7 @@ private fun LiveSplitView(
                             devices = devices,
                             iosTargets = iosTargets,
                             deviceLabels = deviceLabels,
+                            deviceDisplays = deviceDisplays,
                             liveMirrorFor = liveMirrorFor,
                             liveTabPaused = liveTabPaused,
                             liveTabPauseMessage = liveTabPauseMessage,
@@ -240,6 +248,7 @@ private fun LiveLeafView(
     devices: List<AndroidDevice>,
     iosTargets: List<IosTarget>,
     deviceLabels: Map<String, String>,
+    deviceDisplays: Map<String, List<app.andy.model.AndroidDisplay>>,
     liveMirrorFor: (targetId: String) -> MirrorEngine?,
     liveTabPaused: (targetId: String?) -> Boolean,
     liveTabPauseMessage: (targetId: String?) -> String,
@@ -340,6 +349,7 @@ private fun LiveLeafView(
                     devices = devices,
                     iosTargets = iosTargets,
                     deviceLabels = deviceLabels,
+                    deviceDisplays = deviceDisplays,
                     takenIosKinds = takenIosKinds(targetId),
                     onSelectTarget = { id ->
                         callbacks.onSelectTarget(topLevelTabId, leaf.id, id)
@@ -354,6 +364,7 @@ private fun LiveLeafView(
                     devices = devices,
                     iosTargets = iosTargets,
                     deviceLabels = deviceLabels,
+                    deviceDisplays = deviceDisplays,
                     takenIosKinds = takenIosKinds(targetId),
                     onSelectTarget = { id ->
                         callbacks.onSelectTarget(topLevelTabId, leaf.id, id)
@@ -397,13 +408,15 @@ private fun LiveLeafView(
                         // serial, liveMirrorFor returns that engine instead (shared control socket).
                         EmptyState("Connecting mirror…")
                     } else {
-                        val liveDevice = devices.firstOrNull { it.serial == targetId }
+                        val deviceSerial = app.andy.model.MirrorTarget.serial(targetId)
+                        val liveDevice = devices.firstOrNull { it.serial == deviceSerial }
                         key(leaf.id, targetId, mirror) {
                             DeviceLivePanel(
                                 services = services,
-                                serial = targetId,
+                                serial = deviceSerial,
                                 device = liveDevice,
                                 displayName = label,
+                                targetId = targetId,
                                 mirror = mirror,
                                 modifier = Modifier.fillMaxSize(),
                                 showChromeControls = false,
@@ -428,9 +441,15 @@ private fun liveLeafLabel(
     deviceLabels: Map<String, String>,
 ): String {
     val targetId = leaf.targetId ?: return leaf.title ?: "Live"
-    return deviceLabels[targetId]
-        ?: devices.firstOrNull { it.serial == targetId }?.displayName
+    val displayId = app.andy.model.MirrorTarget.displayId(targetId)
+    val serial = app.andy.model.MirrorTarget.serial(targetId)
+    val base = deviceLabels[targetId]
+        ?: deviceLabels[serial]
+        ?: devices.firstOrNull { it.serial == serial }?.displayName
         ?: iosTargets.firstOrNull { it.udid == targetId }?.displayName
-        ?: leaf.title
-        ?: "Live"
+    return when {
+        base != null && displayId > 0 -> "$base · Display $displayId"
+        base != null -> base
+        else -> leaf.title ?: "Live"
+    }
 }

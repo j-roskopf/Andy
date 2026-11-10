@@ -75,6 +75,34 @@ class ScrcpySerialGateTest {
     }
 
     @Test
+    fun differentDisplaysOfOneSerialDoNotBlockEachOther() = runBlocking {
+        val serial = "gate-dual-${System.nanoTime()}"
+        val primaryKey = app.andy.model.MirrorTarget.id(serial, 0)
+        val secondaryKey = app.andy.model.MirrorTarget.id(serial, 2)
+        val primaryEntered = Mutex(locked = true)
+        val secondaryEntered = Mutex(locked = true)
+        var sawOtherActive: Boolean? = null
+        val first = async {
+            ScrcpySerialGate.withExclusive(primaryKey, serial) {
+                primaryEntered.unlock()
+                secondaryEntered.lock()
+            }
+        }
+        val second = async {
+            primaryEntered.lock()
+            ScrcpySerialGate.withExclusive(secondaryKey, serial) {
+                sawOtherActive = ScrcpySerialGate.hasOtherActiveStream(serial, secondaryKey)
+                secondaryEntered.unlock()
+            }
+        }
+        first.await()
+        second.await()
+        assertEquals(true, sawOtherActive)
+        assertTrue(ScrcpySerialGate.isAvailable(primaryKey))
+        assertTrue(ScrcpySerialGate.isAvailable(secondaryKey))
+    }
+
+    @Test
     fun differentSerialsDoNotBlockEachOther() = runBlocking {
         val serialA = "gate-a-${System.nanoTime()}"
         val serialB = "gate-b-${System.nanoTime()}"

@@ -12,7 +12,7 @@ id = "act-desktop"
 projectId = "andy"
 name = "Desktop"
 icon = "run"
-command = "./gradlew :run"
+command = "./gradlew runDistributable"
 cwd = ""
 env = { }
 

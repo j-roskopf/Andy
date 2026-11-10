@@ -4,7 +4,8 @@ import app.andy.service.MirrorEngine
 import app.andy.service.RoutingMirrorEngine
 
 /**
- * Dedicated mirror engines for device pop-out windows and dock Live tabs, one per device serial.
+ * Dedicated mirror engines for device pop-out windows and dock Live tabs, one per mirror target
+ * (a device serial, or a serial plus secondary display id for dual-screen devices).
  *
  * Each engine drives its own [GpuMirrorPipeline] (keyed by serial in
  * [app.andy.desktop.service.mirror.GpuMirrorSessions]), so multiple *different* devices mirror on

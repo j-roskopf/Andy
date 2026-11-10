@@ -13,6 +13,7 @@ import app.andy.domain.isEmulatorSerial
 import app.andy.domain.parseWmUserRotation
 import app.andy.desktop.service.emulator.readEmulatorGrpcToken
 import app.andy.model.DeviceConnectionState
+import app.andy.model.MirrorTarget
 import app.andy.model.isWirelessAdbSerial
 import app.andy.service.CommandResult
 import app.andy.service.EncodedVideoAccessUnit
@@ -274,7 +275,7 @@ class DesktopMirrorEngine(
     }
 
     private fun activeGpuPipeline(): GpuMirrorPipeline? =
-        connectedSerial?.let(GpuMirrorSessions::get)
+        connectedStreamKey?.let(GpuMirrorSessions::get)
 
     /** Serial this engine currently holds a GPU pipeline reference for; null when unheld. */
     private var gpuPipelineKey: String? = null
@@ -291,6 +292,8 @@ class DesktopMirrorEngine(
     private var emulatorGrpcClient: EmulatorGrpcClient? = null
     private var videoForwardPort: Int? = null
     private var connectedSerial: String? = null
+    /** Serial plus display id; one engine mirrors exactly one display of a device. */
+    private var connectedStreamKey: String? = null
     private var connectedConfig: MirrorVideoConfig? = null
     private var connectedAtNanos: Long = 0L
     private var lastEmulatorDisplaySizeRefreshNanos: Long = 0L
@@ -360,6 +363,7 @@ class DesktopMirrorEngine(
         }
 
         connectedSerial = serial
+        connectedStreamKey = MirrorTarget.id(serial, effectiveConfig.displayId)
         connectedConfig = effectiveConfig
         connectedAtNanos = System.nanoTime()
         lastEmulatorDisplaySizeRefreshNanos = 0L
@@ -371,8 +375,9 @@ class DesktopMirrorEngine(
         val gpuHubAvailable = config.rendererMode != MirrorRendererMode.Legacy && GpuMirrorJni.isAvailable()
         var useGpuHub = false
         if (gpuHubAvailable) {
-            useGpuHub = GpuMirrorSessions.acquire(serial) != null
-            if (useGpuHub) gpuPipelineKey = serial
+            val streamKey = MirrorTarget.id(serial, effectiveConfig.displayId)
+            useGpuHub = GpuMirrorSessions.acquire(streamKey) != null
+            if (useGpuHub) gpuPipelineKey = streamKey
         }
         // SwingPanel realizes its AWT child just after the Compose tree commits. Connection is
         // also started from a LaunchedEffect, so probe briefly instead of racing that lifecycle
@@ -472,7 +477,7 @@ class DesktopMirrorEngine(
         }
         connectedAtNanos = System.nanoTime()
         status.value = "Restarting mirror for display change…"
-        if (serial.isEmulatorSerial()) {
+        if (serial.isEmulatorSerial() && effectiveConfig.displayId == 0) {
             ensureEmulatorGrpcClient(serial)
             applyEmulatorGuestRefreshRate(adb, serial, effectiveConfig.maxFps)
             if (preservedRotation != null) {
@@ -523,9 +528,12 @@ class DesktopMirrorEngine(
     ) {
         videoJob = engineScope.launch {
             val emulator = serial.isEmulatorSerial()
+            val emulatorDefaultDisplay = emulator && config.displayId == 0
             val wireless = isWirelessAdbSerial(serial)
             if (emulator) {
                 awaitEmulatorReady(adb, serial)
+            }
+            if (emulatorDefaultDisplay) {
                 ensureEmulatorGrpcClient(serial)
                 // -vsync-rate alone leaves renderFrameRate at 60; force peak/min to match Live FPS.
                 applyEmulatorGuestRefreshRate(adb, serial, config.maxFps)
@@ -648,6 +656,7 @@ class DesktopMirrorEngine(
             applyEmulatorGuestRefreshRate(adb, serial, emulatorVsyncRate())
         }
         connectedSerial = null
+        connectedStreamKey = null
         connectedConfig = null
         connectedAtNanos = 0L
         lastEmulatorDisplaySizeRefreshNanos = 0L
@@ -668,7 +677,7 @@ class DesktopMirrorEngine(
             sendScrcpyControl(input)?.let { return it }
         }
         val serial = connectedSerial
-        if (serial != null && serial.isEmulatorSerial()) {
+        if (serial != null && serial.isEmulatorSerial() && connectedConfig?.displayId == 0) {
             val client = emulatorGrpcClient ?: ensureEmulatorGrpcClient(serial)
             client?.let { grpc ->
                 val grpcResult = withContext(Dispatchers.IO) {
@@ -969,17 +978,29 @@ class DesktopMirrorEngine(
         return result.stdout.encodeToByteArray().takeIf { result.isSuccess }
     }
 
-    private suspend fun readEmulatorDisplaySize(adb: String, serial: String): EmulatorDisplaySize? {
-        // Prefer dumpsys window's display-0 cur= size — it follows rotation. `wm size` often
+    private suspend fun readEmulatorDisplaySize(
+        adb: String,
+        serial: String,
+        displayId: Int = 0,
+    ): EmulatorDisplaySize? {
+        // Prefer dumpsys window's cur= size — it follows rotation. `wm size` often
         // only prints Physical size (unrotated panel), which keeps Live portrait after rotate.
         val dumpsys = runner.run(listOf(adb, "-s", serial, "shell", "dumpsys", "window", "displays"), 4)
-        AndroidParsers.parseDisplay0CurrentSize(dumpsys.stdout.ifBlank { dumpsys.stderr })?.let { parsed ->
+        val displayOutput = dumpsys.stdout.ifBlank { dumpsys.stderr }
+        val parsedDisplay = if (displayId == 0) {
+            AndroidParsers.parseDisplay0CurrentSize(displayOutput)
+        } else {
+            AndroidParsers.parseDisplayCurrentSize(displayOutput, displayId)
+        }
+        parsedDisplay?.let { parsed ->
             val width = parsed.substringBefore('x').toIntOrNull()
             val height = parsed.substringAfter('x').toIntOrNull()
             if (width != null && height != null && width > 0 && height > 0) {
                 return EmulatorDisplaySize(width, height)
             }
         }
+        // `wm size` only describes the default display; never use it for a secondary panel.
+        if (displayId != 0) return null
         val result = runner.run(listOf(adb, "-s", serial, "shell", "wm", "size"), 4)
         if (!result.isSuccess) return null
         val parsed = AndroidParsers.parseWmSize(result.stdout) ?: return null
@@ -1104,26 +1125,33 @@ class DesktopMirrorEngine(
         }
     }
 
-    private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) =
+    private suspend fun runNativeVideoLoop(adb: String, serial: String, scrcpyServer: File, config: MirrorVideoConfig) {
+        val streamKey = MirrorTarget.id(serial, config.displayId)
         ScrcpySerialGate.withExclusive(
+            streamKey,
             serial,
             onWaiting = {
                 status.value = "Waiting for another Live session to release $serial…"
             },
         ) {
-            runNativeVideoLoopExclusive(adb, serial, scrcpyServer, config)
+            runNativeVideoLoopExclusive(adb, serial, streamKey, scrcpyServer, config)
         }
+    }
 
     private suspend fun runNativeVideoLoopExclusive(
         adb: String,
         serial: String,
+        streamKey: String,
         scrcpyServer: File,
         config: MirrorVideoConfig,
     ) = withContext(Dispatchers.IO) {
         // cleanup=false leaves on-device servers after a hard kill; drop orphans before a new
         // MediaCodec capture so Samsung / Qualcomm devices do not encode two streams at once.
-        runner.run(killOrphanedScrcpyServerCommand(adb, serial), 5)
-        val captureSize = captureSize(adb, serial, config.maxSize)
+        // A second display session on the same device must not pkill the live display's server.
+        if (!ScrcpySerialGate.hasOtherActiveStream(serial, streamKey)) {
+            runner.run(killOrphanedScrcpyServerCommand(adb, serial), 5)
+        }
+        val captureSize = captureSize(adb, serial, config.maxSize, config.displayId)
         val forwardPort = allocateLocalPort()
         val scid = Random.nextInt(1, Int.MAX_VALUE).toString(16).padStart(8, '0')
         videoForwardPort = forwardPort
@@ -1177,6 +1205,7 @@ class DesktopMirrorEngine(
             "video_bit_rate=${config.bitRate}",
             "max_fps=${config.maxFps}",
             "video_codec=h264",
+            "display_id=${config.displayId}",
             "log_level=info",
         ) + codecOptions
         var frameNumber = 0L
@@ -1613,14 +1642,19 @@ class DesktopMirrorEngine(
         return true
     }
 
-    private suspend fun captureSize(adb: String, serial: String, maxSize: Int): CaptureSize {
+    private suspend fun captureSize(
+        adb: String,
+        serial: String,
+        maxSize: Int,
+        displayId: Int = 0,
+    ): CaptureSize {
         // Retry briefly: on first emulator boot wm size often fails or returns before the
         // display mode is final, which previously fell back to 720x1280 and made Live too wide.
-        var display = readEmulatorDisplaySize(adb, serial)
+        var display = readEmulatorDisplaySize(adb, serial, displayId)
         if (display == null && serial.isEmulatorSerial()) {
             repeat(10) {
                 delay(400)
-                display = readEmulatorDisplaySize(adb, serial)
+                display = readEmulatorDisplaySize(adb, serial, displayId)
                 if (display != null) return@repeat
             }
         }
