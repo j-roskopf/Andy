@@ -181,6 +181,13 @@ class AcpSession(
         )
         val operationsFactory = ClientOperationsFactory { _, _ -> operations(cwd) }
         val storedId = task.acpSessionId?.takeIf { it.isNotBlank() }
+        if (storedId != null && task.runtimeKind() == AgentKind.OpenCode) {
+            OpenCodeSessionCompactor.compactOversizedToolPartsIfNeeded(
+                sessionId = storedId,
+                env = environment,
+                onDiagnostics = onDiagnostics,
+            )
+        }
         suppressHistoryReplay = storedId != null
         val opened = if (storedId == null) {
             acpClient.newSession(parameters, operationsFactory)
@@ -213,14 +220,26 @@ class AcpSession(
      */
     private suspend fun applySelectedModel(opened: ClientSession) {
         val selected = acpSessionModelId(task) ?: return
+        val fallbackAlias = if (task.runtimeKind() == AgentKind.ClaudeCode) {
+            claudeAcpFallbackModelAlias(selected)
+        } else {
+            null
+        }
         if (opened.configOptionsSupported) {
             val ok = runCatching {
                 opened.setConfigOption(SessionConfigId("model"), SessionConfigOptionValue.StringValue(selected))
+            }.recoverCatching { primaryError ->
+                val alias = fallbackAlias ?: throw primaryError
+                opened.setConfigOption(SessionConfigId("model"), SessionConfigOptionValue.StringValue(alias))
             }.onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }.isSuccess
             if (ok || !opened.modelsSupported) return
         }
         if (opened.modelsSupported) {
             runCatching { opened.setModel(ModelId(selected)) }
+                .recoverCatching { primaryError ->
+                    val alias = fallbackAlias ?: throw primaryError
+                    opened.setModel(ModelId(alias))
+                }
                 .onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }
         }
     }
@@ -346,6 +365,23 @@ class AcpSession(
 internal fun acpSessionModelId(task: AgentTask): String? {
     if (task.runtimeKind() == AgentKind.Goose) return gooseProviderAndModel(task).second
     return task.modelForCli()?.trim()?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * `claude-agent-acp` validates `setConfigOption("model", value)` against the Claude Code SDK's
+ * advertised model options (`opus`, `sonnet`, `haiku`) and rejects newer versioned IDs like
+ * `claude-opus-5-5` when the SDK bundle resolves `opus` to an earlier version string. Falling
+ * back to the family alias selects the active family option cleanly.
+ */
+internal fun claudeAcpFallbackModelAlias(modelId: String): String? {
+    val normalized = modelId.trim().lowercase().removeSuffix("[1m]").trim()
+    return when {
+        normalized.startsWith("claude-opus-") -> "opus"
+        normalized.startsWith("claude-sonnet-") -> "sonnet"
+        normalized.startsWith("claude-haiku-") -> "haiku"
+        normalized.startsWith("claude-fable-") -> "fable"
+        else -> null
+    }
 }
 
 /**

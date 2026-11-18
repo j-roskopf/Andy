@@ -51,4 +51,25 @@ class DisplayModelsTest {
         assertEquals(1920 to 1080, parseAndroidDisplaySize(output, 2))
         assertEquals(null, parseAndroidDisplaySize(output, 7))
     }
+
+    @Test
+    fun parsesTypesFromDumpsysDisplayAndFlagsScrcpyVirtualDisplay() {
+        val output = """
+            mBaseDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, displayGroupId 0, FLAG_SECURE, real 1080 x 2410, largest app 1080 x 2410, mode 2, rotation 0, state ON, committedState ON, type INTERNAL, uniqueId "local:123", app 1080 x 2410}
+            mOverrideDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, displayGroupId 0, FLAG_SECURE, real 1080 x 2410, largest app 2410 x 2410, rotation 0, state ON, committedState ON, type INTERNAL, uniqueId "local:123"}
+            mBaseDisplayInfo=DisplayInfo{"Secondary Screen", displayId 2, displayGroupId 0, FLAG_PRIVATE, real 1080 x 1920, largest app 1080 x 1920, mode 7, rotation 0, state ON, committedState ON, type INTERNAL, uniqueId "local:456"}
+            mBaseDisplayInfo=DisplayInfo{"scrcpy", displayId 402, displayGroupId 0, FLAG_PRIVATE, real 482 x 1080, largest app 482 x 1080, mode 405, rotation 0, state ON, committedState UNKNOWN, type VIRTUAL, uniqueId "virtual:com.android.shell,2000,scrcpy,400"}
+        """.trimIndent()
+
+        val displays = parseAndroidDisplaysFromDumpsysDisplay(output)
+
+        assertEquals(listOf(0, 2, 402), displays.map { it.id })
+        assertEquals(AndroidDisplayType.Internal, displays[0].type)
+        assertEquals(AndroidDisplayType.Internal, displays[1].type)
+        assertEquals(AndroidDisplayType.Virtual, displays[2].type)
+        assertTrue(displays[1].isPhysicalPanel)
+        assertFalse(displays[2].isPhysicalPanel)
+        assertTrue(displays[2].isScrcpyVirtualDisplay)
+        assertFalse(displays[1].isScrcpyVirtualDisplay)
+    }
 }

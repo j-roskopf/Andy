@@ -78,6 +78,7 @@ import app.andy.model.coalesceAcpTranscriptEvents
 import app.andy.model.coalesceAgentStreamDeltas
 import app.andy.model.connectionStallRetryBackoffMillis
 import app.andy.model.hasRetriableConnectionStall
+import app.andy.model.hasRetriableConnectionStallError
 import app.andy.model.hasRetriableResourceExhausted
 import app.andy.model.isRetriableConnectionStallMessage
 import app.andy.model.maxAutomaticAttempts
@@ -88,6 +89,7 @@ import app.andy.model.promptForCli
 import app.andy.model.providerDefaults
 import app.andy.desktop.service.McpClientConfig
 import app.andy.desktop.service.agents.acp.AgentAcpManager
+import app.andy.desktop.service.agents.acp.OpenCodeSessionCompactor
 import app.andy.desktop.service.agents.acp.AcpRegistry
 import app.andy.desktop.service.agents.acp.AcpEventMapper
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
@@ -3093,6 +3095,21 @@ class DesktopAgentRunService(
         }
 
         val launchTask = currentTask(taskId) ?: taskForLaunch
+        val userFacingPrompt = launchTask.prompt
+        if (eventFlows[taskId]?.value.orEmpty().none { it is AgentEvent.UserMessage }) {
+            appendEvents(
+                taskId,
+                listOf(
+                    AgentEvent.UserMessage(
+                        System.currentTimeMillis(),
+                        userFacingPrompt,
+                        launchTask.skills,
+                        launchTask.imagePaths,
+                        launchTask.attachments,
+                    ),
+                ),
+            )
+        }
         val started = runCatching {
             acpManager.start(
                 task = launchTask,
@@ -3103,7 +3120,8 @@ class DesktopAgentRunService(
         }.getOrElse { error ->
             appendLaunchDiagnostics(taskId, "acpStartFailed=${error.message}\n")
             // ACP-capable providers stay on ACP. Surface spawn/init failures instead of
-            // silently demoting the task to the terminal lane.
+            // silently demoting the task to the terminal lane, and keep the chat resumable
+            // so the user can retry once a transient preflight/network failure clears.
             finishTask(
                 taskId = taskId,
                 status = AgentStatus.Error,
@@ -3113,6 +3131,7 @@ class DesktopAgentRunService(
                     phase = AcpFailurePhase.Start,
                     raw = error.message ?: error::class.java.simpleName,
                 ),
+                resumable = true,
                 statusConfident = true,
             )
             return
@@ -3131,19 +3150,6 @@ class DesktopAgentRunService(
             }
             persist()
         }
-        val userFacingPrompt = launchTask.prompt
-        appendEvents(
-            taskId,
-            listOf(
-                AgentEvent.UserMessage(
-                    System.currentTimeMillis(),
-                    userFacingPrompt,
-                    launchTask.skills,
-                    launchTask.imagePaths,
-                    launchTask.attachments,
-                ),
-            ),
-        )
         markAcpTurnStarted(taskId)
         val success = acpManager.prompt(taskId, acpPrompt, launchTask.imagePaths)
         if (!success) {
@@ -3168,6 +3174,7 @@ class DesktopAgentRunService(
         }
         try {
             val task = currentTask(taskId) ?: return false
+            val hadPriorSession = !task.acpSessionId.isNullOrBlank()
             if (reopeningSession) {
                 // Stop already tore the session down — do not silently reopen it.
                 if (stoppedSince(taskId, stopEpoch) || task.stoppedByUser) return false
@@ -3193,6 +3200,7 @@ class DesktopAgentRunService(
                             status = AgentStatus.Error,
                             exitCode = null,
                             error = message,
+                            resumable = true,
                             statusConfident = true,
                         )
                     }
@@ -3205,8 +3213,22 @@ class DesktopAgentRunService(
             }
             if (stoppedSince(taskId, stopEpoch)) return false
             acpManager.artifacts(taskId)?.let { ensureAcpArtifactMonitor(taskId, it) }
+            val (effectivePrompt, effectiveImages) = if (!hadPriorSession) {
+                val initialCliPrompt = chatAttachments.spilloverPromptIfNeeded(taskId, task.cwd, task.promptForCli())
+                val trimmedFollowUp = prompt.trim()
+                val combinedPrompt = when {
+                    trimmedFollowUp.isEmpty() ||
+                        trimmedFollowUp == CONNECTION_STALL_RETRY_PROMPT ||
+                        trimmedFollowUp == task.prompt.trim() -> initialCliPrompt
+                    else -> "$initialCliPrompt\n\n$prompt"
+                }
+                val combinedImages = (task.imagePaths + imagePaths).distinct()
+                combinedPrompt to combinedImages
+            } else {
+                prompt to imagePaths
+            }
             markAcpTurnStarted(taskId)
-            val success = acpManager.prompt(taskId, prompt, imagePaths)
+            val success = acpManager.prompt(taskId, effectivePrompt, effectiveImages)
             if (stoppedSince(taskId, stopEpoch)) return false
             return completeAcpPromptTurn(taskId, success)
         } finally {
@@ -3230,17 +3252,33 @@ class DesktopAgentRunService(
             return promptSuccess
         }
 
-        val stalled = transcriptHasConnectionStall(taskId)
+        val outcome = acpManager.awaitRunOutcome(taskId)
+        val promptErrorStalled = !promptSuccess && outcome.error?.hasRetriableConnectionStallError() == true
+        val stalled = transcriptHasConnectionStall(taskId) || promptErrorStalled
         if (!stalled) {
             clearAcpRecoveryState(taskId)
-        } else if (scheduleStalledAcpRecovery(taskId)) {
-            return true
+        } else {
+            if (promptErrorStalled && !transcriptHasConnectionStall(taskId)) {
+                outcome.error?.let { err ->
+                    appendEvents(taskId, listOf(AgentEvent.TaskError(System.currentTimeMillis(), err)))
+                }
+            }
+            val current = currentTask(taskId)
+            if (current?.runtimeKind() == AgentKind.OpenCode) {
+                OpenCodeSessionCompactor.compactOversizedToolPartsIfNeeded(
+                    sessionId = current.acpSessionId,
+                    onDiagnostics = { line -> appendLaunchDiagnostics(taskId, "$line\n") },
+                )
+            }
+            if (scheduleStalledAcpRecovery(taskId)) {
+                return true
+            }
         }
 
-        val outcome = acpManager.awaitRunOutcome(taskId)
-        val stillStalled = transcriptHasConnectionStall(taskId)
+        val stillStalled = transcriptHasConnectionStall(taskId) || promptErrorStalled
         val recovered = promptSuccess && !stillStalled
-        val resumableAfterStall = stillStalled && acpManager.isAlive(taskId)
+        val hasResumableSession = acpManager.isAlive(taskId) || !currentTask(taskId)?.acpSessionId.isNullOrBlank()
+        val resumableAfterStall = stillStalled && hasResumableSession
         val agent = currentTask(taskId)?.agent ?: AgentKind.ClaudeCode
         finishTask(
             taskId = taskId,
@@ -3258,7 +3296,7 @@ class DesktopAgentRunService(
                     raw = outcome.error ?: "ACP prompt failed",
                 )
             },
-            resumable = acpManager.isAlive(taskId) && (recovered || resumableAfterStall),
+            resumable = hasResumableSession,
             // A stall is not a finished turn. Confident Done/Error is what dings.
             statusConfident = !stillStalled,
             stopReason = outcome.stopReason,
@@ -3269,7 +3307,7 @@ class DesktopAgentRunService(
     /** Records a bounded, durable continuation rather than recursively blocking this run job. */
     private fun scheduleStalledAcpRecovery(taskId: String): Boolean {
         val task = currentTask(taskId) ?: return false
-        if (!acpManager.isAlive(taskId)) return false
+        if (!acpManager.isAlive(taskId) && task.acpSessionId.isNullOrBlank()) return false
         val reason = if (transcriptHasResourceExhausted(taskId)) {
             AgentConnectionRecoveryReason.ResourceExhausted
         } else {

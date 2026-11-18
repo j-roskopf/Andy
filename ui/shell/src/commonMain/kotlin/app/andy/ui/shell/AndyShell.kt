@@ -746,6 +746,10 @@ internal fun AndyShell(
                         onRenameTab = { tabId, title -> state.renameDockTab(DockPlacement.Right, tabId, title) },
                         onOpenKind = { kind, newTerminal -> state.openDockKind(DockPlacement.Right, kind, newTerminal) },
                         onClose = { state.closeDock(DockPlacement.Right) },
+                        onFitLivePaneWidth = { width ->
+                            rightDockPaneWidth = width
+                            state.updateWorkspace { it.copy(rightDockPaneWidth = width) }
+                        },
                         terminalPaneCallbacks = TerminalPaneCallbacks(
                             onSelectTab = { tabId, leafId, innerTabId -> state.selectLeafTab(DockPlacement.Right, tabId, leafId, innerTabId) },
                             onCloseTab = { tabId, innerTabId -> state.closeLeafTab(DockPlacement.Right, tabId, innerTabId) },

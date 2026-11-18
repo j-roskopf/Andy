@@ -392,6 +392,7 @@ fun RowScope.TabBarItem(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable (hovered: Boolean) -> Unit)? = null,
     onRename: ((String) -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val size = LocalTabListSize.current
     val layout = LocalTabListLayout.current
@@ -443,7 +444,7 @@ fun RowScope.TabBarItem(
             .combinedClickable(
                 enabled = !editing,
                 onClick = onClick,
-                onLongClick = onRename?.let {
+                onLongClick = onLongClick ?: onRename?.let {
                     {
                         draft = TextFieldValue(text = label, selection = TextRange(label.length))
                         editing = true

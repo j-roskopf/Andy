@@ -592,7 +592,11 @@ fun LiveScreen(
             foldableCaptureHint = null
         }
     }
-    val secondaryDisplays = if (isIosTarget) emptyList() else displays.filter { it.id != 0 && it.isEnabled }
+    val secondaryDisplays = if (isIosTarget) {
+        emptyList()
+    } else {
+        displays.filter { it.id != 0 && it.isEnabled && it.isPhysicalPanel }
+    }
     val primaryPaneWeight = displays.firstOrNull { it.id == 0 }?.height?.toFloat()?.takeIf { it > 1f } ?: 1f
     val secondaryTargets = serial?.let { realSerial ->
         secondaryDisplays.map { MirrorTarget.id(realSerial, it.id) }

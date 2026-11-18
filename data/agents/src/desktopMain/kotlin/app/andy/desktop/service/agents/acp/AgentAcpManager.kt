@@ -69,7 +69,13 @@ class AgentAcpManager(
         val processLauncher = launcher.withDiagnostics { line ->
             onDiagnosticsLine(task.id, line.trimEnd())
         }
-        processLauncher.preflight(spec, binary, env).getOrElse { throw it }
+        processLauncher.preflight(spec, binary, env).onFailure { error ->
+            if (error.message == "ACP preflight timed out") {
+                onDiagnosticsLine(task.id, "ACP preflight timed out; attempting launch")
+            } else {
+                throw error
+            }
+        }
         val artifactDir = AgentWorkflowArtifacts.dirFor(task.cwd?.let(::File), task.id)
         val artifacts = AgentWorkflowArtifacts(scope, task.id, artifactDir)
         val bridge = AcpPermissionBridge(
