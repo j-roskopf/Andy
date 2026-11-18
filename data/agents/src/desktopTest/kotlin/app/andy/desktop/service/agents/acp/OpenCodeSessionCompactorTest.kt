@@ -8,6 +8,7 @@ import java.io.File
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class OpenCodeSessionCompactorTest {
     private val json = Json { ignoreUnknownKeys = true }
