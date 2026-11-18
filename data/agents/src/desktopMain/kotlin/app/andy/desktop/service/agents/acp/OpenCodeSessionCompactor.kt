@@ -184,7 +184,20 @@ internal object OpenCodeSessionCompactor {
             ?: System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() }
         val home = env["HOME"]?.takeIf { it.isNotBlank() }
             ?: System.getProperty("user.home")?.takeIf { it.isNotBlank() }
+        val dataDir = xdgDataHome?.let { File(it, "opencode") }
+            ?: home?.let { File(it, ".local/share/opencode") }
+        val openedDb = env["OPENCODE_DB"]?.takeIf { it.isNotBlank() }
+            ?: System.getenv("OPENCODE_DB")?.takeIf { it.isNotBlank() }
         val candidates = buildList {
+            // OpenCode resolves OPENCODE_DB before its default paths: absolute paths are used
+            // directly and relative names live under the data dir. `:memory:` has no file.
+            if (openedDb != null && openedDb != ":memory:") {
+                val override = File(openedDb)
+                when {
+                    override.isAbsolute -> add(override)
+                    dataDir != null -> add(File(dataDir, openedDb))
+                }
+            }
             if (xdgDataHome != null) {
                 add(File(xdgDataHome, "opencode/opencode.db"))
             }

@@ -8,7 +8,6 @@ import java.io.File
 import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
 class OpenCodeSessionCompactorTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -96,6 +95,39 @@ class OpenCodeSessionCompactorTest {
         } finally {
             dbFile.delete()
         }
+    }
+
+    @Test
+    fun resolveDatabaseFileHonorsOpenCodeDbOverride() {
+        val root = createTempDir("andy-opencode-home")
+        try {
+            val dataDir = File(root, "opencode").apply { mkdirs() }
+            val defaultDb = File(dataDir, "opencode.db").apply { writeText("default") }
+            val relativeDb = File(dataDir, "custom.db").apply { writeText("relative") }
+            val absoluteDb = File(root, "absolute.db").apply { writeText("absolute") }
+            val env = mapOf("XDG_DATA_HOME" to root.path, "HOME" to root.path)
+
+            assertEquals(defaultDb, OpenCodeSessionCompactor.resolveDatabaseFile(env))
+            assertEquals(
+                relativeDb,
+                OpenCodeSessionCompactor.resolveDatabaseFile(env + ("OPENCODE_DB" to "custom.db")),
+            )
+            assertEquals(
+                absoluteDb,
+                OpenCodeSessionCompactor.resolveDatabaseFile(env + ("OPENCODE_DB" to absoluteDb.path)),
+            )
+            assertEquals(
+                defaultDb,
+                OpenCodeSessionCompactor.resolveDatabaseFile(env + ("OPENCODE_DB" to ":memory:")),
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    private fun createTempDir(prefix: String): File = File.createTempFile(prefix, null).also {
+        it.delete()
+        it.mkdirs()
     }
 
     @Test
