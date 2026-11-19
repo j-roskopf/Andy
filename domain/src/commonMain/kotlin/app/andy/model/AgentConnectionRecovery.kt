@@ -45,15 +45,32 @@ data class AgentConnectionRecovery(
 )
 
 /**
- * Cursor (and some other ACP adapters) surface a transport drop as a standalone
- * `RetriableError` assistant/error line — not as an ACP stop reason. `cancelled` is also
- * used for user stop, so text matching is the only reliable signal.
+ * Cursor, Claude Code, and OpenCode ACP adapters surface a transport drop as a standalone
+ * error line, an inline suffix appended to partial assistant text, or an RPC error — not as
+ * a dedicated ACP stop reason. `cancelled` is also used for user stop, so text matching is
+ * the reliable signal.
  *
- * Match a whole line with the `RetriableError:` prefix. Substring mentions, source quotes,
+ * Match a whole line with the provider stall prefix. Substring mentions, source quotes,
  * and stream chunks like `" stalled"` must not count.
  */
 private val RETRIABLE_STALL_LINE = Regex(
-    """(?i)^(?:error:\s*)?retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?|\[resource_exhausted\](?:\s+error)?)\s*$""",
+    """(?i)^(?:internal\s+error:\s*)?(?:error:\s*)?(?:retriableerror:\s+(?:connection\s+stalled(?:\s+repeatedly)?|\[canceled\]\s+http/2\s+stream\s+closed(?:\b.*)?|\[resource_exhausted\](?:\s+error)?)|api\s+error:\s+connection\s+closed\s+mid-response(?:\.\s*the\s+response\s+above\s+may\s+be\s+incomplete\.)?|cannot\s+connect\s+to\s+api:\s+(?:econnreset|etimedout|econnrefused|epipe|the\s+socket\s+connection\s+was\s+closed\s+unexpectedly|fetch\s+failed|socket\s+hang\s+up)\b.*|type\s+validation\s+failed:\s+value:\s+\{"id":"","object":"","created":0,[^\n]*"choices":null\}\.?)\s*$""",
+)
+
+/**
+ * Claude Code ACP sometimes appends its mid-response disconnect error directly onto the end
+ * of the partial assistant text line without a preceding newline.
+ */
+private val INLINE_TRAILING_STALL_SUFFIX = Regex(
+    """(?i)(?:internal\s+error:\s*)?(?:error:\s*)?api\s+error:\s+connection\s+closed\s+mid-response\.\s*the\s+response\s+above\s+may\s+be\s+incomplete\.\s*$""",
+)
+
+/**
+ * OpenCode ACP surfaces upstream gateway drops that return an empty `{"choices":null}` payload
+ * as a multi-line Zod `Type validation failed` block.
+ */
+private val OPENCODE_NULL_CHOICES_STALL_BLOCK = Regex(
+    """(?is)^(?:internal\s+error:\s*)?(?:error:\s*)?type\s+validation\s+failed:\s+value:\s+\{"id":"","object":"","created":0,[^\n]*"choices":null\}\.?\s*(?:\n\s*error\s+message:\s*\[.*\]\s*)?$""",
 )
 
 private fun CharSequence.rawNonEmptyLines(): List<String> =
@@ -67,24 +84,60 @@ private fun String.isProviderStallLine(): Boolean {
     return RETRIABLE_STALL_LINE.matches(trim())
 }
 
+private fun String.hasInlineTrailingProviderStall(): Boolean {
+    if (isEmpty()) return false
+    val first = first()
+    if (first == ' ' || first == '\t' || first == '>') return false
+    return INLINE_TRAILING_STALL_SUFFIX.containsMatchIn(trimEnd())
+}
+
+private fun CharSequence.isOpenCodeNullChoicesStallBlock(): Boolean {
+    val lines = rawNonEmptyLines()
+    if (lines.isEmpty()) return false
+    val first = lines.first().first()
+    if (first == ' ' || first == '\t' || first == '>') return false
+    return OPENCODE_NULL_CHOICES_STALL_BLOCK.matches(trim())
+}
+
 /** True when [text] is only a provider stall error (blank lines allowed). */
 fun CharSequence.isRetriableConnectionStallMessage(): Boolean {
+    if (isOpenCodeNullChoicesStallBlock()) return true
     val lines = rawNonEmptyLines()
     return lines.isNotEmpty() && lines.all { it.isProviderStallLine() }
 }
 
-/** True when the last non-empty line is a provider stall error. */
-fun CharSequence.hasRetriableConnectionStallError(): Boolean =
-    rawNonEmptyLines().lastOrNull()?.isProviderStallLine() == true
+/** True when the last non-empty line (or trailing suffix) is a provider stall error. */
+fun CharSequence.hasRetriableConnectionStallError(): Boolean {
+    if (isOpenCodeNullChoicesStallBlock()) return true
+    val lastLine = rawNonEmptyLines().lastOrNull() ?: return false
+    return lastLine.isProviderStallLine() || lastLine.hasInlineTrailingProviderStall()
+}
 
 /** Drops a trailing stall error so partial output before the drop stays visible. */
 fun CharSequence.stripTrailingConnectionStallError(): String {
+    if (isOpenCodeNullChoicesStallBlock()) return ""
     val lines = toString().split('\n')
     val last = lines.indexOfLast { it.trim().isNotEmpty() }
-    if (last < 0 || !lines[last].trimEnd().isProviderStallLine()) return toString()
-    var end = last
-    while (end > 0 && lines[end - 1].isBlank()) end--
-    return lines.take(end).joinToString("\n").trimEnd()
+    if (last < 0) return toString()
+    val lastLine = lines[last].trimEnd()
+    if (lastLine.isProviderStallLine()) {
+        var end = last
+        while (end > 0 && lines[end - 1].isBlank()) end--
+        return lines.take(end).joinToString("\n").trimEnd()
+    }
+    if (lastLine.hasInlineTrailingProviderStall()) {
+        val strippedLast = INLINE_TRAILING_STALL_SUFFIX.replaceFirst(lastLine, "").trimEnd()
+        val updated = lines.take(last).toMutableList()
+        if (strippedLast.isNotEmpty()) {
+            updated += strippedLast
+        } else {
+            while (updated.isNotEmpty() && updated.last().isBlank()) {
+                updated.removeAt(updated.lastIndex)
+            }
+        }
+        return updated.joinToString("\n").trimEnd()
+    }
+    return toString()
 }
 
 fun List<AgentEvent>.hasRetriableConnectionStall(): Boolean =

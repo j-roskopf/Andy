@@ -206,6 +206,23 @@ class AcpProcessLauncherTest {
         assertEquals("/home/test/.local/state", builder.environment()["XDG_STATE_HOME"])
     }
 
+    @Test
+    fun npxPackageArgsPassPreferOfflineSoCachedInstallDoesNotHitRegistry() {
+        val spec = AcpLaunchSpec.Npx(
+            packageName = "@agentclientprotocol/claude-agent-acp",
+            version = "0.65.0",
+            extraArgs = listOf("--stdio"),
+        )
+        assertEquals(
+            listOf("--prefer-offline", "-y", "@agentclientprotocol/claude-agent-acp@0.65.0", "--version"),
+            acpNpxPackageArgs(spec, preflight = true),
+        )
+        assertEquals(
+            listOf("--prefer-offline", "-y", "@agentclientprotocol/claude-agent-acp@0.65.0", "--stdio"),
+            acpNpxPackageArgs(spec, preflight = false),
+        )
+    }
+
     private fun pathValue(env: Map<String, String>): String? =
         env.entries.firstOrNull { it.key.equals("PATH", ignoreCase = true) }?.value
 }

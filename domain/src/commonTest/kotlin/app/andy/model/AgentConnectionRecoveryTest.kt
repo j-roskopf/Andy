@@ -176,4 +176,48 @@ class AgentConnectionRecoveryTest {
         assertFalse(events.hasRetriableResourceExhausted())
     }
 
+    @Test
+    fun detectsClaudeCodeMidResponseDisconnects() {
+        val standalone = "Internal error: API Error: Connection closed mid-response. The response above may be incomplete."
+        assertTrue(standalone.isRetriableConnectionStallMessage())
+        assertTrue(standalone.hasRetriableConnectionStallError())
+        assertEquals("", standalone.stripTrailingConnectionStallError())
+
+        val inlinePartial =
+            "I don't have that loaded yet — let me check what's available for looking up ch" +
+                "API Error: Connection closed mid-response. The response above may be incomplete."
+        assertFalse(inlinePartial.isRetriableConnectionStallMessage())
+        assertTrue(inlinePartial.hasRetriableConnectionStallError())
+        assertEquals(
+            "I don't have that loaded yet — let me check what's available for looking up ch",
+            inlinePartial.stripTrailingConnectionStallError(),
+        )
+    }
+
+    @Test
+    fun detectsOpenCodeApiConnectionDropsAndNullChoicesErrors() {
+        val econnreset =
+            "Internal error: Cannot connect to API: ECONNRESET: The socket connection was closed unexpectedly. " +
+                "For more information, pass `verbose: true` in the second argument to fetch()"
+        assertTrue(econnreset.isRetriableConnectionStallMessage())
+        assertTrue(econnreset.hasRetriableConnectionStallError())
+
+        val nullChoices = """
+            Internal error: Type validation failed: Value: {"id":"","object":"","created":0,"model":"deepseek-v4.1-flash","choices":null}.
+            Error message: [
+              {
+                "expected": "array",
+                "code": "invalid_type",
+                "path": [
+                  "choices"
+                ],
+                "message": "Invalid input: expected array, received null"
+              }
+            ]
+        """.trimIndent()
+        assertTrue(nullChoices.isRetriableConnectionStallMessage())
+        assertTrue(nullChoices.hasRetriableConnectionStallError())
+        assertEquals("", nullChoices.stripTrailingConnectionStallError())
+    }
+
 }

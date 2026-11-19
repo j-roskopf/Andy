@@ -28,7 +28,7 @@ class AcpProcessLauncher(
         spec: AcpLaunchSpec,
         binary: String? = null,
         env: Map<String, String> = emptyMap(),
-        timeoutMs: Long = 20_000,
+        timeoutMs: Long = 45_000,
     ): Result<List<String>> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -107,8 +107,7 @@ class AcpProcessLauncher(
             )
             is AcpLaunchSpec.Npx -> {
                 val runtime = nodeLocator.locate() ?: throw IOException("Node.js/npx was not found")
-                val packageArgs = listOf("-y", "${spec.packageName}@${spec.version}") +
-                    if (preflight) listOf("--version") else spec.extraArgs
+                val packageArgs = acpNpxPackageArgs(spec, preflight)
                 PreparedAcpCommand(
                     command = acpNpxCommand(runtime, packageArgs),
                     nodeBinary = runtime.node,
@@ -116,6 +115,14 @@ class AcpProcessLauncher(
             }
         }
 }
+
+/**
+ * Uses `--prefer-offline` so `npx` reuses a cached `_npx` install instead of hitting
+ * `registry.npmjs.org` on every preflight and launch to revalidate its `^version` range.
+ */
+internal fun acpNpxPackageArgs(spec: AcpLaunchSpec.Npx, preflight: Boolean): List<String> =
+    listOf("--prefer-offline", "-y", "${spec.packageName}@${spec.version}") +
+        if (preflight) listOf("--version") else spec.extraArgs
 
 private data class PreparedAcpCommand(
     val command: List<String>,

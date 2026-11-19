@@ -531,7 +531,7 @@ internal class ShellState(
                 autoDisplaySplitKeys.remove(key)
                 return@launch
             }
-            val extraDisplays = displays.filter { it.id != 0 && it.isEnabled }
+            val extraDisplays = displays.filter { it.id != 0 && it.isEnabled && it.isPhysicalPanel }
             if (extraDisplays.isEmpty()) return@launch
             val placement = liveTabPlacement(tabId) ?: return@launch
             val tab = docks.pane(placement).tabs.firstOrNull { it.id == tabId } ?: return@launch

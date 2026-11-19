@@ -52,7 +52,7 @@ internal fun LiveDevicePickerPanel(
                     // only way back to a secondary pane after closing it: the dock split creates
                     // the pane, but the picker must still be able to rebind it.
                     deviceDisplays[device.serial]
-                        ?.filter { it.id != 0 && it.isEnabled }
+                        ?.filter { it.id != 0 && it.isEnabled && !it.isScrcpyVirtualDisplay }
                         ?.forEach { display ->
                             ChromeFlyoutRow(
                                 label = "$title · Display ${display.id}",

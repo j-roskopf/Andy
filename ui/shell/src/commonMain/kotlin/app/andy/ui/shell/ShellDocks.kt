@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.FocusRequester
@@ -762,6 +763,8 @@ internal fun ShellDockDrawer(
     onRenameTab: (String, String) -> Unit,
     onOpenKind: (DockTabKind, newTerminal: Boolean) -> Unit,
     onClose: () -> Unit,
+    /** Resizes this dock pane to the given width (dp), e.g. to frame a Live mirror exactly. */
+    onFitLivePaneWidth: (Float) -> Unit = {},
     terminalPaneCallbacks: TerminalPaneCallbacks,
     livePaneCallbacks: LivePaneCallbacks = LivePaneCallbacks(
         onSelectTarget = { _, _, _ -> },
@@ -848,6 +851,13 @@ internal fun ShellDockDrawer(
                 ?: return@let null
             tab to leafId
         }
+    // Measured mirror viewport height, used to snap the pane width to a perfect fit when the
+    // user long-presses a Live device tab.
+    var liveContentHeight by remember(active?.id) { mutableStateOf(0.dp) }
+    // Only single-leaf Live tabs can be width-fitted here; split panes size via weights.
+    val fitTargetId = active
+        ?.takeIf { it.kind == DockTabKind.Live && it.liveTree !is LivePaneNode.Split }
+        ?.targetId
     // Pad the tab strip only; the content below manages its own insets so Live/Terminal can
     // bleed to the card's side edges (PanelCard's default 20dp padding was leaving a visible
     // shelf under Live).
@@ -986,6 +996,33 @@ internal fun ShellDockDrawer(
                     } else {
                         { title -> onRenameTab(tab.id, title) }
                     },
+                    onLongClick = if (
+                        tab.kind == DockTabKind.Live &&
+                        tab.id == active?.id &&
+                        tab.liveTree !is LivePaneNode.Split
+                    ) {
+                        {
+                            val height = liveContentHeight
+                            val targetId = fitTargetId
+                            if (height > 0.dp && targetId != null) {
+                                val targetSerial = app.andy.model.MirrorTarget.serial(targetId)
+                                val device = devices.firstOrNull { it.serial == targetSerial }
+                                val session = liveMirrorFor(targetId)?.session?.value
+                                val aspect = session
+                                    ?.takeIf { it.width > 1 && it.height > 1 }
+                                    ?.let { it.width.toFloat() / it.height.toFloat() }
+                                    ?: device?.screenSize?.let { raw ->
+                                        val w = raw.substringBefore('x').toIntOrNull()
+                                        val h = raw.substringAfter('x').toIntOrNull()
+                                        if (w != null && h != null && w > 0 && h > 0) w.toFloat() / h else null
+                                    }
+                                    ?: (9f / 20f)
+                                onFitLivePaneWidth((height.value * aspect).coerceIn(240f, 1600f))
+                            }
+                        }
+                    } else {
+                        null
+                    },
                     modifier = Modifier.pointerInput(tab.id) {
                         awaitPointerEventScope {
                             while (true) {
@@ -1085,7 +1122,7 @@ internal fun ShellDockDrawer(
         // terminal/device/chat surface instead of a widget floating inside a card.
         val edgeToEdge = active?.kind == DockTabKind.Live || active?.kind == DockTabKind.Terminal ||
             active?.kind == DockTabKind.Browser || active?.kind == DockTabKind.Chat
-        Box(
+        BoxWithConstraints(
             Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -1118,6 +1155,10 @@ internal fun ShellDockDrawer(
                     },
                 ),
         ) {
+            if (active?.kind == DockTabKind.Live) {
+                val measuredHeight = maxHeight
+                SideEffect { liveContentHeight = measuredHeight }
+            }
             when (active?.kind) {
                 DockTabKind.Terminal -> {
                     if (active.terminalTree == null) {
