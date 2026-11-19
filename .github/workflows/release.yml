@@ -39,6 +39,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_BUMP_DEPLOY_KEY }}
 
       - name: Validate and bump version
         id: version
@@ -84,7 +85,7 @@ jobs:
           git commit -m "Bump version to ${new_version_name} (code: ${new_version_code}) [skip ci]"
 
           if ! git push origin HEAD:main; then
-            echo "::error::Failed to push version bump to main. If main is protected, allow GitHub Actions to bypass protection or switch this workflow to use a release PAT."
+            echo "::error::Failed to push version bump to main. Ensure RELEASE_BUMP_DEPLOY_KEY is a write deploy key listed in the main ruleset bypass list."
             exit 1
           fi
 
