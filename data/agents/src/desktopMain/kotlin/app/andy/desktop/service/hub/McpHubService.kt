@@ -187,20 +187,35 @@ class McpHubService(
                 val url = config.url?.trim().orEmpty()
                 require(url.isNotEmpty()) { "Server $id has no URL" }
 
-                // Prefer reusing Cursor CLI tokens when present.
+                // Prefer reusing Cursor CLI tokens, but only if they actually authenticate.
+                // Stale Cursor tokens used to be imported unconditionally, so clicking
+                // "Sign in" silently reused them and never opened the browser.
                 if (oauthStore.importFromCursorAuth(id)) {
                     connectLocked(id)
-                    return@runCatching CommandResult.success("Imported Cursor auth for $id and connected")
+                    when (val state = statusMessages[id]?.first) {
+                        McpHubServerConnectionState.Connected ->
+                            return@runCatching CommandResult.success("Imported Cursor auth for $id and connected")
+                        // Imported tokens were rejected — drop them and fall through to OAuth.
+                        McpHubServerConnectionState.NeedsAuth -> oauthStore.clear(id)
+                        // Transient/network failure: keep the tokens and surface the error.
+                        else -> error(
+                            "Imported Cursor auth for $id but the connection failed: " +
+                                (statusMessages[id]?.second ?: state),
+                        )
+                    }
                 }
 
                 statusMessages[id] = McpHubServerConnectionState.NeedsAuth to "Waiting for browser sign-in…"
-                val existing = oauthStore.load(id)
-                val tokens = McpHubOAuthLogin.login(
-                    mcpUrl = url,
-                    existingClientId = existing?.clientId,
-                )
+                // Always register a fresh client: a reused client id belongs to another
+                // redirect URI (Cursor's, or a prior random loopback port), which the
+                // authorization server rejects as an invalid redirect_uri.
+                val tokens = McpHubOAuthLogin.login(mcpUrl = url)
                 oauthStore.save(id, tokens)
                 connectLocked(id)
+                val (state, message) = statusMessages[id] ?: (null to null)
+                if (state != McpHubServerConnectionState.Connected) {
+                    error("Signed in to $id but the upstream connection failed: ${message ?: state}")
+                }
                 CommandResult.success("Signed in to $id")
             }.getOrElse {
                 val id = McpHubRegistryStore.normalizeId(serverId)

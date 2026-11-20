@@ -634,6 +634,7 @@ compose.desktop {
                 "java.management",
                 "java.net.http",
                 "java.sql", // SQLDelight JdbcSqliteDriver (agent/project store)
+                "jdk.httpserver", // MCP Hub OAuth loopback callback server
                 "jdk.unsupported",
             )
             targetFormats(

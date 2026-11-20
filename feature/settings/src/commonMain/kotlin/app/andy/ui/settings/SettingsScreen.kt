@@ -3845,7 +3845,7 @@ private fun McpHubPanel(mcpService: McpServerService) {
                                     onClick = {
                                         scope.launch {
                                             busy = true
-                                            operationStatus = null
+                                            operationStatus = "Opening browser for sign-in…"
                                             val result = mcpService.hubSignIn(server.id)
                                             operationStatus =
                                                 if (result.isSuccess) result.stdout else result.stderr
