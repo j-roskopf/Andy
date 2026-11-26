@@ -218,6 +218,35 @@ class RustTerminalCanvasSupportTest {
     }
 
     @Test
+    fun wordRangeAtSelectsContiguousWordRespectingDisplayOffset() {
+        val frame = RustTerminalFrame().apply {
+            columns = 20
+            rows = 2
+            displayOffset = 3
+            codePoints = IntArray(40) { ' '.code }
+            "  hello_world.kt )".forEachIndexed { idx, ch -> codePoints[idx] = ch.code }
+        }
+        val range = wordRangeAt(frame, col = 6, row = 0)
+        assertEquals(CellRange(startCol = 2, startLine = -3, endCol = 15, endLine = -3), range)
+        assertEquals("hello_world.kt", extractSelection(frame, range!!))
+        assertNull(wordRangeAt(frame, col = 0, row = 0))
+    }
+
+    @Test
+    fun lineRangeAtSelectsFullRowRespectingDisplayOffset() {
+        val frame = RustTerminalFrame().apply {
+            columns = 10
+            rows = 2
+            displayOffset = 2
+            codePoints = IntArray(20) { ' '.code }
+            "echo hi".forEachIndexed { idx, ch -> codePoints[10 + idx] = ch.code }
+        }
+        val range = lineRangeAt(frame, row = 1)
+        assertEquals(CellRange(startCol = 0, startLine = -1, endCol = 9, endLine = -1), range)
+        assertEquals("echo hi", extractSelection(frame, range!!))
+    }
+
+    @Test
     fun palettePacksNineteenArgbSlots() {
         val palette = app.andy.model.TerminalAppearanceSnapshot().toRustPaletteArgb()
         assertEquals(19, palette.size)

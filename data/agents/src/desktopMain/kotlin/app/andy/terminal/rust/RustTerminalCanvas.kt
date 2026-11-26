@@ -89,14 +89,19 @@ fun RustTerminalCanvas(
     val density = LocalDensity.current
     var viewportPx by remember { mutableStateOf(IntSize.Zero) }
     var lastGrid by remember { mutableStateOf(0 to 0) }
-    var selection by remember { mutableStateOf<CellRange?>(null) }
-    var selecting by remember { mutableStateOf(false) }
-    var dragPointerPosition by remember { mutableStateOf<Offset?>(null) }
+    var selection by remember(backend) { mutableStateOf<CellRange?>(null) }
+    var selecting by remember(backend) { mutableStateOf(false) }
+    var dragPointerPosition by remember(backend) { mutableStateOf<Offset?>(null) }
+    var pendingMousePress by remember(backend) { mutableStateOf<PendingMousePress?>(null) }
+    var lastClick by remember(backend) { mutableStateOf<LastClick?>(null) }
     val copyText = rememberCopyText()
     val readClipboardText = rememberReadClipboardText()
     var pasteInFlight by remember { mutableStateOf(false) }
     val wheel = remember(backend) {
-        RustWheelAccumulator { bytes -> backend.write(bytes) }
+        RustWheelAccumulator { bytes ->
+            if (!selecting) selection = null
+            backend.write(bytes)
+        }
     }
     var localScrollAccum by remember { mutableStateOf(0f) }
 
@@ -238,6 +243,8 @@ fun RustTerminalCanvas(
                 if (pasteInFlight) return@onPreviewKeyEvent true
                 if (event.key == Key.Escape && selection != null) {
                     selection = null
+                    selecting = false
+                    dragPointerPosition = null
                     return@onPreviewKeyEvent true
                 }
                 if (readOnly) return@onPreviewKeyEvent false
@@ -279,22 +286,69 @@ fun RustTerminalCanvas(
                 if (!event.buttons.isPrimaryPressed) return@onPointerEvent
                 runCatching { focusRequester.requestFocus() }
                 val (col, row) = cellAt(change.position.x, change.position.y)
+                val line = bufferLineAt(change.position.y)
                 val flags = backend.mouseFlags()
                 val shift = event.keyboardModifiers.isShiftPressed
-                if (!readOnly && flags and RustMouseFlags.REPORTING != 0 && !shift) {
-                    selection = null
-                    RustTerminalMouse.encodeClick(
-                        flags,
-                        RustTerminalMouse.BUTTON_LEFT,
-                        col,
-                        row,
-                        pressed = true,
-                    )?.let { backend.write(it) }
+                val now = change.uptimeMillis
+                val prevClick = lastClick
+                val clickCount = if (
+                    prevClick != null &&
+                    now - prevClick.timeMs in 0..MULTI_CLICK_TIMEOUT_MS &&
+                    prevClick.col == col &&
+                    prevClick.row == row
+                ) {
+                    (prevClick.count % 3) + 1
+                } else {
+                    1
+                }
+                lastClick = LastClick(timeMs = now, col = col, row = row, count = clickCount)
+
+                if (clickCount == 2) {
+                    pendingMousePress = null
+                    selecting = false
+                    dragPointerPosition = null
+                    val wordRange = wordRangeAt(frame, col, row)
+                    selection = wordRange
+                    if (wordRange != null) {
+                        val text = selectedText()
+                        if (text.isNotEmpty()) copyText(text)
+                    }
                     change.consume()
                     return@onPointerEvent
                 }
+                if (clickCount == 3) {
+                    pendingMousePress = null
+                    selecting = false
+                    dragPointerPosition = null
+                    val lineRange = lineRangeAt(frame, row)
+                    selection = lineRange
+                    if (lineRange != null) {
+                        val text = selectedText()
+                        if (text.isNotEmpty()) copyText(text)
+                    }
+                    change.consume()
+                    return@onPointerEvent
+                }
+
+                // When mouse reporting is active (notably tmux `mouse on` for agent chats),
+                // defer forwarding left-press until we know whether this is a click or a drag.
+                // Dragging selects text natively so the highlight stays visible and copies to
+                // the system clipboard instead of triggering tmux's `copy-pipe-and-cancel`.
+                if (!readOnly && flags and RustMouseFlags.REPORTING != 0 && !shift) {
+                    selection = null
+                    selecting = false
+                    dragPointerPosition = null
+                    pendingMousePress = PendingMousePress(
+                        col = col,
+                        row = row,
+                        line = line,
+                        flags = flags,
+                    )
+                    change.consume()
+                    return@onPointerEvent
+                }
+                pendingMousePress = null
                 selecting = true
-                val line = bufferLineAt(change.position.y)
                 dragPointerPosition = change.position
                 selection = CellRange(col, line, col, line)
                 change.consume()
@@ -305,37 +359,54 @@ fun RustTerminalCanvas(
                 val flags = backend.mouseFlags()
                 val shift = event.keyboardModifiers.isShiftPressed
                 val dragging = event.buttons.isPrimaryPressed
+
+                if (selecting) {
+                    if (dragging) {
+                        dragPointerPosition = change.position
+                        val start = selection ?: return@onPointerEvent
+                        val line = bufferLineAt(change.position.y)
+                        if (col != start.startCol || line != start.startLine) {
+                            lastClick = null
+                        }
+                        selection = start.copy(endCol = col, endLine = line)
+                        change.consume()
+                    } else {
+                        selecting = false
+                        dragPointerPosition = null
+                    }
+                    return@onPointerEvent
+                }
+
+                val pending = pendingMousePress
+                if (pending != null) {
+                    if (!dragging) {
+                        pendingMousePress = null
+                        return@onPointerEvent
+                    }
+                    if (col != pending.col || row != pending.row) {
+                        pendingMousePress = null
+                        lastClick = null
+                        selecting = true
+                        dragPointerPosition = change.position
+                        val line = bufferLineAt(change.position.y)
+                        selection = CellRange(pending.col, pending.line, col, line)
+                    }
+                    change.consume()
+                    return@onPointerEvent
+                }
+
                 if (!readOnly && flags and RustMouseFlags.REPORTING != 0 && !shift) {
-                    RustTerminalMouse.encodeMove(flags, col, row, dragging)?.let {
+                    RustTerminalMouse.encodeMove(flags, col, row, dragging = false)?.let {
                         backend.write(it)
                         change.consume()
                     }
                     return@onPointerEvent
                 }
-                if (selecting && dragging) {
-                    dragPointerPosition = change.position
-                    val start = selection ?: return@onPointerEvent
-                    val line = bufferLineAt(change.position.y)
-                    selection = start.copy(endCol = col, endLine = line)
-                    change.consume()
-                }
             }
             .onPointerEvent(PointerEventType.Release, pass = PointerEventPass.Main) { event ->
                 val change = event.changes.firstOrNull() ?: return@onPointerEvent
                 val (col, row) = cellAt(change.position.x, change.position.y)
-                val flags = backend.mouseFlags()
-                val shift = event.keyboardModifiers.isShiftPressed
-                if (!readOnly && flags and RustMouseFlags.REPORTING != 0 && !shift) {
-                    RustTerminalMouse.encodeClick(
-                        flags,
-                        RustTerminalMouse.BUTTON_LEFT,
-                        col,
-                        row,
-                        pressed = false,
-                    )?.let { backend.write(it) }
-                    change.consume()
-                    return@onPointerEvent
-                }
+
                 if (selecting) {
                     selecting = false
                     dragPointerPosition = null
@@ -347,6 +418,34 @@ fun RustTerminalCanvas(
                         if (text.isNotEmpty()) copyText(text)
                     }
                     change.consume()
+                    return@onPointerEvent
+                }
+
+                val pending = pendingMousePress
+                if (pending != null) {
+                    pendingMousePress = null
+                    val pressBytes = RustTerminalMouse.encodeClick(
+                        pending.flags,
+                        RustTerminalMouse.BUTTON_LEFT,
+                        pending.col,
+                        pending.row,
+                        pressed = true,
+                    )
+                    val releaseBytes = RustTerminalMouse.encodeClick(
+                        pending.flags,
+                        RustTerminalMouse.BUTTON_LEFT,
+                        col,
+                        row,
+                        pressed = false,
+                    )
+                    val combined = when {
+                        pressBytes != null && releaseBytes != null -> pressBytes + releaseBytes
+                        pressBytes != null -> pressBytes
+                        else -> releaseBytes
+                    }
+                    combined?.let { backend.write(it) }
+                    change.consume()
+                    return@onPointerEvent
                 }
             }
     ) {
@@ -425,6 +524,56 @@ internal fun RustTerminalPaintSurface(
                 size = Size(2.5f, barH),
             )
         }
+    }
+}
+
+private const val MULTI_CLICK_TIMEOUT_MS = 400L
+
+private data class PendingMousePress(
+    val col: Int,
+    val row: Int,
+    val line: Int,
+    val flags: Int,
+)
+
+private data class LastClick(
+    val timeMs: Long,
+    val col: Int,
+    val row: Int,
+    val count: Int,
+)
+
+internal fun wordRangeAt(frame: RustTerminalFrame, col: Int, row: Int): CellRange? {
+    if (frame.columns <= 0 || frame.rows <= 0) return null
+    val r = row.coerceIn(0, frame.rows - 1)
+    val c = col.coerceIn(0, frame.columns - 1)
+    val targetClass = charWordClass(frame.cellCodePoint(r, c))
+    if (targetClass == 0) return null
+    var startCol = c
+    while (startCol > 0 && charWordClass(frame.cellCodePoint(r, startCol - 1)) == targetClass) {
+        startCol--
+    }
+    var endCol = c
+    while (endCol + 1 < frame.columns && charWordClass(frame.cellCodePoint(r, endCol + 1)) == targetClass) {
+        endCol++
+    }
+    val line = r - frame.displayOffset
+    return CellRange(startCol, line, endCol, line)
+}
+
+internal fun lineRangeAt(frame: RustTerminalFrame, row: Int): CellRange? {
+    if (frame.columns <= 0 || frame.rows <= 0) return null
+    val r = row.coerceIn(0, frame.rows - 1)
+    val line = r - frame.displayOffset
+    return CellRange(0, line, frame.columns - 1, line)
+}
+
+private fun charWordClass(codePoint: Int): Int {
+    if (codePoint == 0 || Character.isWhitespace(codePoint)) return 0
+    if (Character.isLetterOrDigit(codePoint)) return 1
+    return when (codePoint) {
+        '_'.code, '-'.code, '.'.code, '/'.code, ':'.code, '~'.code, '@'.code -> 1
+        else -> 2
     }
 }
 

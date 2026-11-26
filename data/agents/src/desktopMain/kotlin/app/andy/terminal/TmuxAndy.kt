@@ -102,6 +102,7 @@ object TmuxAndy {
         // Wheel-up enters tmux copy mode so the user can browse pane history. Andy exits
         // copy mode when the viewer detaches so chat switches always reopen on the live screen.
         "set-option", "-g", "mouse", "on", ";",
+        "set-option", "-g", "set-clipboard", "on", ";",
         "set-option", "-g", "history-limit", "10000", ";",
         "set-option", "-g", "status", "off", ";",
         // tmux's default binding forwards WheelUpPane whenever alternate_on is true,
