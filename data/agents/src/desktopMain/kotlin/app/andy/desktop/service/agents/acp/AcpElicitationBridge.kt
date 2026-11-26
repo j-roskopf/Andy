@@ -44,7 +44,30 @@ internal data class AcpElicitationField(
     val customKey: String?,
     val kind: AcpElicitationFieldKind,
     val options: List<AcpElicitationOption>,
-)
+) {
+    /**
+     * A closed select must stay within its schema; only a companion key (or an array with
+     * arbitrary item values) can legally carry freeform text.
+     */
+    fun accepts(answer: String): Boolean = when (kind) {
+        AcpElicitationFieldKind.Select ->
+            customKey != null || options.any { it.label == answer.trim() }
+
+        AcpElicitationFieldKind.MultiSelect -> {
+            val tokens = multiSelectTokens(answer)
+            tokens.isNotEmpty() && (
+                customKey != null ||
+                    options.isEmpty() ||
+                    tokens.all { token -> options.any { it.label == token } }
+                )
+        }
+
+        else -> true
+    }
+
+    fun multiSelectTokens(answer: String): List<String> =
+        answer.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+}
 
 /** The provider-neutral prompt plus the wire mapping needed to answer the elicitation. */
 internal data class AcpElicitationPrompt(
@@ -52,7 +75,11 @@ internal data class AcpElicitationPrompt(
     val fields: List<AcpElicitationField>,
 ) {
     fun isComplete(answers: Map<String, String>): Boolean =
-        request.questions.all { question -> !answers[question.id].isNullOrBlank() }
+        request.questions.all { question ->
+            val answer = answers[question.id]?.trim().orEmpty()
+            answer.isNotEmpty() &&
+                fields.firstOrNull { it.questionId == question.id }?.accepts(answer) == true
+        }
 
     fun response(answers: Map<String, String>): CreateElicitationResponse {
         val content = linkedMapOf<String, ElicitationContentValue>()
@@ -69,22 +96,30 @@ internal data class AcpElicitationPrompt(
                         selected != null -> content[field.schemaKey] = ElicitationContentValue.StringValue(selected)
                         field.customKey != null ->
                             content[field.customKey] = ElicitationContentValue.StringValue(answer)
-
-                        else -> content[field.schemaKey] = ElicitationContentValue.StringValue(answer)
+                        // Closed schema: leave the key unset rather than send an invalid value.
                     }
                 }
 
                 AcpElicitationFieldKind.MultiSelect -> {
-                    val selected = field.options.firstOrNull { it.label == answer }?.value
-                    when {
-                        selected != null ->
-                            content[field.schemaKey] = ElicitationContentValue.StringArrayValue(listOf(selected))
-
-                        field.customKey != null ->
-                            content[field.customKey] = ElicitationContentValue.StringValue(answer)
-
-                        else ->
-                            content[field.schemaKey] = ElicitationContentValue.StringArrayValue(listOf(answer))
+                    val tokens = field.multiSelectTokens(answer)
+                    if (field.options.isEmpty()) {
+                        if (tokens.isNotEmpty()) {
+                            content[field.schemaKey] = ElicitationContentValue.StringArrayValue(tokens)
+                        }
+                    } else {
+                        val values = tokens.mapNotNull { token ->
+                            field.options.firstOrNull { it.label == token }?.value
+                        }
+                        val custom = field.customKey?.let { key ->
+                            tokens.firstOrNull { token -> field.options.none { it.label == token } }
+                                ?.let { key to it }
+                        }
+                        if (values.isNotEmpty()) {
+                            content[field.schemaKey] = ElicitationContentValue.StringArrayValue(values)
+                        }
+                        custom?.let { (key, value) ->
+                            content[key] = ElicitationContentValue.StringValue(value)
+                        }
                     }
                 }
 
@@ -188,6 +223,7 @@ internal fun acpElicitationPrompt(
             if (companion != null) consumed += companion
         }
         val options = property.options()
+        val kind = property.kind(options)
         val header = property.title()?.trim().orEmpty()
         val question = property.description()?.trim()?.takeIf { it.isNotEmpty() }
             ?: header.takeIf { it.isNotEmpty() }
@@ -196,7 +232,7 @@ internal fun acpElicitationPrompt(
             questionId = key,
             schemaKey = key,
             customKey = customKey,
-            kind = property.kind(options),
+            kind = kind,
             options = options,
         )
         questions += AgentUserInputQuestion(
@@ -206,6 +242,18 @@ internal fun acpElicitationPrompt(
             options = options.map { option ->
                 AgentUserInputOption(option.label, "")
             },
+            allowFreeform = when (kind) {
+                AcpElicitationFieldKind.Boolean -> false
+                AcpElicitationFieldKind.Select,
+                AcpElicitationFieldKind.MultiSelect,
+                -> customKey != null || options.isEmpty()
+
+                AcpElicitationFieldKind.Text,
+                AcpElicitationFieldKind.Integer,
+                AcpElicitationFieldKind.Number,
+                -> true
+            },
+            multiSelect = kind == AcpElicitationFieldKind.MultiSelect,
         )
     }
 

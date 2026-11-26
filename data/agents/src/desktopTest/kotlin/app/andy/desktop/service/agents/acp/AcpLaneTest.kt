@@ -15,6 +15,7 @@ import app.andy.model.AgentToolKind
 import app.andy.model.AgentToolState
 import app.andy.model.LocalAgentRuntime
 import app.andy.model.acpSupported
+import app.andy.model.acpSupportedWithoutDaemonMetadata
 import app.andy.model.defaultLane
 import app.andy.model.modelForCli
 import com.agentclientprotocol.model.ContentBlock
@@ -158,8 +159,19 @@ class AcpLaneTest {
     }
 
     @Test
-    fun antigravityAcpModeFollowsThePermissionsChip() {
-        val base = testTask(AgentKind.Antigravity)
+    fun daemonsWithoutCapabilityMetadataKeepOnlyTheirOriginalAcpLanes() {
+        assertTrue(AgentKind.ClaudeCode.acpSupportedWithoutDaemonMetadata)
+        assertTrue(AgentKind.Codex.acpSupportedWithoutDaemonMetadata)
+        assertTrue(AgentKind.OpenCode.acpSupportedWithoutDaemonMetadata)
+        assertTrue(AgentKind.Goose.acpSupportedWithoutDaemonMetadata)
+        // Antigravity's ACP lane shipped after the metadata field, so an older daemon
+        // cannot run it even though this GUI build knows the lane.
+        assertFalse(AgentKind.Antigravity.acpSupportedWithoutDaemonMetadata)
+        assertFalse(AgentKind.Hermes.acpSupportedWithoutDaemonMetadata)
+    }
+
+    @Test
+    fun antigravityAcpModeFollowsThePermissionsChip() {        val base = testTask(AgentKind.Antigravity)
         assertEquals("plan", antigravityAcpModeId(base.copy(planMode = true)))
         assertEquals("plan", antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.ReadOnly)))
         assertEquals("accept-edits", antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.WorkspaceWrite)))

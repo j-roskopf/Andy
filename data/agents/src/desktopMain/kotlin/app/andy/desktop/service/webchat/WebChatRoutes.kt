@@ -1080,6 +1080,8 @@ internal fun Application.installWebChatRoutes(
                                             put("id", question.id)
                                             put("header", question.header)
                                             put("question", question.question)
+                                            put("allowFreeform", question.allowFreeform)
+                                            put("multiSelect", question.multiSelect)
                                             putJsonArray("options") {
                                                 question.options.forEach { option ->
                                                     add(
@@ -1194,6 +1196,8 @@ private fun app.andy.model.AgentTask.toChatJson(): JsonObject = buildJsonObject 
                             put("id", question.id)
                             put("header", question.header)
                             put("question", question.question)
+                            put("allowFreeform", question.allowFreeform)
+                            put("multiSelect", question.multiSelect)
                             putJsonArray("options") {
                                 question.options.forEach { option ->
                                     add(

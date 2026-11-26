@@ -38,6 +38,15 @@ val AgentKind.acpSupported: Boolean
         AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
+/**
+ * ACP capability assumed for daemons that predate `acpSupported` reporting.
+ *
+ * Such daemons cannot run a lane added after they shipped, so a GUI must not offer one
+ * just because its own build knows about it. Antigravity is the only lane this excludes.
+ */
+val AgentKind.acpSupportedWithoutDaemonMetadata: Boolean
+    get() = acpSupported && this != AgentKind.Antigravity
+
 /** Providers with vendor lifecycle/status hook support. */
 val AgentKind.hooksSupported: Boolean
     get() = when (this) {
@@ -550,12 +559,19 @@ data class AgentUserInputOption(
     val description: String = "",
 )
 
-/** A concise question rendered by Andy as choices plus an always-available freeform answer. */
+/** A concise question rendered by Andy as choices plus, when allowed, a freeform answer. */
 data class AgentUserInputQuestion(
     val id: String,
     val header: String = "",
     val question: String,
     val options: List<AgentUserInputOption>,
+    /**
+     * Whether the card offers an "Other" freeform answer. Closed schemas (an enum with no
+     * companion field) disable it so an answer can never violate the provider's request.
+     */
+    val allowFreeform: Boolean = true,
+    /** Lets the user pick more than one option; answers are joined with newlines. */
+    val multiSelect: Boolean = false,
 )
 
 enum class AgentUserInputOrigin {

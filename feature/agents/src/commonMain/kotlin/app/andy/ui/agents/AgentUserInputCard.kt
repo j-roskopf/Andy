@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andy.model.AgentUserInputOrigin
+import app.andy.model.AgentUserInputQuestion
 import app.andy.model.AgentUserInputRequest
 import app.andy.ui.components.TextField
 import app.andy.ui.theme.Cyan
@@ -30,7 +31,7 @@ import app.andy.ui.theme.TextSecondary
 
 private const val OTHER_OPTION = "__andy_other__"
 
-/** A provider-neutral decision checkpoint: supplied options followed by freeform Other. */
+/** A provider-neutral decision checkpoint: supplied options followed by optional freeform. */
 @Composable
 fun AgentUserInputCard(
     request: AgentUserInputRequest,
@@ -39,14 +40,37 @@ fun AgentUserInputCard(
 ) {
     val permissionPrompt = request.origin == AgentUserInputOrigin.AcpPermission
     val selections = remember(request.id) { mutableStateMapOf<String, String>() }
+    val multiSelections = remember(request.id) { mutableStateMapOf<String, Set<String>>() }
     val freeformAnswers = remember(request.id) { mutableStateMapOf<String, String>() }
+
+    fun isOtherSelected(question: AgentUserInputQuestion): Boolean =
+        if (question.multiSelect) {
+            OTHER_OPTION in multiSelections[question.id].orEmpty()
+        } else {
+            selections[question.id] == OTHER_OPTION
+        }
+
     val canSubmit = request.questions.all { question ->
-        val selection = selections[question.id]
         when {
-            selection == null -> false
-            permissionPrompt -> selection != OTHER_OPTION
-            selection == OTHER_OPTION -> !freeformAnswers[question.id].isNullOrBlank()
-            else -> true
+            permissionPrompt -> {
+                val selection = selections[question.id]
+                selection != null && selection != OTHER_OPTION
+            }
+
+            question.multiSelect -> {
+                val chosen = multiSelections[question.id].orEmpty()
+                chosen.isNotEmpty() &&
+                    (!isOtherSelected(question) || !freeformAnswers[question.id].isNullOrBlank())
+            }
+
+            else -> {
+                val selection = selections[question.id]
+                when {
+                    selection == null -> false
+                    selection == OTHER_OPTION -> !freeformAnswers[question.id].isNullOrBlank()
+                    else -> true
+                }
+            }
         }
     }
 
@@ -64,7 +88,11 @@ fun AgentUserInputCard(
             )
             if (!permissionPrompt) {
                 Text(
-                    "Choose an option or enter your own answer.",
+                    if (request.questions.any { it.multiSelect }) {
+                        "Choose one or more options or enter your own answer."
+                    } else {
+                        "Choose an option or enter your own answer."
+                    },
                     color = TextSecondary.copy(alpha = 0.8f),
                     fontSize = 11.sp,
                 )
@@ -105,23 +133,47 @@ fun AgentUserInputCard(
                     }
                 } else {
                     question.options.forEach { option ->
-                        ChoiceRow(
-                            label = option.label,
-                            description = option.description,
-                            selected = selections[question.id] == option.label,
-                            onSelect = { selections[question.id] = option.label },
-                        )
+                        if (question.multiSelect) {
+                            val chosen = multiSelections[question.id].orEmpty()
+                            ChoiceRow(
+                                label = option.label,
+                                description = option.description,
+                                selected = option.label in chosen,
+                                multi = true,
+                                onSelect = {
+                                    val next = chosen.toMutableSet()
+                                    if (!next.add(option.label)) next.remove(option.label)
+                                    multiSelections[question.id] = next
+                                },
+                            )
+                        } else {
+                            ChoiceRow(
+                                label = option.label,
+                                description = option.description,
+                                selected = selections[question.id] == option.label,
+                                onSelect = { selections[question.id] = option.label },
+                            )
+                        }
                     }
                 }
-                if (!permissionPrompt) {
+                if (!permissionPrompt && question.allowFreeform) {
                     ChoiceRow(
                         label = "Other",
                         description = "Enter a different answer.",
-                        selected = selections[question.id] == OTHER_OPTION,
-                        onSelect = { selections[question.id] = OTHER_OPTION },
+                        selected = isOtherSelected(question),
+                        multi = question.multiSelect,
+                        onSelect = {
+                            if (question.multiSelect) {
+                                val next = multiSelections[question.id].orEmpty().toMutableSet()
+                                if (!next.add(OTHER_OPTION)) next.remove(OTHER_OPTION)
+                                multiSelections[question.id] = next
+                            } else {
+                                selections[question.id] = OTHER_OPTION
+                            }
+                        },
                     )
                 }
-                if (!permissionPrompt && selections[question.id] == OTHER_OPTION) {
+                if (!permissionPrompt && question.allowFreeform && isOtherSelected(question)) {
                     TextField(
                         value = freeformAnswers[question.id].orEmpty(),
                         onValueChange = { freeformAnswers[question.id] = it },
@@ -141,12 +193,26 @@ fun AgentUserInputCard(
                 modifier = Modifier
                     .pointerHoverIcon(PointerIcon.Hand)
                     .clickable(enabled = canSubmit) {
-                        onSubmit(request.questions.associate { question ->
-                            question.id to when (val selection = selections[question.id]) {
-                                OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
-                                else -> selection.orEmpty()
-                            }
-                        })
+                        onSubmit(
+                            request.questions.associate { question ->
+                                question.id to if (question.multiSelect) {
+                                    val chosen = multiSelections[question.id].orEmpty()
+                                    buildList {
+                                        chosen.filter { it != OTHER_OPTION }.forEach(::add)
+                                        if (OTHER_OPTION in chosen) {
+                                            freeformAnswers[question.id]?.trim()
+                                                ?.takeIf { it.isNotEmpty() }
+                                                ?.let(::add)
+                                        }
+                                    }.joinToString("\n")
+                                } else {
+                                    when (val selection = selections[question.id]) {
+                                        OTHER_OPTION -> freeformAnswers[question.id].orEmpty().trim()
+                                        else -> selection.orEmpty()
+                                    }
+                                }
+                            },
+                        )
                     }
                     .padding(horizontal = 4.dp, vertical = 2.dp),
             )
@@ -159,6 +225,7 @@ private fun ChoiceRow(
     label: String,
     description: String,
     selected: Boolean,
+    multi: Boolean = false,
     onSelect: () -> Unit,
 ) {
     Row(
@@ -170,7 +237,12 @@ private fun ChoiceRow(
         verticalAlignment = Alignment.Top,
     ) {
         Text(
-            if (selected) "●" else "○",
+            when {
+                multi && selected -> "☑"
+                multi -> "☐"
+                selected -> "●"
+                else -> "○"
+            },
             color = if (selected) Cyan else TextSecondary.copy(alpha = 0.65f),
             fontFamily = MonoFont,
             fontSize = 12.sp,

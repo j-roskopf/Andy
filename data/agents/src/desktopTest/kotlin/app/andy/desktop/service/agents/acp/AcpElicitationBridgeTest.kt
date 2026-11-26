@@ -30,6 +30,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -82,6 +83,8 @@ class AcpElicitationBridgeTest {
         assertEquals("Platform", card.header)
         assertEquals("Which platforms should ship?", card.question)
         assertEquals(listOf("Desktop only", "Desktop and web"), card.options.map { it.label })
+        assertTrue(card.allowFreeform)
+        assertFalse(card.multiSelect)
 
         val content = acceptedContent(prompt.response(mapOf("q0" to "Desktop and web")).action)
         assertEquals(ElicitationContentValue.StringValue("Desktop and web"), content["q0"])
@@ -131,8 +134,69 @@ class AcpElicitationBridgeTest {
             taskId = "task-1",
         )!!
 
+        assertTrue(prompt.request.questions.single().multiSelect)
         val content = acceptedContent(prompt.response(mapOf("q0" to "Web")).action)
         assertEquals(ElicitationContentValue.StringArrayValue(listOf("web")), content["q0"])
+    }
+
+    @Test
+    fun multiselectKeepsEverySelection() {
+        val prompt = acpElicitationPrompt(
+            request(
+                linkedMapOf(
+                    "q0" to ElicitationPropertySchema.ArrayProperty(
+                        title = "Targets",
+                        description = "Pick targets",
+                        items = MultiSelectItems.Titled(
+                            TitledMultiSelectItems(
+                                options = listOf(
+                                    EnumOption("desktop", "Desktop"),
+                                    EnumOption("web", "Web"),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            taskId = "task-1",
+        )!!
+
+        val answers = mapOf("q0" to "Desktop\nWeb")
+        assertTrue(prompt.isComplete(answers))
+        val content = acceptedContent(prompt.response(answers).action)
+        assertEquals(ElicitationContentValue.StringArrayValue(listOf("desktop", "web")), content["q0"])
+    }
+
+    @Test
+    fun closedEnumRejectsFreeformAndDoesNotOfferIt() {
+        val prompt = acpElicitationPrompt(
+            request(linkedMapOf("q0" to choiceProperty("Platform", "Pick one"))),
+            taskId = "task-1",
+        )!!
+        val card = prompt.request.questions.single()
+        assertFalse(card.allowFreeform)
+        assertFalse(card.multiSelect)
+
+        assertTrue(prompt.isComplete(mapOf("q0" to "Desktop only")))
+        assertFalse(prompt.isComplete(mapOf("q0" to "Something else")))
+    }
+
+    @Test
+    fun booleanQuestionUsesItsOwnOptionsInsteadOfFreeform() {
+        val prompt = acpElicitationPrompt(
+            request(
+                linkedMapOf(
+                    "q0" to ElicitationPropertySchema.BooleanProperty(
+                        title = "Ship it?",
+                        description = "Approve the release",
+                    ),
+                ),
+            ),
+            taskId = "task-1",
+        )!!
+        val card = prompt.request.questions.single()
+        assertFalse(card.allowFreeform)
+        assertEquals(listOf("Yes", "No"), card.options.map { it.label })
     }
 
     @Test

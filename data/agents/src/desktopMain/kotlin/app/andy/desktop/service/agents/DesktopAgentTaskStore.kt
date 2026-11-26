@@ -402,6 +402,8 @@ internal data class AgentUserInputQuestionDto(
     val header: String = "",
     val question: String,
     val options: List<AgentUserInputOptionDto>,
+    val allowFreeform: Boolean = true,
+    val multiSelect: Boolean = false,
 )
 
 @Serializable
@@ -922,7 +924,14 @@ private fun AgentUserInputRequestDto.toModel(): AgentUserInputRequest? {
             }
         }
         if (options.size !in 2..3) return@mapNotNull null
-        AgentUserInputQuestion(id, question.header.trim(), text, options)
+        AgentUserInputQuestion(
+            id,
+            question.header.trim(),
+            text,
+            options,
+            allowFreeform = question.allowFreeform,
+            multiSelect = question.multiSelect,
+        )
     }
     return AgentUserInputRequest(
         id = id,
@@ -941,6 +950,8 @@ private fun AgentUserInputRequest.toDto() = AgentUserInputRequestDto(
             header = question.header,
             question = question.question,
             options = question.options.map { option -> AgentUserInputOptionDto(option.label, option.description) },
+            allowFreeform = question.allowFreeform,
+            multiSelect = question.multiSelect,
         )
     },
 )

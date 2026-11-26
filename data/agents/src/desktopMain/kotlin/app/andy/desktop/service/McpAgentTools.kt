@@ -1743,6 +1743,8 @@ internal fun userInputRequestJson(request: AgentUserInputRequest): JsonObject =
                             put("id", question.id)
                             put("header", question.header)
                             put("question", question.question)
+                            put("allowFreeform", question.allowFreeform)
+                            put("multiSelect", question.multiSelect)
                             put(
                                 "options",
                                 buildJsonArray {
