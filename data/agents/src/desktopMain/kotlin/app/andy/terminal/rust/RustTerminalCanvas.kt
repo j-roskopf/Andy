@@ -277,6 +277,11 @@ fun RustTerminalCanvas(
                         val newOffset = (frame.displayOffset + displayDelta).coerceIn(0, frame.historySize)
                         val line = (row - newOffset).coerceIn(-frame.historySize, (frame.rows - 1).coerceAtLeast(0))
                         selection = selection?.copy(endCol = col, endLine = line)
+                    } else {
+                        // Match the reported-mouse wheel path (RustWheelAccumulator): once the
+                        // viewport moves, drop the finished selection instead of leaving a
+                        // highlight over buffer lines that may no longer be on screen.
+                        selection = null
                     }
                     change.consume()
                 }

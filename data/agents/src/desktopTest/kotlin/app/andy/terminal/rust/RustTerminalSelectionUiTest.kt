@@ -197,6 +197,65 @@ class RustTerminalSelectionUiTest {
         }
 
     @Test
+    fun localScrollClearsFinishedSelection() =
+        runDesktopComposeUiTest(width = 640, height = 300) {
+            val backend = SelectionTestRenderable(
+                lines = listOf("scroll clears selection"),
+                mouseFlagsValue = RustMouseFlags.REPORTING or RustMouseFlags.SGR,
+            )
+            val clipboard = RecordingClipboard()
+
+            setContent {
+                AndyTheme {
+                    CompositionLocalProvider(LocalClipboard provides clipboard) {
+                        RustTerminalCanvas(
+                            backend = backend,
+                            appearance = TerminalAppearanceSnapshot(),
+                            autoFocus = true,
+                            modifier = Modifier.fillMaxSize().testTag("terminal"),
+                        )
+                    }
+                }
+            }
+            waitForIdle()
+
+            // Shift+drag selects locally even though mouse reporting is active.
+            onNodeWithTag("terminal").performKeyInput { keyDown(Key.ShiftLeft) }
+            onNodeWithTag("terminal").performMouseInput {
+                moveTo(Offset(2f, 8f))
+                press()
+                moveTo(Offset(140f, 8f))
+                release()
+            }
+            onNodeWithTag("terminal").performKeyInput { keyUp(Key.ShiftLeft) }
+            waitForIdle()
+            assertTrue(
+                clipboard.copied.isNotEmpty(),
+                "shift drag should copy the selection, got=${clipboard.copied}",
+            )
+
+            // Shift+wheel scrolls locally (no PTY write); the finished selection must be dropped.
+            clipboard.copied.clear()
+            onNodeWithTag("terminal").performKeyInput { keyDown(Key.ShiftLeft) }
+            onNodeWithTag("terminal").performMouseInput {
+                moveTo(Offset(20f, 60f))
+                scroll(-1f)
+            }
+            onNodeWithTag("terminal").performKeyInput { keyUp(Key.ShiftLeft) }
+            waitForIdle()
+
+            onNodeWithTag("terminal").performKeyInput {
+                withKeyDown(Key.MetaLeft) { pressKey(Key.C) }
+            }
+            waitForIdle()
+
+            assertTrue(
+                clipboard.copied.isEmpty(),
+                "local scroll should clear the finished selection, got=${clipboard.copied}",
+            )
+        }
+
+    @Test
     fun releasingShiftMidDragStillCompletesLocalSelection() =
         runDesktopComposeUiTest(width = 640, height = 300) {
             val backend = SelectionTestRenderable(
