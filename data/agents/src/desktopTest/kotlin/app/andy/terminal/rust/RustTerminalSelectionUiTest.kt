@@ -28,6 +28,16 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+/**
+ * Press point that lands in column 0 on every platform.
+ *
+ * Cell metrics come from the resolved typeface: Menlo/SF Mono on macOS, fontconfig's
+ * "monospace" on Linux, and an empty typeface fallback on Windows CI. Anchoring gestures
+ * at x = 0.5 keeps the selected columns independent of those metrics; other coordinates
+ * only need to reach far enough right to cover the text under test.
+ */
+private val CellOrigin = Offset(0.5f, 8f)
+
 @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
 class RustTerminalSelectionUiTest {
 
@@ -56,7 +66,7 @@ class RustTerminalSelectionUiTest {
 
             // Drag across "hello world" on row 0.
             onNodeWithTag("terminal").performMouseInput {
-                moveTo(Offset(2f, 8f))
+                moveTo(CellOrigin)
                 press()
                 moveTo(Offset(95f, 8f))
                 release()
@@ -171,7 +181,7 @@ class RustTerminalSelectionUiTest {
 
             // Click twice on "alpha" (col 1, row 0).
             onNodeWithTag("terminal").performMouseInput {
-                moveTo(Offset(10f, 8f))
+                moveTo(CellOrigin)
                 press()
                 release()
                 advanceEventTime(50L)
@@ -222,7 +232,7 @@ class RustTerminalSelectionUiTest {
             // Shift+drag selects locally even though mouse reporting is active.
             onNodeWithTag("terminal").performKeyInput { keyDown(Key.ShiftLeft) }
             onNodeWithTag("terminal").performMouseInput {
-                moveTo(Offset(2f, 8f))
+                moveTo(CellOrigin)
                 press()
                 moveTo(Offset(140f, 8f))
                 release()
@@ -280,7 +290,7 @@ class RustTerminalSelectionUiTest {
 
             onNodeWithTag("terminal").performKeyInput { keyDown(Key.ShiftLeft) }
             onNodeWithTag("terminal").performMouseInput {
-                moveTo(Offset(2f, 8f))
+                moveTo(CellOrigin)
                 press()
                 moveTo(Offset(40f, 8f))
             }
