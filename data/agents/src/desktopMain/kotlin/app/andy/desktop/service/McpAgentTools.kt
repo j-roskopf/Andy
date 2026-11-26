@@ -344,6 +344,7 @@ fun Server.registerAgentProjectTools(
                             status?.ready ?: false
                         })
                         put("acpReady", status?.acpReady ?: false)
+                        put("acpSupported", kind.acpSupported)
                         put("available", status?.available ?: false)
                         put("version", status?.version.orEmpty())
                         put("issue", status?.issue?.title.orEmpty())

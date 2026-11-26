@@ -26,10 +26,11 @@ private const val ANDY_HOOK_MARKER = "andy-status-hook"
  * - done ← turn stop / idle-complete notifications
  * - blocked ← permission / ask-user
  *
- * **Badge authority** is screen-manifest scrape for ACP/Herdr agents ([AgentStatusTracker]).
- * Antigravity is the exception: it has no ACP, so hooks + title `agent_state` write
- * `status.json` that *does* drive the badge (with OSC `andy:*` markers and permission
- * scrape as backups). Other agents' hooks remain MCP/debug artifacts only.
+ * **Badge authority** is the ACP protocol for ACP-lane agents and screen-manifest scrape
+ * for terminal/tmux agents ([AgentStatusTracker]). Antigravity on the terminal lane still
+ * uses hooks + title `agent_state` to write `status.json` that drives the badge (with OSC
+ * `andy:*` markers and permission scrape as backups); on the ACP lane its status comes from
+ * the protocol like every other ACP provider.
  *
  * Merge preserves user hooks and replaces only Andy-managed entries.
  *

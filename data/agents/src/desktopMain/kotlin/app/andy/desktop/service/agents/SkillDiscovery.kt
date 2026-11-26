@@ -89,10 +89,17 @@ fun skillRootsFor(
         File(home, ".gemini/antigravity-cli/skills"),
         File(home, ".agents/skills"),
     )
+    // OpenCode loads compatibility roots as well as its own. Keep native roots first so
+    // they win, then add the Claude and portable Agent Skills roots in OpenCode's own
+    // documented precedence order (claude before agents, project before global).
     AgentKind.OpenCode -> listOfNotNull(
         workspace?.let { File(it, ".opencode/skills") },
         File(home, ".config/opencode/skills"),
         File(home, ".opencode/skills"),
+        workspace?.let { File(it, ".claude/skills") },
+        File(home, ".claude/skills"),
+        workspace?.let { File(it, ".agents/skills") },
+        File(home, ".agents/skills"),
     )
     AgentKind.Pi -> listOfNotNull(
         workspace?.let { File(it, ".pi/skills") },

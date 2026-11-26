@@ -172,6 +172,9 @@ class McpAgentRunClient(
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
 
+    /** Daemon-reported ACP capabilities, so a newer GUI never offers a lane an older daemon cannot run. */
+    private val daemonAcpSupport = ConcurrentHashMap<AgentKind, Boolean>()
+
     private val _providerModels = MutableStateFlow<Map<AgentKind, List<AgentModelOption>>>(emptyMap())
     override val providerModels: StateFlow<Map<AgentKind, List<AgentModelOption>>> = _providerModels.asStateFlow()
 
@@ -567,6 +570,7 @@ class McpAgentRunClient(
         _cliStatuses.value = AgentKind.entries.filter { it.hasVendorCli }.map { kind ->
             fromDaemon[kind] ?: statusForDaemonUnknownAgent(kind, localByKind[kind])
         }
+        applyDaemonAcpSupport()
         _localModelBackends.value = agents.mapNotNull { element ->
             val obj = element.jsonObject
             val kind = AgentKind.entries.firstOrNull { it.name == obj.string("id") } ?: return@mapNotNull null
@@ -596,10 +600,19 @@ class McpAgentRunClient(
         _providerDefaults.value = providers.mapNotNull { element ->
             val obj = element.jsonObject
             val agent = AgentKind.entries.firstOrNull { it.name == obj.string("agent") } ?: return@mapNotNull null
+            obj["acpSupported"]?.jsonPrimitive?.booleanOrNull?.let { daemonAcpSupport[agent] = it }
             val lane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") }
                 ?: agent.defaultLane()
             agent to AgentProviderDefaults(lane = lane)
         }.toMap()
+        applyDaemonAcpSupport()
+    }
+
+    private fun applyDaemonAcpSupport() {
+        if (daemonAcpSupport.isEmpty()) return
+        _cliStatuses.value = _cliStatuses.value.map { status ->
+            daemonAcpSupport[status.kind]?.let { status.copy(acpSupported = it) } ?: status
+        }
     }
 
     private fun parseDaemonAgentStatus(element: kotlinx.serialization.json.JsonElement): AgentCliStatus? {
@@ -619,6 +632,7 @@ class McpAgentRunClient(
             // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
             binaryPath = if (ready) kind.cliName else null,
             acpReady = obj["acpReady"]?.jsonPrimitive?.booleanOrNull == true,
+            acpSupported = obj["acpSupported"]?.jsonPrimitive?.booleanOrNull,
             version = version,
             issue = when {
                 issueTitle != null -> AgentCliIssue(

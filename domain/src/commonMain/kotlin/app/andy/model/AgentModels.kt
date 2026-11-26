@@ -27,6 +27,7 @@ val AgentKind.acpSupported: Boolean
         AgentKind.ClaudeCode,
         AgentKind.Codex,
         AgentKind.Cursor,
+        AgentKind.Antigravity,
         AgentKind.OpenCode,
         AgentKind.Pi,
         AgentKind.Goose,
@@ -34,7 +35,7 @@ val AgentKind.acpSupported: Boolean
         AgentKind.LMStudio,
         AgentKind.OpenRouter,
         -> true
-        AgentKind.Antigravity, AgentKind.Hermes, AgentKind.OpenClaw -> false
+        AgentKind.Hermes, AgentKind.OpenClaw -> false
     }
 
 /** Providers with vendor lifecycle/status hook support. */
@@ -560,6 +561,8 @@ data class AgentUserInputQuestion(
 enum class AgentUserInputOrigin {
     Artifact,
     AcpPermission,
+    /** ACP form elicitation, e.g. OpenCode's built-in `question` tool. */
+    AcpElicitation,
 }
 
 /** A persisted decision checkpoint emitted by a provider-neutral agent protocol. */
@@ -1937,6 +1940,11 @@ data class AgentCliStatus(
     val version: String? = null,
     /** Whether the ACP lane can launch independently of the vendor CLI binary. */
     val acpReady: Boolean = false,
+    /**
+     * Daemon-reported ACP capability. Null means "use this build's [AgentKind.acpSupported]";
+     * a GUI attached to an older daemon must not offer a lane that daemon cannot run.
+     */
+    val acpSupported: Boolean? = null,
     /** A setup issue detected before starting a task, phrased for the Agents UI. */
     val issue: AgentCliIssue? = null,
 ) {

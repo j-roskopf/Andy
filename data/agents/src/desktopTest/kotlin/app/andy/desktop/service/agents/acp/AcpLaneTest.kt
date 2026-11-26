@@ -5,6 +5,8 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentFileChange
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.AgentReasoningEffort
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSlashCommand
 import app.andy.model.AgentSkill
 import app.andy.model.AgentTask
@@ -74,18 +76,103 @@ class AcpLaneTest {
         assertEquals(AgentLaneKind.Acp, AgentKind.OpenCode.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Pi.defaultLane())
         assertEquals(AgentLaneKind.Acp, AgentKind.Goose.defaultLane())
+        assertEquals(AgentLaneKind.Acp, AgentKind.Antigravity.defaultLane())
         assertTrue(AgentKind.ClaudeCode.acpSupported)
         assertTrue(AgentKind.Codex.acpSupported)
         assertTrue(AgentKind.Cursor.acpSupported)
         assertTrue(AgentKind.OpenCode.acpSupported)
         assertTrue(AgentKind.Pi.acpSupported)
         assertTrue(AgentKind.Goose.acpSupported)
-        assertEquals(AgentLaneKind.Terminal, AgentKind.Antigravity.defaultLane())
+        assertTrue(AgentKind.Antigravity.acpSupported)
         assertEquals(AgentLaneKind.Terminal, AgentKind.Hermes.defaultLane())
         assertEquals(AgentLaneKind.Terminal, AgentKind.OpenClaw.defaultLane())
-        assertFalse(AgentKind.Antigravity.acpSupported)
         assertFalse(AgentKind.Hermes.acpSupported)
         assertFalse(AgentKind.OpenClaw.acpSupported)
+    }
+
+    @Test
+    fun antigravityAcpLaunchSpecCarriesSandboxAndHttpMcpFlags() {
+        val base = testTask(AgentKind.Antigravity)
+        assertEquals(
+            AcpLaunchSpec.Native("agy", listOf("acp")),
+            AcpRegistry.specFor(base),
+        )
+        assertEquals(
+            AcpLaunchSpec.Native("agy", listOf("acp", "--process-per-session")),
+            AcpRegistry.specFor(base, withMcp = true),
+        )
+        assertEquals(
+            AcpLaunchSpec.Native("agy", listOf("acp", "--process-per-session", "--sandbox")),
+            AcpRegistry.specFor(base.copy(planMode = true), withMcp = true),
+        )
+        // Full autonomy is enforced by the permission bridge; the vendor skip flag would
+        // bypass confirmToolCalls, so it must not be on the ACP argv.
+        assertEquals(
+            AcpLaunchSpec.Native("agy", listOf("acp")),
+            AcpRegistry.specFor(base.copy(sandboxMode = AgentSandboxMode.None)),
+        )
+        assertEquals(
+            AcpLaunchSpec.Native("agy", listOf("acp", "--sandbox")),
+            AcpRegistry.specFor(base.copy(sandboxMode = AgentSandboxMode.ReadOnly)),
+        )
+    }
+
+    @Test
+    fun antigravityAcpModelFallsBackToEffortSuffixedPickerValue() {
+        val gptOss = testTask(AgentKind.Antigravity).copy(
+            model = "gpt-oss-120b",
+            reasoningEffort = AgentReasoningEffort.Medium,
+        )
+        assertEquals(
+            listOf("gpt-oss-120b", "gpt-oss-120b-medium"),
+            acpSessionModelCandidates(gptOss),
+        )
+        assertEquals("thought_level" to "medium", acpSessionEffortConfig(gptOss))
+
+        val gemini = testTask(AgentKind.Antigravity).copy(
+            model = "gemini-3.8-flash",
+            reasoningEffort = AgentReasoningEffort.High,
+        )
+        assertEquals(
+            listOf("gemini-3.8-flash", "gemini-3.8-flash-high"),
+            acpSessionModelCandidates(gemini),
+        )
+        assertEquals("thought_level" to "high", acpSessionEffortConfig(gemini))
+        assertEquals(
+            listOf("gemini-3.1-pro", "gemini-3.1-pro-high"),
+            acpSessionModelCandidates(
+                testTask(AgentKind.Antigravity).copy(model = "gemini-3.1-pro"),
+            ),
+        )
+    }
+
+    @Test
+    fun antigravityThoughtLevelClampsExtraHighAndMax() {
+        assertEquals("low", antigravityThoughtLevel(AgentReasoningEffort.Low))
+        assertEquals("medium", antigravityThoughtLevel(AgentReasoningEffort.Medium))
+        assertEquals("high", antigravityThoughtLevel(AgentReasoningEffort.High))
+        assertEquals("xhigh", antigravityThoughtLevel(AgentReasoningEffort.ExtraHigh))
+        assertEquals("xhigh", antigravityThoughtLevel(AgentReasoningEffort.Max))
+        assertEquals(null, antigravityThoughtLevel(AgentReasoningEffort.None))
+        assertEquals(null, antigravityThoughtLevel(AgentReasoningEffort.Ultracode))
+    }
+
+    @Test
+    fun antigravityAcpModeFollowsThePermissionsChip() {
+        val base = testTask(AgentKind.Antigravity)
+        assertEquals("plan", antigravityAcpModeId(base.copy(planMode = true)))
+        assertEquals("plan", antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.ReadOnly)))
+        assertEquals("accept-edits", antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.WorkspaceWrite)))
+        assertEquals("auto", antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.None)))
+        // Confirming every tool call requires agy's asking mode; auto/accept-edits would
+        // approve internally and never reach Andy's permission bridge.
+        assertEquals("default", antigravityAcpModeId(base.copy(confirmToolCalls = true)))
+        assertEquals(
+            "default",
+            antigravityAcpModeId(base.copy(sandboxMode = AgentSandboxMode.None, confirmToolCalls = true)),
+        )
+        assertEquals("plan", antigravityAcpModeId(base.copy(planMode = true, confirmToolCalls = true)))
+        assertEquals(null, antigravityAcpModeId(testTask(AgentKind.Codex)))
     }
 
     @Test
@@ -927,4 +1014,12 @@ class AcpLaneTest {
             root.deleteRecursively()
         }
     }
+
+    private fun testTask(agent: AgentKind): AgentTask = AgentTask(
+        id = "t1",
+        title = "test",
+        prompt = "hi",
+        agent = agent,
+        createdAtMillis = 0,
+    )
 }

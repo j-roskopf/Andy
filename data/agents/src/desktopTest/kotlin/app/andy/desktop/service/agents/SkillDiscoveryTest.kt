@@ -40,6 +40,34 @@ class SkillDiscoveryTest {
     }
 
     @Test
+    fun openCodeDiscoversClaudeAndAgentsCompatibilityRoots() {
+        val home = createTempDirectory("andy-skill-opencode").toFile()
+        val workspace = createTempDirectory("andy-skill-opencode-ws").toFile()
+        writeSkill(File(home, ".config/opencode/skills"), "opencode-native", "native")
+        writeSkill(File(home, ".claude/skills"), "gh-ship-pr", "ship from claude root")
+        writeSkill(File(home, ".agents/skills"), "brandkit", "brand kit")
+        // A later compatibility root must not override OpenCode's own skill of the same name.
+        writeSkill(File(home, ".claude/skills"), "opencode-native", "must lose to native")
+
+        val previousHome = System.getProperty("user.home")
+        System.setProperty("user.home", home.absolutePath)
+        try {
+            val discovered = discoverAgentSkills(AgentKind.OpenCode, directory = workspace.absolutePath)
+            assertEquals(listOf("brandkit", "gh-ship-pr", "opencode-native"), discovered.map { it.name })
+            assertEquals("ship from claude root", discovered.single { it.name == "gh-ship-pr" }.description)
+            assertEquals("native", discovered.single { it.name == "opencode-native" }.description)
+        } finally {
+            if (previousHome == null) {
+                System.clearProperty("user.home")
+            } else {
+                System.setProperty("user.home", previousHome)
+            }
+            home.deleteRecursively()
+            workspace.deleteRecursively()
+        }
+    }
+
+    @Test
     fun honorsUserInvocableFalseInFrontmatter() {
         val home = createTempDirectory("andy-skill-invocable").toFile()
         val skillsRoot = File(home, ".codex/skills").apply { mkdirs() }
@@ -114,6 +142,13 @@ class SkillDiscoveryTest {
                 System.setProperty("user.home", previousHome)
             }
             home.deleteRecursively()
+        }
+    }
+
+    private fun writeSkill(root: File, name: String, description: String) {
+        File(root, "$name/SKILL.md").apply {
+            parentFile.mkdirs()
+            writeText("---\nname: $name\ndescription: $description\n---\n# $name\n")
         }
     }
 }
