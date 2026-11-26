@@ -320,8 +320,16 @@ object TmuxAndy {
     private fun launchScriptFile(sessionName: String): File =
         File(launchScriptDir(), "$sessionName.sh")
 
-    /** True when a newly spawned pane shows getcwd / uv_cwd failure within [timeoutMs]. */
-    private fun sessionLooksBrokenSoon(taskId: String, timeoutMs: Long = 600): Boolean {
+    /**
+     * True when a newly spawned pane shows getcwd / uv_cwd failure within [timeoutMs].
+     *
+     * The window has to absorb a slow spawn: our Linux CI runners run module test tasks in
+     * parallel, and a tmux server forking a pane while the box is saturating every core can
+     * take well over a second to print the first line. Returning "healthy" before that line
+     * lands silently skips the poisoned-server recycle, so healthy sessions still leave on
+     * the first non-blank capture while a blank pane keeps waiting for its shell banner.
+     */
+    private fun sessionLooksBrokenSoon(taskId: String, timeoutMs: Long = 2500): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (sessionLooksBroken(taskId)) return true
