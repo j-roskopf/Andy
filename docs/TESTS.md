@@ -130,7 +130,8 @@ The default ACP lane is covered without starting a real provider process:
 ```
 
 The test covers default lane routing, event reduction, JSONL transcript
-round-tripping, and confident ACP stop-reason mapping. Real provider ACP
+round-tripping, confident ACP stop-reason mapping, and Antigravity's launch
+flags, model/effort picker ids, and mode mapping. Real provider ACP
 spawn/initialize/resume behavior still belongs to the opt-in live-agent gate.
 
 ## Permanently `@Ignore`d

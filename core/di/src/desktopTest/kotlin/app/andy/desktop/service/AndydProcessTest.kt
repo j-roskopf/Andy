@@ -3,6 +3,7 @@ package app.andy.desktop.service
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -62,6 +63,15 @@ class AndydProcessTest {
         } finally {
             home.deleteRecursively()
         }
+    }
+
+    @Test
+    fun aLiveSocketWinsOverAMissingPidfileWhenPickingRuntimeMode() {
+        // Embedded GUIs serve andyd.sock but deliberately do not write andyd.pid.
+        // A second GUI must attach to that runtime instead of opening a second
+        // writer for ~/.andy/agents.db.
+        assertEquals(RuntimeMode.DaemonClient, runtimeModeFor(socketLive = true))
+        assertEquals(RuntimeMode.EmbeddedDaemon, runtimeModeFor(socketLive = false))
     }
 
     @Test

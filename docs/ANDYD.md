@@ -1,8 +1,8 @@
 # Andy daemon (`andyd`) + CLI
 
 Andy’s center of gravity is a headless daemon that owns agent/project state.
-Terminal-lane agents (Antigravity, Hermes, OpenClaw, …) run in Andy-managed
-tmux sessions; ACP-lane agents (Claude Code, Codex, Cursor, OpenCode, Pi, Goose) use a
+Terminal-lane agents (Hermes, OpenClaw, …) run in Andy-managed
+tmux sessions; ACP-lane agents (Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, Goose) use a
 structured protocol subprocess and a JSONL transcript. The Compose GUI and the
 Rust CLI are equal clients over a Unix domain socket — `andy attach` routes to
 tmux or the native ACP viewer by lane.
@@ -232,7 +232,7 @@ andy attach <taskId>
 ```
 
 This opens the lane-appropriate viewer: the native ACP chat UI for Claude Code /
-Codex / Cursor / OpenCode / Pi / Goose, or a live tmux pane for Terminal-lane agents
+Codex / Cursor / Antigravity / OpenCode / Pi / Goose, or a live tmux pane for Terminal-lane agents
 (with quiet provider reattach when needed, same as GUI reattach). `andy tui`
 lists chats grouped by project — press **Enter** / **a** to attach without
 remembering a task id.
@@ -318,11 +318,20 @@ launchctl load ~/Library/LaunchAgents/com.joetr.andyd.plist
 On launch the GUI calls `resolveRuntimeMode()`:
 
 1. **EmbeddedDaemon** (default) — agents run in-process with BossTerm + tmux attach.
-   Fully self-contained; also binds `~/.andy/andyd.sock` for the CLI when no external
-   daemon owns it.
-2. **DaemonClient** — only when a **standalone** `andyd` is already running (pidfile +
-   live socket), e.g. launchd or `./gradlew runAndyd`. The GUI attaches BossTerm viewers
-   to tmux sessions owned by that process.
+   Fully self-contained; also binds `~/.andy/andyd.sock` for the CLI when no live
+   socket already exists.
+2. **DaemonClient** — whenever `~/.andy/andyd.sock` is already live, whether it belongs
+   to a standalone `andyd` (launchd / `./gradlew runAndyd`) or another embedded GUI.
+   The GUI attaches BossTerm viewers to agent sessions owned by that process instead of
+   opening a second writer for `~/.andy/agents.db`.
+
+Because embedded GUI mode does not write `andyd.pid`, socket liveness alone decides the
+mode. That prevents two GUI builds from fighting over the same agent store and MCP port —
+which otherwise looks like new chats that never start. The client also mirrors the
+daemon's `acpSupported` capabilities, so an older daemon cannot make a newer GUI offer a
+lane it will silently run as Terminal. To exercise a freshly built GUI's own agent
+runtime, quit the other Andy instance first (or launch the build with a separate
+`-Duser.home`).
 
 The GUI does **not** spawn `andyd` and switch to client mode — that split left chats
 finishing in headless tmux before a terminal viewer could attach. Use `runAndyd` or
@@ -352,16 +361,17 @@ In addition to the existing device tools:
 
 ## Agent transport lanes
 
-Claude Code, Codex, Cursor, OpenCode, Pi, and Goose default to the ACP stdio lane. ACP
-sessions use the official Kotlin ACP client, persist structured JSONL transcripts
-under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep an ACP session id that
-Andy also mirrors into `vendorSessionId` when possible so **External** can open a
-native CLI `--resume` of the same conversation. The GUI renders ACP events with the
+Claude Code, Codex, Cursor, Antigravity, OpenCode, Pi, and Goose default to the ACP
+stdio lane. ACP sessions use the official Kotlin ACP client, persist structured JSONL
+transcripts under `~/.andy/agents/<task-id>/transcript.jsonl`, and keep an ACP session
+id that Andy also mirrors into `vendorSessionId` when possible so **External** can open
+a native CLI `--resume` of the same conversation. The GUI renders ACP events with the
 structured transcript surface; the CLI uses the same event stream via
 `chat.subscribe` in `andy attach`. Both can continue a stored session after restart.
 
-Antigravity, Hermes, and OpenClaw remain on the terminal/tmux lane (`andy attach`
-→ `tmux -L andy`). If ACP spawn or initialization fails for an ACP-capable
+Hermes and OpenClaw remain on the terminal/tmux lane (`andy attach` → `tmux -L andy`);
+the Settings provider panel can move any ACP-capable provider back to Terminal. If ACP
+spawn or initialization fails for an ACP-capable
 provider, the task ends in error and stays on the ACP lane — Andy does not demote
 it to terminal/tmux. `ANDY_AGENT_LANE=terminal|acp` (or
 `ANDY_AGENT_LANE_<AGENT_KIND>`) remains a test/rollout override only.

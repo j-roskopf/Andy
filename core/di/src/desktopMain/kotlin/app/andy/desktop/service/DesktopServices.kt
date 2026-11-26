@@ -106,15 +106,22 @@ enum class RuntimeMode {
     EmbeddedDaemon,
 }
 
-/** Pick how the GUI hosts agent/project services. */
+/**
+ * Pick how the GUI hosts agent/project services.
+ *
+ * A live `andyd.sock` means another process already owns `~/.andy/agents.db` and the
+ * agent runtimes, even when that process is an embedded GUI (embedded mode serves the
+ * socket without writing `andyd.pid`). Starting a second embedded runtime would make
+ * two writers fight over the same store and MCP port, so live socket wins regardless
+ * of the pidfile.
+ */
 fun resolveRuntimeMode(): RuntimeMode {
     AndydProcess.removeStaleArtifacts()
-    return if (AndydProcess.isExternalDaemonLive()) {
-        RuntimeMode.DaemonClient
-    } else {
-        RuntimeMode.EmbeddedDaemon
-    }
+    return runtimeModeFor(socketLive = isAndydSocketLive(AndydProcess.socketPath()))
 }
+
+internal fun runtimeModeFor(socketLive: Boolean): RuntimeMode =
+    if (socketLive) RuntimeMode.DaemonClient else RuntimeMode.EmbeddedDaemon
 
 /** @deprecated Use [resolveRuntimeMode]; kept for tests. */
 fun detectRuntimeMode(): RuntimeMode = resolveRuntimeMode()

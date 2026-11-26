@@ -27,6 +27,7 @@ class ProviderAuthRecoveryTest {
         assertEquals("claude", providerLoginCommand(AgentKind.ClaudeCode))
         assertEquals("codex login", providerLoginCommand(AgentKind.Codex))
         assertEquals("cursor-agent", providerLoginCommand(AgentKind.Cursor))
+        assertEquals("agy acp --login", providerLoginCommand(AgentKind.Antigravity))
         assertTrue(providerLoginTerminalCommand(AgentKind.ClaudeCode).contains("claude"))
         assertTrue(providerLoginTerminalCommand(AgentKind.ClaudeCode).contains("/login"))
     }
@@ -43,6 +44,10 @@ class ProviderAuthRecoveryTest {
         assertEquals(
             "Not logged in — sign in on the Andy host (`codex login`), then retry",
             providerAuthFailureHint(AgentKind.Codex, "Please log in"),
+        )
+        assertEquals(
+            "Not logged in — sign in on the Andy host (`agy acp --login`), then retry",
+            providerAuthFailureHint(AgentKind.Antigravity, "Authentication required"),
         )
         assertNull(providerAuthFailureHint(AgentKind.ClaudeCode, "connection refused"))
     }

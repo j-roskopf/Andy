@@ -10,9 +10,13 @@ import app.andy.desktop.service.agents.gooseProviderAndModel
 import app.andy.desktop.service.agents.looksLikeProviderAuthFailure
 import app.andy.model.AgentEvent
 import app.andy.model.AgentKind
+import app.andy.model.AgentModelCatalog
+import app.andy.model.AgentReasoningEffort
+import app.andy.model.AgentSandboxMode
 import app.andy.model.AgentSessionMode
 import app.andy.model.AgentTask
 import app.andy.model.modelForCli
+import app.andy.model.permissionSandbox
 import app.andy.model.runtimeKind
 import com.agentclientprotocol.agent.AgentInfo
 import com.agentclientprotocol.client.Client
@@ -24,6 +28,10 @@ import com.agentclientprotocol.common.Event
 import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.ClientCapabilities
 import com.agentclientprotocol.model.ContentBlock
+import com.agentclientprotocol.model.CreateElicitationRequest
+import com.agentclientprotocol.model.CreateElicitationResponse
+import com.agentclientprotocol.model.ElicitationCapabilities
+import com.agentclientprotocol.model.ElicitationFormCapabilities
 import com.agentclientprotocol.model.FileSystemCapability
 import com.agentclientprotocol.model.HttpHeader
 import com.agentclientprotocol.model.Implementation
@@ -59,6 +67,7 @@ class AcpSession(
     private val environment: Map<String, String>,
     private val mcp: AndyMcpEndpoint?,
     private val bridge: AcpPermissionBridge,
+    private val elicitation: AcpElicitationBridge,
     private val artifacts: AgentWorkflowArtifacts,
     private val knownSkillNames: Set<String>,
     private val allowedSkillNames: Set<String>,
@@ -94,6 +103,10 @@ class AcpSession(
     @Volatile
     private var closed = false
 
+    /** `--process-per-session` leaves worker children behind; stop must reap them too. */
+    @Volatile
+    private var killProcessTree = false
+
     /** Drop provider history echoed via [ClientSessionOperations.notify] until the next prompt. */
     @Volatile
     private var suppressHistoryReplay = false
@@ -104,12 +117,14 @@ class AcpSession(
     suspend fun open() {
         val cwd = File(task.cwd ?: error("ACP requires a task working directory")).canonicalFile
         val launched = launcher.launch(
-            spec = AcpRegistry.specFor(task) ?: error("${task.runtimeKind().cliName} has no ACP launcher"),
+            spec = AcpRegistry.specFor(task, withMcp = mcp != null)
+                ?: error("${task.runtimeKind().cliName} has no ACP launcher"),
             binary = binary,
             cwd = cwd.path,
             env = environment,
         )
         process = launched.process
+        killProcessTree = "--process-per-session" in launched.command
         writer = BufferedWriter(OutputStreamWriter(launched.process.outputStream))
         onDiagnostics("ACP command: ${launched.command.joinToString(" ")}\n")
 
@@ -163,6 +178,11 @@ class AcpSession(
                 capabilities = ClientCapabilities(
                     fs = FileSystemCapability(readTextFile = true, writeTextFile = true),
                     terminal = true,
+                    // Lets providers (OpenCode's `question` tool, etc.) ask the user for
+                    // decisions instead of silently degrading to "can't show this here".
+                    elicitation = ElicitationCapabilities(
+                        form = ElicitationFormCapabilities(),
+                    ),
                 ),
                 implementation = Implementation("Andy", "desktop", "Andy ACP client"),
             ),
@@ -203,12 +223,16 @@ class AcpSession(
         sessionId = opened.sessionId.toString()
         closed = false
         applySelectedModel(opened)
+        val appliedModeId = applySelectedMode(opened)
         onEvent(AgentEvent.SessionStarted(System.currentTimeMillis(), sessionId, task.model))
         if (opened.modesSupported) {
             val modes = opened.availableModes.map { mode ->
                 AgentSessionMode(mode.id.toString(), mode.name, mode.description)
             }
-            onEvent(AgentEvent.AvailableModes(System.currentTimeMillis(), modes, opened.currentMode.value.toString()))
+            // agy announces current_mode_update asynchronously; publish the mode pin we just
+            // applied so the composer's mode chip is not briefly wrong on session open.
+            val currentModeId = appliedModeId ?: opened.currentMode.value.toString()
+            onEvent(AgentEvent.AvailableModes(System.currentTimeMillis(), modes, currentModeId))
         }
     }
 
@@ -217,32 +241,53 @@ class AcpSession(
      * falls through to Zen `big-pickle` unless config lists the selected model.
      * Goose ACP has no `--provider`/`--model` flags either; env sets the provider,
      * then this pin must use Goose's unprefixed model id (not Andy's `ollama/…` catalog).
+     * Antigravity's model picker also carries effort and sandbox mode as separate
+     * session options, so those follow the model pin.
      */
     private suspend fun applySelectedModel(opened: ClientSession) {
-        val selected = acpSessionModelId(task) ?: return
-        val fallbackAlias = if (task.runtimeKind() == AgentKind.ClaudeCode) {
-            claudeAcpFallbackModelAlias(selected)
-        } else {
-            null
+        val candidates = acpSessionModelCandidates(task)
+        var applied = false
+        if (candidates.isNotEmpty() && opened.configOptionsSupported) {
+            applied = candidates.any { value -> setConfigOption(opened, "model", value) }
         }
-        if (opened.configOptionsSupported) {
-            val ok = runCatching {
-                opened.setConfigOption(SessionConfigId("model"), SessionConfigOptionValue.StringValue(selected))
-            }.recoverCatching { primaryError ->
-                val alias = fallbackAlias ?: throw primaryError
-                opened.setConfigOption(SessionConfigId("model"), SessionConfigOptionValue.StringValue(alias))
-            }.onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }.isSuccess
-            if (ok || !opened.modelsSupported) return
+        if (!applied && candidates.isNotEmpty() && opened.modelsSupported) {
+            applied = candidates.any { value ->
+                runCatching { opened.setModel(ModelId(value)) }
+                    .onFailure { onDiagnostics("ACP set model failed ($value): ${it.message}\n") }
+                    .isSuccess
+            }
         }
-        if (opened.modelsSupported) {
-            runCatching { opened.setModel(ModelId(selected)) }
-                .recoverCatching { primaryError ->
-                    val alias = fallbackAlias ?: throw primaryError
-                    opened.setModel(ModelId(alias))
-                }
-                .onFailure { onDiagnostics("ACP set model failed: ${it.message}\n") }
+        if (!applied && candidates.isNotEmpty() && !opened.configOptionsSupported && !opened.modelsSupported) {
+            onDiagnostics("ACP provider does not expose a model picker; keeping provider default\n")
         }
+        applySelectedEffort(opened)
     }
+
+    private suspend fun applySelectedEffort(opened: ClientSession) {
+        val (optionId, value) = acpSessionEffortConfig(task) ?: return
+        if (!opened.configOptionsSupported) return
+        setConfigOption(opened, optionId, value)
+    }
+
+    /** Applies and returns the mode pin, when this provider exposes the requested mode. */
+    private suspend fun applySelectedMode(opened: ClientSession): String? {
+        val modeId = antigravityAcpModeId(task) ?: return null
+        if (!opened.modesSupported) return null
+        if (opened.availableModes.none { it.id.toString() == modeId }) return null
+        return runCatching { opened.setMode(com.agentclientprotocol.model.SessionModeId(modeId)) }
+            .onFailure { onDiagnostics("ACP set mode failed ($modeId): ${it.message}\n") }
+            .fold(onSuccess = { modeId }, onFailure = { null })
+    }
+
+    private suspend fun setConfigOption(opened: ClientSession, optionId: String, value: String): Boolean =
+        runCatching {
+            opened.setConfigOption(
+                SessionConfigId(optionId),
+                SessionConfigOptionValue.StringValue(value),
+            )
+        }
+            .onFailure { onDiagnostics("ACP set $optionId failed ($value): ${it.message}\n") }
+            .isSuccess
 
     /** Switches the live session's mode (e.g. plan vs. execute) for providers that support it. */
     suspend fun setMode(modeId: String): Boolean {
@@ -308,18 +353,33 @@ class AcpSession(
 
     fun stop() {
         bridge.cancelAll()
+        elicitation.cancelAll()
         terminalOps?.releaseAll()
         scope.launch(Dispatchers.IO) {
             runCatching { session?.close() }
             transport?.close()
             writer?.let { runCatching { it.close() } }
-            process?.let { child ->
-                if (child.isAlive) {
-                    child.destroy()
-                    if (!child.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) child.destroyForcibly()
-                }
-            }
+            process?.let(::destroyProcess)
             closed = true
+        }
+    }
+
+    /** Destroys the ACP process, plus worker children when `--process-per-session` was used. */
+    private fun destroyProcess(child: Process) {
+        val descendants = if (killProcessTree) {
+            runCatching { child.toHandle().descendants().toList() }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+        if (child.isAlive) child.destroy()
+        descendants.forEach { handle -> runCatching { handle.destroy() } }
+        if (child.isAlive && !child.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+            descendants.forEach { handle -> runCatching { handle.destroyForcibly() } }
+            child.destroyForcibly()
+        } else {
+            descendants.forEach { handle ->
+                if (handle.isAlive) runCatching { handle.destroyForcibly() }
+            }
         }
     }
 
@@ -350,6 +410,15 @@ class AcpSession(
                 if (suppressHistoryReplay) return
                 mapEvent(notification)?.let(onEvent)
             }
+
+            override suspend fun createElicitation(
+                request: CreateElicitationRequest,
+            ): CreateElicitationResponse = elicitation.request(request)
+
+            /** URL-mode completion is advisory; the form flow answers through [createElicitation]. */
+            override suspend fun completeElicitation(
+                notification: com.agentclientprotocol.model.CompleteElicitationNotification,
+            ) = Unit
         }
     }
 
@@ -365,6 +434,78 @@ class AcpSession(
 internal fun acpSessionModelId(task: AgentTask): String? {
     if (task.runtimeKind() == AgentKind.Goose) return gooseProviderAndModel(task).second
     return task.modelForCli()?.trim()?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * Model ids to try in order. Providers validate `setConfigOption("model")` against their
+ * advertised picker values, which are not always Andy's catalog ids:
+ * - Claude Code advertises family aliases (`opus`) instead of versioned ids.
+ * - Antigravity lists most models by base id but effort-only models by full slug
+ *   (`gpt-oss-120b-medium`), so the effort-suffixed form is the fallback.
+ */
+internal fun acpSessionModelCandidates(task: AgentTask): List<String> {
+    val selected = acpSessionModelId(task) ?: return emptyList()
+    return buildList {
+        add(selected)
+        if (task.runtimeKind() == AgentKind.ClaudeCode) {
+            claudeAcpFallbackModelAlias(selected)?.let(::add)
+        }
+        if (task.runtimeKind() == AgentKind.Antigravity) {
+            antigravityAcpModelIdFallback(task, selected)?.let(::add)
+        }
+    }.distinct()
+}
+
+/** Antigravity's effort-only picker entries use `<base>-<effort>` (e.g. `gpt-oss-120b-medium`). */
+internal fun antigravityAcpModelIdFallback(task: AgentTask, selected: String): String? {
+    val option = AgentModelCatalog.option(
+        AgentKind.Antigravity,
+        task.model,
+        AgentModelCatalog.discovered(),
+    ) ?: return null
+    if (option.efforts.isEmpty()) return null
+    val effort = task.reasoningEffort ?: option.preferredEffort() ?: return null
+    val token = option.effortToken(effort)
+    return "$selected-$token".takeIf { it != selected }
+}
+
+/**
+ * Antigravity's "Thinking Level" session option. The picker offers low/medium/high/xhigh;
+ * Andy's Max rung clamps to xhigh because `agy` has no distinct max value in ACP.
+ */
+internal fun acpSessionEffortConfig(task: AgentTask): Pair<String, String>? {
+    if (task.runtimeKind() != AgentKind.Antigravity) return null
+    val option = AgentModelCatalog.option(
+        AgentKind.Antigravity,
+        task.model,
+        AgentModelCatalog.discovered(),
+    ) ?: return null
+    if (option.efforts.isEmpty()) return null
+    val effort = task.reasoningEffort ?: option.preferredEffort() ?: return null
+    val level = antigravityThoughtLevel(effort) ?: return null
+    return "thought_level" to level
+}
+
+internal fun antigravityThoughtLevel(effort: AgentReasoningEffort): String? = when (effort) {
+    AgentReasoningEffort.Low -> "low"
+    AgentReasoningEffort.Medium -> "medium"
+    AgentReasoningEffort.High -> "high"
+    AgentReasoningEffort.ExtraHigh, AgentReasoningEffort.Max -> "xhigh"
+    AgentReasoningEffort.None, AgentReasoningEffort.Minimal, AgentReasoningEffort.Ultracode -> null
+}
+
+/** Antigravity mode mirroring the terminal adapter's permission posture. */
+internal fun antigravityAcpModeId(task: AgentTask): String? {
+    if (task.runtimeKind() != AgentKind.Antigravity) return null
+    if (task.planMode) return "plan"
+    // "accept-edits"/"auto" approve actions inside agy before they reach Andy's bridge,
+    // so a chat that must confirm every tool call has to stay in the asking mode.
+    if (task.confirmToolCalls) return "default"
+    return when (task.permissionSandbox()) {
+        AgentSandboxMode.ReadOnly -> "plan"
+        AgentSandboxMode.WorkspaceWrite -> "accept-edits"
+        AgentSandboxMode.None -> "auto"
+    }
 }
 
 /**

@@ -30,6 +30,8 @@ class AgentAcpManager(
     private val onStatus: (String, AgentStatusSnapshot) -> Unit,
     private val onPermission: (String, PendingAcpPermission) -> Unit,
     private val onPermissionResolved: (String, String, String, Boolean, String?) -> Unit,
+    private val onElicitation: (String, PendingAcpElicitation) -> Unit,
+    private val onElicitationResolved: (String, String, Map<String, String>) -> Unit,
     private val onSessionId: (String, String) -> Unit,
     private val onDiagnosticsLine: (String, String) -> Unit,
 ) : AgentLane {
@@ -38,6 +40,7 @@ class AgentAcpManager(
     private data class Entry(
         val session: AcpSession,
         val bridge: AcpPermissionBridge,
+        val elicitation: AcpElicitationBridge,
         val artifacts: AgentWorkflowArtifacts,
         val artifactDir: File,
     )
@@ -59,7 +62,8 @@ class AgentAcpManager(
             entries.remove(task.id, existing)
             existing.artifacts.close()
         }
-        val spec = AcpRegistry.specFor(task) ?: error("${task.runtimeKind().cliName} has no ACP launcher")
+        val spec = AcpRegistry.specFor(task, withMcp = mcp != null)
+            ?: error("${task.runtimeKind().cliName} has no ACP launcher")
         val binary = binaryFor(task.runtimeKind())
         val (knownSkillNames, allowedSkillNames) = withContext(Dispatchers.IO) {
             val allowed = discoverAgentSkills(task.runtimeKind(), task.cwd)
@@ -90,6 +94,11 @@ class AgentAcpManager(
                 onPermissionResolved(task.id, requestId, optionId, allowed, note)
             },
         )
+        val elicitation = AcpElicitationBridge(
+            taskId = task.id,
+            onPending = { onElicitation(task.id, it) },
+            onResolved = { requestId, answers -> onElicitationResolved(task.id, requestId, answers) },
+        )
         val session = AcpSession(
             scope = scope,
             task = task,
@@ -98,6 +107,7 @@ class AgentAcpManager(
             environment = env,
             mcp = mcp,
             bridge = bridge,
+            elicitation = elicitation,
             artifacts = artifacts,
             knownSkillNames = knownSkillNames,
             allowedSkillNames = allowedSkillNames,
@@ -116,7 +126,7 @@ class AgentAcpManager(
             session.stop()
             throw it
         }
-        val entry = Entry(session, bridge, artifacts, artifactDir)
+        val entry = Entry(session, bridge, elicitation, artifacts, artifactDir)
         entries[task.id] = entry
         session.sessionId?.let { onSessionId(task.id, it) }
         artifacts.start()
@@ -142,6 +152,9 @@ class AgentAcpManager(
 
     fun respondPermission(taskId: String, requestId: String, answer: String): Boolean =
         entries[taskId]?.bridge?.respond(requestId, answer) == true
+
+    fun respondElicitation(taskId: String, requestId: String, answers: Map<String, String>): Boolean =
+        entries[taskId]?.elicitation?.respond(requestId, answers) == true
 
     suspend fun setMode(taskId: String, modeId: String): Boolean =
         entries[taskId]?.session?.setMode(modeId) == true

@@ -108,10 +108,16 @@ fn skill_roots_for(
         .into_iter()
         .flatten()
         .collect(),
+        // OpenCode also loads the Claude and portable Agent Skills compatibility roots.
+        // Native roots stay first so they win, matching OpenCode's own precedence.
         "opencode" => [
             workspace_root(".opencode"),
             Some(home.join(".config").join("opencode").join("skills")),
             Some(home.join(".opencode").join("skills")),
+            workspace_root(".claude"),
+            Some(home.join(".claude").join("skills")),
+            workspace_root(".agents"),
+            Some(home.join(".agents").join("skills")),
         ]
         .into_iter()
         .flatten()
@@ -347,6 +353,69 @@ mod tests {
                 .map(|command| command.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["gh-ship-pr"]
+        );
+    }
+
+    #[test]
+    fn opencode_includes_claude_and_agents_compatibility_roots() {
+        let home = tempdir().unwrap();
+        let codex_home = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+
+        write_skill(
+            &home.path().join(".claude").join("skills"),
+            "gh-ship-pr",
+            "ship from claude root",
+            None,
+        );
+        write_skill(
+            &home.path().join(".agents").join("skills"),
+            "brandkit",
+            "brand kit",
+            None,
+        );
+        write_skill(
+            &home.path().join(".config").join("opencode").join("skills"),
+            "opencode-native",
+            "native",
+            None,
+        );
+        // A later compatibility root must not override OpenCode's own skill of the same name.
+        write_skill(
+            &home.path().join(".claude").join("skills"),
+            "opencode-native",
+            "must lose to native",
+            None,
+        );
+
+        let skills = discover_agent_skills_from_roots(
+            Some("OpenCode"),
+            Some(workspace.path()),
+            home.path(),
+            codex_home.path(),
+        );
+        assert_eq!(
+            skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["brandkit", "gh-ship-pr", "opencode-native"]
+        );
+        assert_eq!(
+            skills
+                .iter()
+                .find(|skill| skill.name == "gh-ship-pr")
+                .unwrap()
+                .description,
+            "ship from claude root"
+        );
+        assert_eq!(
+            skills
+                .iter()
+                .find(|skill| skill.name == "opencode-native")
+                .unwrap()
+                .description,
+            "native"
         );
     }
 

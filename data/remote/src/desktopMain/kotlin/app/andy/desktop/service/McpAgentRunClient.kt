@@ -19,6 +19,7 @@ import app.andy.model.AgentEvent
 import app.andy.model.AgentFileDiff
 import app.andy.model.AgentKind
 import app.andy.model.AgentLaneKind
+import app.andy.model.acpSupportedWithoutDaemonMetadata
 import app.andy.model.defaultLane
 import app.andy.model.hasVendorCli
 import app.andy.model.isModelBackend
@@ -171,6 +172,9 @@ class McpAgentRunClient(
 
     private val _cliStatuses = MutableStateFlow<List<AgentCliStatus>>(emptyList())
     override val cliStatuses: StateFlow<List<AgentCliStatus>> = _cliStatuses.asStateFlow()
+
+    /** Daemon-reported ACP capabilities, so a newer GUI never offers a lane an older daemon cannot run. */
+    private val daemonAcpSupport = ConcurrentHashMap<AgentKind, Boolean>()
 
     private val _providerModels = MutableStateFlow<Map<AgentKind, List<AgentModelOption>>>(emptyMap())
     override val providerModels: StateFlow<Map<AgentKind, List<AgentModelOption>>> = _providerModels.asStateFlow()
@@ -385,6 +389,8 @@ class McpAgentRunClient(
                 header = question.string("header").orEmpty(),
                 question = question.string("question").orEmpty(),
                 options = options,
+                allowFreeform = question["allowFreeform"]?.jsonPrimitive?.booleanOrNull ?: true,
+                multiSelect = question["multiSelect"]?.jsonPrimitive?.booleanOrNull == true,
             )
         }.orEmpty()
         if (questions.isEmpty()) return null
@@ -567,6 +573,7 @@ class McpAgentRunClient(
         _cliStatuses.value = AgentKind.entries.filter { it.hasVendorCli }.map { kind ->
             fromDaemon[kind] ?: statusForDaemonUnknownAgent(kind, localByKind[kind])
         }
+        applyDaemonAcpSupport()
         _localModelBackends.value = agents.mapNotNull { element ->
             val obj = element.jsonObject
             val kind = AgentKind.entries.firstOrNull { it.name == obj.string("id") } ?: return@mapNotNull null
@@ -596,10 +603,19 @@ class McpAgentRunClient(
         _providerDefaults.value = providers.mapNotNull { element ->
             val obj = element.jsonObject
             val agent = AgentKind.entries.firstOrNull { it.name == obj.string("agent") } ?: return@mapNotNull null
+            obj["acpSupported"]?.jsonPrimitive?.booleanOrNull?.let { daemonAcpSupport[agent] = it }
             val lane = AgentLaneKind.entries.firstOrNull { it.name == obj.string("lane") }
                 ?: agent.defaultLane()
             agent to AgentProviderDefaults(lane = lane)
         }.toMap()
+        applyDaemonAcpSupport()
+    }
+
+    private fun applyDaemonAcpSupport() {
+        if (daemonAcpSupport.isEmpty()) return
+        _cliStatuses.value = _cliStatuses.value.map { status ->
+            daemonAcpSupport[status.kind]?.let { status.copy(acpSupported = it) } ?: status
+        }
     }
 
     private fun parseDaemonAgentStatus(element: kotlinx.serialization.json.JsonElement): AgentCliStatus? {
@@ -619,6 +635,10 @@ class McpAgentRunClient(
             // [AgentCliStatus.ready] is derived from binaryPath + issue; mirror daemon readiness.
             binaryPath = if (ready) kind.cliName else null,
             acpReady = obj["acpReady"]?.jsonPrimitive?.booleanOrNull == true,
+            // A daemon that omits the field predates capability reporting. Assume only the
+            // lanes it shipped with, so a newer GUI cannot offer a lane it cannot run.
+            acpSupported = obj["acpSupported"]?.jsonPrimitive?.booleanOrNull
+                ?: kind.acpSupportedWithoutDaemonMetadata,
             version = version,
             issue = when {
                 issueTitle != null -> AgentCliIssue(
@@ -1680,10 +1700,13 @@ private fun AutomationDraft.toMcpArgs(): Map<String, JsonPrimitive> = buildMap {
 
 /** GUI-only fallback when a newer build knows about a provider the running `andyd` does not. */
 fun statusForDaemonUnknownAgent(kind: AgentKind, local: AgentCliStatus?): AgentCliStatus {
+    // The running daemon does not know this provider at all, so it cannot run any lane
+    // (ACP included) until it is restarted on a build that does.
     if (local?.available == true) {
         return AgentCliStatus(
             kind = kind,
             version = local.version,
+            acpSupported = false,
             issue = AgentCliIssue(
                 title = "Restart andyd",
                 detail = "${kind.label} is installed at ${local.binaryPath}, but the running andyd predates it. Restart with ./gradlew runAndyd.",
@@ -1691,7 +1714,7 @@ fun statusForDaemonUnknownAgent(kind: AgentKind, local: AgentCliStatus?): AgentC
             ),
         )
     }
-    return AgentCliStatus(kind = kind)
+    return AgentCliStatus(kind = kind, acpSupported = false)
 }
 
 /** Keep polling daemon ACP transcripts while a chat is live or still launching on andyd. */

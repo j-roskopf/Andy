@@ -5,6 +5,7 @@ import app.andy.model.AgentAutonomy
 import app.andy.model.AgentEvent
 import app.andy.model.AgentMessageDeliveryMode
 import app.andy.model.AgentKind
+import app.andy.model.AgentReasoningEffort
 import app.andy.model.AgentTask
 import app.andy.model.AgentTaskDraft
 import app.andy.model.AgentStatus
@@ -56,7 +57,18 @@ class AgentRunEndToEndTest {
     @Test
     fun antigravityHeadlessRoundTrip() = liveRun(AgentKind.Antigravity)
 
-    private fun liveRun(agent: AgentKind) {
+    @Test
+    fun antigravityModelAndEffortRoundTrip() = liveRun(
+        AgentKind.Antigravity,
+        model = "gemini-3.8-flash",
+        reasoningEffort = AgentReasoningEffort.High,
+    )
+
+    private fun liveRun(
+        agent: AgentKind,
+        model: String? = null,
+        reasoningEffort: AgentReasoningEffort? = null,
+    ) {
         OptInGates.requireAgentE2E()
         val dir = File.createTempFile("andy-agent-e2e", null).also {
             it.delete()
@@ -96,14 +108,25 @@ class AgentRunEndToEndTest {
                         projectId = null,
                         directory = dir.absolutePath,
                         autonomy = AgentAutonomy.Standard,
+                        model = model,
+                        reasoningEffort = reasoningEffort,
                     ),
                 )
+                // Launch is asynchronous on both lanes. Wait for the first status before
+                // watching for completion, or the queued (status=null) snapshot exits early.
+                withTimeout(30_000) {
+                    while (service.tasks.value.first { it.id == task.id }.status == null) delay(100)
+                }
                 withTimeout(180_000) {
                     while (service.tasks.value.first { it.id == task.id }.isActive) delay(250)
                 }
                 val finished = service.tasks.value.first { it.id == task.id }
                 val events = service.events(task.id).value
-                System.err.println("E2E ${agent.cliName}: status=${finished.status} exit=${finished.exitCode} session=${finished.vendorSessionId} events=${events.size} cost=${finished.totalCostUsd}")
+                System.err.println(
+                    "E2E ${agent.cliName}: lane=${finished.lane} status=${finished.status} " +
+                        "exit=${finished.exitCode} session=${finished.acpSessionId ?: finished.vendorSessionId} " +
+                        "events=${events.size} cost=${finished.totalCostUsd}",
+                )
                 assumeTrue(
                     "SKIP: ${agent.cliName} not logged in for headless use (error path verified)",
                     !(finished.status == AgentStatus.Error && finished.errorMessage?.contains("Not logged in") == true),
@@ -111,6 +134,11 @@ class AgentRunEndToEndTest {
                 assertEquals(AgentStatus.Done, finished.status, "events: ${events.takeLast(5)}")
                 val launchLog = DesktopAgentTaskStore(File(dir, "agents.db")).launchLogFile(task.id)
                 assertTrue(launchLog.exists() && launchLog.length() > 0, "launch diagnostics should be persisted")
+                if (agent == AgentKind.Antigravity && model != null) {
+                    val log = launchLog.readText()
+                    assertFalse(log.contains("ACP set model failed"), log)
+                    assertFalse(log.contains("ACP set thought_level failed"), log)
+                }
             }
         } finally {
             scope.cancel()

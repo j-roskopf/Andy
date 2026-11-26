@@ -17,6 +17,7 @@ class McpAgentRunClientCliStatusTest {
             AgentCliStatus(AgentKind.OpenCode, binaryPath = "/Users/me/.opencode/bin/opencode", version = "1.0"),
         )
         assertFalse(status.ready)
+        assertEquals(false, status.acpSupported)
         assertNotNull(status.issue)
         assertEquals("Restart andyd", status.issue?.title)
         assertTrue(status.issue?.detail.orEmpty().contains("runAndyd"))
@@ -26,6 +27,7 @@ class McpAgentRunClientCliStatusTest {
     fun daemonUnknownAgentWithoutLocalInstallIsUnavailable() {
         val status = statusForDaemonUnknownAgent(AgentKind.Pi, null)
         assertFalse(status.available)
+        assertEquals(false, status.acpSupported)
         assertNull(status.issue)
     }
 }

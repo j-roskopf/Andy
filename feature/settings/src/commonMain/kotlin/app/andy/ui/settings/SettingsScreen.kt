@@ -1316,6 +1316,8 @@ private enum class OrchestrationMenu {
 @Composable
 private fun AgentExecutionPreferencesPanel(services: AndyServices) {
     val providerDefaults by services.agentRuns.providerDefaults.collectAsState()
+    val cliStatuses by services.agentRuns.cliStatuses.collectAsState()
+    val statusByAgent = remember(cliStatuses) { cliStatuses.associateBy { it.kind } }
     val scope = rememberCoroutineScope()
     var refreshingProviders by remember { mutableStateOf(false) }
 
@@ -1352,6 +1354,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
         }
         AgentKind.entries.filter { it.hasVendorCli }.forEach { agent ->
             val selectedLane = providerDefaults[agent]?.lane ?: agent.defaultLane()
+            val acpSupported = statusByAgent[agent]?.acpSupported ?: agent.acpSupported
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1366,7 +1369,7 @@ private fun AgentExecutionPreferencesPanel(services: AndyServices) {
                     modifier = Modifier.width(128.dp),
                 )
                 Box(Modifier.width(128.dp), contentAlignment = Alignment.CenterStart) {
-                    if (agent.acpSupported) {
+                    if (acpSupported) {
                         ChoicePill(
                             label = "ACP",
                             selected = selectedLane == AgentLaneKind.Acp,

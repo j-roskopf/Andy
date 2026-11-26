@@ -10,8 +10,10 @@ import app.andy.model.modelForCli
 import app.andy.model.promptForCli
 
 /**
- * Google Antigravity CLI (`agy`). Interactive TUI via `--prompt-interactive`
- * (not `-p`/`--print`, which is headless).
+ * Google Antigravity CLI (`agy`) on the Terminal lane. New chats default to ACP
+ * (`agy acp`, see [app.andy.desktop.service.agents.acp.AcpRegistry]); this adapter
+ * serves chats the user explicitly keeps on Terminal. Interactive TUI via
+ * `--prompt-interactive` (not `-p`/`--print`, which is headless).
  *
  * Resume uses `--conversation <id>` only when Andy can prove the id belongs to
  * this task. Never uses `--continue`. When no trusted id exists, re-seeds the

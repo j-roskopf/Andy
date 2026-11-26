@@ -28,6 +28,9 @@ fun looksLikeProviderAuthFailure(raw: String?): Boolean {
 fun providerLoginCommand(agent: AgentKind): String = when (agent) {
     AgentKind.ClaudeCode -> "claude"
     AgentKind.Codex -> "codex login"
+    // `agy acp --login` completes the same Google sign-in and exits, so it is safe to
+    // hand to a terminal window opened from a failed ACP start.
+    AgentKind.Antigravity -> "agy acp --login"
     else -> agent.cliName
 }
 

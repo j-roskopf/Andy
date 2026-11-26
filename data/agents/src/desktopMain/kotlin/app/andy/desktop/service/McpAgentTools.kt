@@ -344,6 +344,7 @@ fun Server.registerAgentProjectTools(
                             status?.ready ?: false
                         })
                         put("acpReady", status?.acpReady ?: false)
+                        put("acpSupported", kind.acpSupported)
                         put("available", status?.available ?: false)
                         put("version", status?.version.orEmpty())
                         put("issue", status?.issue?.title.orEmpty())
@@ -1742,6 +1743,8 @@ internal fun userInputRequestJson(request: AgentUserInputRequest): JsonObject =
                             put("id", question.id)
                             put("header", question.header)
                             put("question", question.question)
+                            put("allowFreeform", question.allowFreeform)
+                            put("multiSelect", question.multiSelect)
                             put(
                                 "options",
                                 buildJsonArray {

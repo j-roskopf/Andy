@@ -36,7 +36,7 @@ class SkillRootsTest {
     }
 
     @Test
-    fun providersDoNotShareClaudeAndOpenCodeWorkspaceRoots() {
+    fun openCodeIncludesCompatibilityRootsAfterNativeRoots() {
         val home = File("/test/home")
         val workspace = File("/test/workspace")
         assertEquals(
@@ -44,6 +44,10 @@ class SkillRootsTest {
                 File(workspace, ".opencode/skills"),
                 File(home, ".config/opencode/skills"),
                 File(home, ".opencode/skills"),
+                File(workspace, ".claude/skills"),
+                File(home, ".claude/skills"),
+                File(workspace, ".agents/skills"),
+                File(home, ".agents/skills"),
             ),
             skillRootsFor(AgentKind.OpenCode, workspace, home),
         )

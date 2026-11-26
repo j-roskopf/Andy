@@ -91,12 +91,14 @@ import app.andy.desktop.service.McpClientConfig
 import app.andy.desktop.service.agents.acp.AgentAcpManager
 import app.andy.desktop.service.agents.acp.OpenCodeSessionCompactor
 import app.andy.desktop.service.agents.acp.AcpRegistry
+import app.andy.desktop.service.agents.acp.antigravityAcpModeId
 import app.andy.desktop.service.agents.acp.AcpEventMapper
 import app.andy.desktop.service.agents.acp.AcpTranscriptStore
 import app.andy.desktop.service.agents.acp.AcpReplayFilterResult
 import app.andy.desktop.service.agents.acp.filterAcpProviderHistoryReplay
 import app.andy.desktop.service.agents.acp.AcpSlashCommandProbe
 import app.andy.desktop.service.agents.acp.NodeRuntimeLocator
+import app.andy.desktop.service.agents.acp.PendingAcpElicitation
 import app.andy.desktop.service.agents.acp.PendingAcpPermission
 import app.andy.model.TerminalAppearanceSnapshot
 import app.andy.model.toTerminalAppearance
@@ -284,6 +286,7 @@ class DesktopAgentRunService(
     private val _viewingTaskId = MutableStateFlow<String?>(null)
     override val viewingTaskId: StateFlow<String?> = _viewingTaskId
     private val queuedAcpPermissions = ConcurrentHashMap<String, ArrayDeque<PendingAcpPermission>>()
+    private val queuedAcpElicitations = ConcurrentHashMap<String, ArrayDeque<PendingAcpElicitation>>()
     /** While reconnecting an ACP session, drop provider history replay into the transcript. */
     private val acpSuppressProviderReplay = ConcurrentHashMap.newKeySet<String>()
     private val acpProviderReplayScratch = ConcurrentHashMap<String, StringBuilder>()
@@ -355,6 +358,8 @@ class DesktopAgentRunService(
         onStatus = ::applyStatusSnapshot,
         onPermission = ::handleAcpPermission,
         onPermissionResolved = ::handleAcpPermissionResolved,
+        onElicitation = ::handleAcpElicitation,
+        onElicitationResolved = ::handleAcpElicitationResolved,
         onSessionId = ::persistAcpSessionId,
         onDiagnosticsLine = { taskId, line -> appendLaunchDiagnostics(taskId, line) },
     )
@@ -2089,6 +2094,13 @@ class DesktopAgentRunService(
             return
         }
 
+        if (request.origin == app.andy.model.AgentUserInputOrigin.AcpElicitation) {
+            // The provider's tool call is still awaiting this form; answering resumes the
+            // same turn. If the session went away (e.g. app restart), fall through and
+            // deliver the answers as a normal follow-up instead of leaving the card stuck.
+            if (acpManager.respondElicitation(taskId, requestId, normalizedAnswers)) return
+        }
+
         if (task.status != AgentStatus.Blocked) return
 
         val response = request.responseForAgent(normalizedAnswers)
@@ -2470,7 +2482,12 @@ class DesktopAgentRunService(
         if (task.lane != AgentLaneKind.Acp) return
         val modes = availableAcpModes(taskId)
         if (modes.isEmpty()) return
-        val targetMode = if (planMode) {
+        val targetMode = if (task.runtimeKind() == AgentKind.Antigravity) {
+            // Antigravity distinguishes plan/accept-edits/auto, so leaving plan must
+            // restore the permissions chip's mode instead of the first non-plan mode.
+            val targetId = antigravityAcpModeId(task) ?: return
+            modes.firstOrNull { it.id == targetId } ?: return
+        } else if (planMode) {
             modes.firstOrNull { it.looksLikePlanMode() } ?: return
         } else {
             modes.firstOrNull { !it.looksLikePlanMode() } ?: return
@@ -3958,6 +3975,7 @@ class DesktopAgentRunService(
         acpHookDoneJobs.remove(taskId)?.cancel()
         acpManager.clear(taskId)
         queuedAcpPermissions.remove(taskId)
+        queuedAcpElicitations.remove(taskId)
         eventFlows.remove(taskId)
         acpTranscriptActivityAt.remove(taskId)
         connectionRecoveryJobs.remove(taskId)?.cancel()
@@ -6729,11 +6747,8 @@ class DesktopAgentRunService(
     }
 
     private fun handleAcpPermission(taskId: String, pending: PendingAcpPermission) {
-        val task = currentTask(taskId)
-        val activePermission = task?.userInputRequest?.takeIf {
-            it.origin == app.andy.model.AgentUserInputOrigin.AcpPermission
-        }
-        if (activePermission != null && activePermission.id != pending.request.id) {
+        val activeRequest = currentTask(taskId)?.userInputRequest
+        if (activeRequest != null && activeRequest.id != pending.request.id) {
             queuedAcpPermissions.computeIfAbsent(taskId) { ArrayDeque() }.addLast(pending)
             return
         }
@@ -6784,7 +6799,55 @@ class DesktopAgentRunService(
                 it.copy(status = AgentStatus.Working, statusConfident = true, userInputRequest = null, finishedAtMillis = null)
             } else it
         }
-        queuedAcpPermissions[taskId]?.removeFirstOrNull()?.let { next -> presentAcpPermission(taskId, next) }
+        presentNextQueuedAcpInput(taskId)
+        scope.launch { persist() }
+    }
+
+    /** Permissions and elicitations share one visible slot; drain either queue when it frees. */
+    private fun presentNextQueuedAcpInput(taskId: String) {
+        queuedAcpPermissions[taskId]?.removeFirstOrNull()?.let { next ->
+            presentAcpPermission(taskId, next)
+            return
+        }
+        queuedAcpElicitations[taskId]?.removeFirstOrNull()?.let { next ->
+            presentAcpElicitation(taskId, next)
+        }
+    }
+
+    private fun handleAcpElicitation(taskId: String, pending: PendingAcpElicitation) {
+        val activeRequest = currentTask(taskId)?.userInputRequest
+        if (activeRequest != null && activeRequest.id != pending.request.id) {
+            queuedAcpElicitations.computeIfAbsent(taskId) { ArrayDeque() }.addLast(pending)
+            return
+        }
+        presentAcpElicitation(taskId, pending)
+    }
+
+    private fun presentAcpElicitation(taskId: String, pending: PendingAcpElicitation) {
+        updateTask(taskId) {
+            it.copy(
+                status = AgentStatus.Blocked,
+                statusConfident = true,
+                userInputRequest = pending.request,
+                finishedAtMillis = null,
+                unread = true,
+            )
+        }
+        scope.launch { persist() }
+    }
+
+    private fun handleAcpElicitationResolved(taskId: String, requestId: String, answers: Map<String, String>) {
+        updateTask(taskId) { task ->
+            if (task.userInputRequest?.id != requestId) return@updateTask task
+            task.copy(
+                status = AgentStatus.Working,
+                statusConfident = true,
+                userInputRequest = null,
+                finishedAtMillis = null,
+                unread = false,
+            )
+        }
+        presentNextQueuedAcpInput(taskId)
         scope.launch { persist() }
     }
 
@@ -6997,6 +7060,7 @@ class DesktopAgentRunService(
                 acpArtifactJobs.remove(taskId)?.cancel()
                 acpManager.clear(taskId)
                 queuedAcpPermissions.remove(taskId)
+                queuedAcpElicitations.remove(taskId)
             }
         } else {
             deferredQuestionJobs.remove(taskId)?.cancel()

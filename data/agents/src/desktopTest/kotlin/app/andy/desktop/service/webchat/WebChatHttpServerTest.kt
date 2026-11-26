@@ -385,7 +385,7 @@ class WebChatHttpServerTest {
             val response = client.post("http://127.0.0.1:$port/api/chats/start") {
                 contentType(ContentType.Application.Json)
                 setBody(
-                    """{"prompt":"hi","agent":"Antigravity","directory":"/tmp","autonomy":"Standard"}""",
+                    """{"prompt":"hi","agent":"Hermes","directory":"/tmp","autonomy":"Standard"}""",
                 )
             }
             assertEquals(HttpStatusCode.BadRequest, response.status)
